@@ -1,7 +1,7 @@
 # Changelog
 
-The 1.0.0 candidate is being prepared; a dated entry is not confirmation of
-publication. Published versions and assets are listed in
+A dated entry is not confirmation of publication. Published versions and assets
+are listed in
 [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases).
 Unpublished development versions are not historical public releases.
 

@@ -316,14 +316,14 @@ reports or packet captures.
 
 ### HACS
 
-The first stable release, **1.0.0**, is being prepared and is not published yet.
-`master` is a pre-release source tree used for HACS bootstrap acceptance, not a
-published stable ZIP. Check [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
+Stable HACS installation requires a published GitHub Release and its download
+archive; the default branch is not a stable download. Check
+[GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
 and the [release notes and known limitations](CHANGELOG.md) before installation.
 
-1. In HACS, open **Integrations**.
-2. Add `https://github.com/Zuz666/uplus-reborn` as a custom repository with category **Integration**.
-3. Install **U+ Reborn**.
+1. In HACS, open the top-right menu and select **Custom repositories**.
+2. Add `https://github.com/Zuz666/uplus-reborn` with type **Integration**.
+3. Open **U+ Reborn** and download the published stable version.
 4. Restart Home Assistant.
 
 ### Development installation
