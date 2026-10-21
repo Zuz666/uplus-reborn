@@ -196,6 +196,12 @@ and the finite minimum/current Core matrix. Required jobs have no path filters
 that can leave protection permanently pending. The release workflow reuses this
 same gate rather than maintaining a weaker parallel acceptance path.
 
+The HACS job requires GitHub's license endpoint to identify the exact checked
+commit as MIT. HACS's own license check reads default-branch repository metadata
+instead, so only that duplicate check is excluded; it cannot validate a license
+correction in a pull request. Other HACS checks remain enabled. The documentation
+license and attribution remain separately defined by README and `docs/LICENSE`.
+
 | Layer | Required release evidence |
 | --- | --- |
 | Metadata and packaging | Manifest/project/uv root agree; dated notes; committed-byte, licensed, root-layout ZIP; rejection of unsafe/incomplete/occupied candidates |
