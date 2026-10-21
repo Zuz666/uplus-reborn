@@ -288,6 +288,10 @@ Local profile persistence/restore does not establish new hardware evidence.
 - HWD120-B1558U reachable from Home Assistant over the same routed LAN;
 - TCP `56800` allowed from Home Assistant to the appliance.
 
+The Core version above is a compatibility minimum, not a security recommendation.
+Keep production Home Assistant on a current patched release; historical Core
+verification environments are not deployment images.
+
 Bundled brand images require
 [Home Assistant 2026.3 or newer](https://contributors.home-assistant.io/blog/2026/02/24/brands-proxy-api/).
 Earlier supported versions do not load those local images; this cosmetic
@@ -854,7 +858,7 @@ The implementation is deliberately embedded under `custom_components/uplus_rebor
 ### Prerequisites and clean-checkout setup
 
 Run the commands below from the repository root. Use Python **3.13.2 or newer**
-within the CI-tested Python 3.13 line, [uv](https://docs.astral.sh/uv/), and
+within the CI-tested Python 3.13 line, [uv](https://docs.astral.sh/uv/) **0.13.4 or newer**, and
 Node.js **22** with npm, matching documentation CI.
 
 The public checkout contains the source, tests, dependency lockfiles, and

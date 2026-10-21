@@ -25,7 +25,9 @@ phase does not invalidate an unchanged successful result.
 ## Commit-only artifact tooling (Windows and Linux)
 
 The standard-library CLI requires Python 3.13 or newer and Git; no Home Assistant,
-private workspace or credentials. `build/` is ignored by the repository.
+private workspace or credentials. Use uv **0.13.4 or newer** for network-facing
+dependency/Python downloads; older bundled certificate stores have a disclosed
+compromised-CA vulnerability. `build/` is ignored by the repository.
 
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py build --commit HEAD --output build/delivery-candidate

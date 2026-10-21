@@ -24,6 +24,7 @@ test = [
 ]
 
 [tool.uv]
+required-version = ">=0.13.4"
 conflicts = [
     [
         { group = "research" },

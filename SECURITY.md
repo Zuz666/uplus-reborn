@@ -65,3 +65,22 @@ Security alerts affecting shipped behavior or release integrity must be fixed or
 explicitly triaged before release. Published tags/assets are not overwritten;
 corrections use a new patch release. Repository protections must match the actual
 configured checks, not merely this policy's wording.
+
+## Development dependency alerts
+
+The root `uv.lock` describes verification and research environments, not the
+dependencies installed by HACS. The fixed minimum-Core compatibility environment
+includes Core-owned exact dependency pins. Keep it confined to the documented
+offline Docker checks and trusted synthetic inputs; never deploy that image or
+use it to process untrusted files. A minimum compatible Core version is not a
+recommendation to run an unpatched production Home Assistant.
+
+Network-facing download/build tools are separate from that compatibility fixture
+and must use patched versions. In particular, uv 0.13.4 is the minimum accepted
+version for its compromised-CA-store fix. Documentation dependencies are tooling,
+not frontend libraries shipped with the integration.
+
+Triage each advisory by actual use, available compatible fixes and containment.
+A development label alone is not a reason to dismiss a finding. Retained
+Core-pinned or otherwise unpatched findings stay visible with their rationale
+in the dependency issue; they are not reported as fixed or vulnerability-free.
