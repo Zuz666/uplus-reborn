@@ -625,13 +625,13 @@ async def test_real_preview_websocket_rejects_foreign_flows_and_disconnects(
         hass_admin_user, client_id="http://localhost/"
     )
     token = hass.auth.async_create_access_token(refresh)
-    client = await hass_ws_client(hass, access_token=token)
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER, "user_id": "another-user"}
     )
     await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": "local"}
     )
+    client = await hass_ws_client(hass, access_token=token)
     command = {
         "id": 1, "type": f"{DOMAIN}/start_preview",
         "flow_type": "config_flow", "flow_id": result["flow_id"], "user_input": {},
