@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Installation and known limitations
+    url: https://github.com/Zuz666/uplus-reborn#readme
+    about: Check the exact supported model, HACS installation and readback limitations.
+  - name: Report a security vulnerability privately
+    url: https://github.com/Zuz666/uplus-reborn/security/advisories/new
+    about: Do not disclose vulnerabilities, credentials or private identifiers in public issues.

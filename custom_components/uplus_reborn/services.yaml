@@ -1,0 +1,171 @@
+start_program:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: uplus_reborn
+    drum:
+      required: true
+      selector:
+        select:
+          options:
+            - upper
+            - lower
+    program:
+      example: spin
+      selector:
+        text:
+    fabric:
+      example: A1
+      selector:
+        text:
+    wash_minutes:
+      selector:
+        number:
+          min: 0
+          max: 255
+          step: 1
+          mode: box
+    temperature_c:
+      selector:
+        number:
+          min: 0
+          max: 90
+          step: 1
+          mode: box
+    rinses:
+      selector:
+        number:
+          min: 0
+          max: 8
+          step: 1
+          mode: box
+    spin_rpm:
+      selector:
+        number:
+          min: 0
+          max: 1500
+          step: 1
+          mode: box
+    drying_mode:
+      selector:
+        select:
+          options:
+            - "off"
+            - auto
+            - 30_min
+            - 60_min
+            - 90_min
+            - 120_min
+    delay_hours:
+      selector:
+        number:
+          min: 0
+          max: 24
+          step: 1
+          mode: box
+    enabled_functions:
+      selector:
+        select:
+          multiple: true
+          options:
+            - high_water
+            - easy_iron
+            - intensive
+            - eco
+            - soak
+            - night
+    stains:
+      example: ["W1", "W15"]
+      selector:
+        select:
+          multiple: true
+          options:
+            - blood
+            - grass
+            - wine
+            - juice
+            - soil
+            - milk
+            - W1
+            - W2
+            - W3
+            - W4
+            - W5
+            - W6
+            - W7
+            - W8
+            - W9
+            - W10
+            - W11
+            - W12
+            - W13
+            - W14
+            - W15
+            - W16
+            - W17
+            - W18
+            - W19
+            - W20
+            - W21
+            - W22
+            - W23
+            - W24
+            - W25
+            - W26
+            - W27
+            - W28
+            - W29
+            - W30
+
+save_profile:
+  fields:
+    device_id: &profile_device
+      required: true
+      selector:
+        device:
+          integration: uplus_reborn
+    drum: &profile_drum
+      required: true
+      selector:
+        select:
+          options:
+            - upper
+            - lower
+    name: &profile_name
+      required: true
+      selector:
+        text:
+update_profile:
+  fields:
+    device_id: *profile_device
+    drum: *profile_drum
+    profile_id: &profile_id
+      required: true
+      selector:
+        select:
+          options: []
+          custom_value: true
+          mode: dropdown
+rename_profile:
+  fields:
+    device_id: *profile_device
+    drum: *profile_drum
+    profile_id: *profile_id
+    name: *profile_name
+delete_profile:
+  fields:
+    device_id: *profile_device
+    drum: *profile_drum
+    profile_id: *profile_id
+apply_profile:
+  fields:
+    device_id: *profile_device
+    drum: *profile_drum
+    profile_id: *profile_id
+start_profile:
+  fields:
+    device_id: *profile_device
+    drum: *profile_drum
+    profile_id: *profile_id

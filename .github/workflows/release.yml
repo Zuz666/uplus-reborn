@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Accepted stable version without v
+        required: true
+        type: string
+      commit:
+        description: Accepted full SHA, which must be current master
+        required: true
+        type: string
+      publish:
+        description: Explicitly authorize tag, draft, assets and publication
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.guard.outputs.commit }}
+    steps:
+      - name: Require the accepted master invocation
+        id: guard
+        env:
+          CANDIDATE: ${{ inputs.commit }}
+          REQUESTED_REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$REQUESTED_REF" = refs/heads/master
+          test "$REPOSITORY" = Zuz666/uplus-reborn
+          test "$CANDIDATE" = "$GITHUB_SHA"
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.26"
+          python-version: "3.13"
+      - name: Package the accepted version and commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: uv run --no-project --python 3.13 python tools/release.py build --commit "$GITHUB_SHA" --version "$VERSION" --output build/release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: build/release/
+          if-no-files-found: error
+          retention-days: 14
+  checks:
+    needs: candidate
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+  inspect:
+    needs: [candidate, checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.26"
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: build/release
+      - name: Inspect remote state without writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: uv run --no-project --python 3.13 python tools/publish_release.py --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" --candidate build/release
+  publish:
+    if: inputs.publish
+    needs: [candidate, checks, inspect]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.26"
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: build/release
+      - name: Publish only after explicit owner approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: uv run --no-project --python 3.13 python tools/publish_release.py --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" --candidate build/release --approve

@@ -1,0 +1,13 @@
+title = "U+ Reborn public-snapshot secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Legacy vendor-distributed Android application signing constant, not an owner/device credential. Restrict to the exact value and cloud module."
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(^|/)custom_components/uplus_reborn/cloud\.py$''']
+regexes = ['''^4fe8b49c445b39df77758bffb7606c80$''']

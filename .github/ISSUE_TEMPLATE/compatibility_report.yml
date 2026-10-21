@@ -1,0 +1,55 @@
+name: Compatibility evidence
+description: Report exact-model or Core compatibility evidence without enabling new models.
+title: "compat: "
+labels: ["area:compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only HWD120-B1558U is supported. A report about another model is research
+        evidence, not permission to enable controls or claim support. Do not test
+        unsupported controls, pair/reset/update devices, or upload private materials.
+  - type: input
+    id: versions
+    attributes:
+      label: Integration, Core and HACS versions
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Exact model and firmware if known
+      description: No serial numbers, MAC addresses or device IDs.
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works as expected
+        - Partially works
+        - Does not work
+        - Source evidence only; not tested
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Observed behavior and sanitized evidence
+      description: Separate hardware observations, isolated software results and source claims.
+    validations:
+      required: true
+  - type: textarea
+    id: limits
+    attributes:
+      label: Unknowns and evidence limitations
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed credentials and private/device identifiers from all evidence.
+          required: true

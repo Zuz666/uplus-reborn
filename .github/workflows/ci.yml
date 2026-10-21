@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validation:
+    uses: ./.github/workflows/validate.yml
+  documentation:
+    uses: ./.github/workflows/docs.yml
+  delivery:
+    uses: ./.github/workflows/delivery.yml
+  security:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+  gate:
+    name: CI
+    if: always()
+    needs: [validation, documentation, delivery, security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every validation layer
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          failed = {name: result['result'] for name, result in results.items() if result['result'] != 'success'}
+          if failed:
+              raise SystemExit(f'Required validation did not pass: {failed}')
+          print('All required validation layers passed.')
+          PY

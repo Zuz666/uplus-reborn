@@ -1,0 +1,31 @@
+name: Synchronize labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/master' && github.repository == 'Zuz666/uplus-reborn'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Create or update declared labels without deleting others
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          for label in json.loads(Path('.github/labels.json').read_text()):
+              subprocess.run([
+                  'gh', 'label', 'create', label['name'], '--repo', os.environ['GH_REPO'],
+                  '--color', label['color'], '--description', label['description'], '--force',
+              ], check=True)
+          PY

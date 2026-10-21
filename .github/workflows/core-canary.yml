@@ -1,0 +1,47 @@
+name: Core canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: Core ${{ matrix.channel }} (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, beta, dev]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.26"
+          python-version: "3.13"
+      - name: Build committed package
+        run: uv run --no-project --python 3.13 python tools/delivery.py build --commit HEAD --output build/canary-bundle
+      - name: Exercise moving Core without changing required baselines
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          image="ghcr.io/home-assistant/home-assistant:$CHANNEL"
+          docker pull "$image"
+          docker image inspect --format '{{json .RepoDigests}}' "$image"
+          docker run --rm --init --network none --entrypoint python3 \
+            -v "$PWD:/workspace" -w /workspace "$image" \
+            tools/ha_smoke.py --bundle build/canary-bundle --scenario profiles --output "build/canary-$CHANNEL.json"
+      - name: Retain drift evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canary-${{ matrix.channel }}-${{ github.sha }}
+          path: build/canary-*.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a user-visible capability with observable acceptance criteria.
+title: "feat: "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem and existing workaround
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior and non-goals
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility, migration and safety
+      description: Include supported model/Core versions and automation, identity or control risks.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Observable acceptance criteria
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Distinguish manual/source claims from observed hardware behavior. Do not upload manuals, APKs or private captures.

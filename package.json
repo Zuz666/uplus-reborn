@@ -1,0 +1,20 @@
+{
+  "name": "uplus-reborn-tooling",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:docs": "node tools/check-docs.mjs",
+    "test:docs:tooling": "node --test tools/check-docs.test.mjs"
+  },
+  "devDependencies": {
+    "@mermaid-lint/cli": "0.53.1",
+    "markdownlint-cli2": "0.23.3"
+  },
+  "overrides": {
+    "markdownlint-cli2": {
+      "smol-toml": "1.9.1"
+    }
+  }
+}

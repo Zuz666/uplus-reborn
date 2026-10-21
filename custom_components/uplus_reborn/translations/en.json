@@ -1,0 +1,1052 @@
+{
+  "title": "U+ Reborn",
+  "config": {
+    "abort": {
+      "already_configured": "This appliance is already configured",
+      "cannot_connect": "The discovered appliance could not be reached",
+      "invalid_device_id": "DHCP discovery returned an invalid appliance MAC address",
+      "invalid_response": "The discovered host did not return a supported U+ response",
+      "reconfigure_successful": "Connection settings updated",
+      "unknown": "Unexpected communication error while checking the discovered appliance"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the appliance",
+      "cloud_cannot_connect": "Failed to connect to the Haier U+ Euro service",
+      "cloud_invalid_response": "The Haier U+ Euro service returned an unsupported response",
+      "device_not_found": "The appliance was not found automatically. Enter its local IP address.",
+      "invalid_auth": "The Haier U+ account credentials were rejected",
+      "invalid_device_id": "The device ID must contain 1–16 ASCII characters",
+      "invalid_response": "The appliance returned an invalid protocol response",
+      "no_supported_devices": "This account contains no HWD120-B1558U appliances",
+      "unknown": "Unexpected communication error",
+      "catalog_choice_required": "Select a dropdown entry to view, or choose another action.",
+      "model_confirmation_required": "Confirm that this appliance is HWD120-B1558U before connecting.",
+      "incompatible_discovery": "Discovery identified an incompatible type, security mode or conflicting identity. Manual confirmation cannot override this evidence."
+    },
+    "step": {
+      "local": {
+        "title": "Find on local network",
+        "description": "Searching continues while this dialog is connected. Choose **Show found devices** at any time to stop searching and inspect the catalog, even if no device has replied. Close this dialog with **×** to cancel.\n\nCounters show actual local UDP submissions and valid replies, not delivery acknowledgements. Silence does not prove that no devices are present. The animation illustrates searching, not a verified request/reply exchange.",
+        "submit": "Show found devices"
+      },
+      "local_activity": {
+        "title": "Last search activity",
+        "description": "**{outcome} — {elapsed} seconds**\nQuery rounds: {rounds} · UDP submissions: {sent}\nValid replies: {replies} · Distinct devices: {devices}\n\n**Coverage:** {issues}\n\n**Recent activity (up to 12 events)**\n{journal}\n\nSubmission is not delivery proof. UDP replies cannot be attributed to a particular query round.",
+        "submit": "Back to catalog"
+      },
+      "local_catalog": {
+        "title": "Local device catalog",
+        "description": "Latest search: **{count}** device(s). This dialog retains **{retained}**, including earlier observations.\n\nChoose a device and an action, then confirm. Viewing does not add a device or check its TCP connection. The last dropdown entry opens the search journal instead of a device.\n\nCoverage: {issues}. A missing reply does not prove absence.",
+        "data": {
+          "device_id": "Discovered device",
+          "action": "Next action"
+        },
+        "submit": "Confirm"
+      },
+      "local_details": {
+        "title": "Discovered device",
+        "description": "**Model / possible models**\n{models}\n\n**Identification:** {model_source}\n**Category:** {category}\n**Device ID:** `{device_id}`\n**Address:** {host}\n**Last response:** {seen}\n**Seen in latest search:** {latest}\n\n**Supported type/security:** {supported}\n**Already configured in U+ Reborn:** {configured}\n**Conflicting identity/address:** {conflict}\n\n**Addition / observation status**\n{status}\n\nViewing sends no appliance requests. Addition requires explicit confirmation and a fresh read-only TCP check; discovery does not prove physical readiness.",
+        "menu_options": {
+          "local_add": "Add this supported device",
+          "local_technical": "Technical details",
+          "local_catalog": "Back to catalog",
+          "local": "Back to discovery",
+          "manual": "Enter connection details manually"
+        }
+      },
+      "local_technical": {
+        "title": "Technical details",
+        "description": "**Identity and transport**\nDevice ID: `{device_id}`\nDerived MAC: `{mac}`\nType ID: `{type_id}`\nManufacturer/transport: Haier legacy UWT, UDP\nObserved address: {host}\nAdvertised address: {advertised_host}\nTCP default: 56800 (SDK-assigned, not advertised)\nLast response: {seen}\n\n**Discovery evidence**\nSeen in latest search: {latest}\nSupported type/security: {supported}\nAlready configured in U+ Reborn: {configured}\nConflicting identity/address: {conflict}\nConflicting evidence: `{alternatives}` (up to eight distinct observations: ID / address / type / security, or another ID sharing this address)\nBusy: {busy}\nSecurity mode: {security}\nReady to bind: {ready}\nOther associated integrations: {other}\n\n**Identification sources**\nModel / possible models:\n{models}\n\n{model_source}\n{source_details}\nCategory: {category}\nCategory source: {category_source}\nCatalog retrieved: {catalog_date}\nCatalog source: {catalog_source}\n\nDiscovery is unauthenticated. Model names come from the offline lookup, not a model string in this UDP reply. Catalog coverage is limited; a single catalog match does not prove global Type ID uniqueness. Only HWD120-B1558U has project hardware correlation. Recognition does not grant control support. Flags do not establish power, remote control, door or cycle state. Viewing does not update existing entries or probe the appliance.",
+        "submit": "Back to device"
+      },
+      "local_add": {
+        "title": "Confirm local appliance",
+        "description": "Add HWD120-B1558U at {host}, device ID `{device_id}`. Continuing performs a fresh read-only TCP state check. No programme is started. If the check fails, retry explicitly or return to the catalog.",
+        "data": {
+          "action": "Next action"
+        }
+      },
+      "dhcp_confirm": {
+        "title": "Add {name}",
+        "description": "Found a checksum-valid U+ appliance at {host}. Its IP address and UWT device ID were derived automatically from DHCP. Only HWD120-B1558U is currently supported; confirm that this is that model."
+      },
+      "user": {
+        "title": "Choose a setup method",
+        "description": "Find devices on the local network without an account. Cloud assistance is optional. Manual connection remains available when broadcast discovery receives no reply.",
+        "menu_options": {
+          "local": "🔎︎ Find on local network",
+          "cloud": "☁︎ Use Haier account",
+          "manual": "✎︎ Connect manually"
+        },
+        "menu_option_descriptions": {
+          "local": "Discover devices without a cloud account.",
+          "cloud": "Find devices linked to your Haier U+ account.",
+          "manual": "Enter the device IP address and ID."
+        }
+      },
+      "cloud": {
+        "title": "Sign in to Haier U+",
+        "description": "Use the account that already contains the appliance. Credentials are sent directly to the legacy Haier U+ Euro service for this setup step and are not stored by Home Assistant.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "cloud_device": {
+        "title": "Select an appliance",
+        "description": "Found {count} supported appliance(s). Leave Host empty to discover the selected appliance on the local network.",
+        "data": {
+          "device_id": "Appliance",
+          "host": "Host"
+        },
+        "data_description": {
+          "host": "Optional local IP address or hostname. Enter it only if automatic LAN discovery cannot find the appliance."
+        }
+      },
+      "manual": {
+        "title": "Connect manually",
+        "description": "Connect locally without cloud services. Enter the IP address and device ID from your router. Without a discovery reply, TCP validation proves communication but not the commercial model: explicitly confirm HWD120-B1558U. Known incompatible discovery evidence cannot be overridden.",
+        "data": {
+          "device_id": "Device ID",
+          "host": "Host",
+          "port": "Port",
+          "confirm_model": "I confirm this appliance is HWD120-B1558U"
+        },
+        "data_description": {
+          "device_id": "For the HWD120-B1558U, use its Wi-Fi MAC address as 12 uppercase hexadecimal characters without separators. Example: 02:11:22:33:44:55 becomes 021122334455.",
+          "host": "Local IP address or hostname of the HWD120-B1558U.",
+          "port": "Local UWT port; the observed default is 56800."
+        }
+      },
+      "reconfigure": {
+        "title": "Update appliance connection",
+        "description": "Change the local host or port while keeping the same appliance, entities, and history. The new address must return a checksum-valid state response; this check never starts or cancels a programme.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "Local IP address or hostname of the HWD120-B1558U.",
+          "port": "Local UWT port; the observed default is 56800."
+        }
+      }
+    }
+  },
+  "selector": {
+    "discovery_boolean": {
+      "options": {
+        "yes": "Yes",
+        "no": "No"
+      }
+    },
+    "discovery_status": {
+      "options": {
+        "columns": "Sent / Replies / Found / Msg",
+        "summary": "{sent} / {replies} / {devices} / {message}",
+        "partial": "Limited coverage"
+      }
+    },
+    "discovery_event": {
+      "options": {
+        "listening": "Preparing discovery listeners",
+        "sent": "UDP query submitted",
+        "found": "Device discovered",
+        "replies": "Device replied",
+        "issue": "Coverage warning",
+        "stopped": "Search stopped by user",
+        "disconnected": "Search stopped: preview disconnected",
+        "closed": "Dialog closed",
+        "shutdown": "Search stopped: Home Assistant shutting down",
+        "failed": "Search failed"
+      }
+    },
+    "discovery_outcome": {
+      "options": {
+        "searching": "Searching",
+        "stopped": "Search stopped by user",
+        "disconnected": "Search stopped: preview disconnected",
+        "closed": "Dialog closed",
+        "shutdown": "Search stopped: Home Assistant shutting down",
+        "failed": "Search failed",
+        "no_issues": "No reported socket/interface failures"
+      }
+    },
+    "discovery_model": {
+      "options": {
+        "unknown": "Model not identified",
+        "unknown_device": "Unknown Haier device",
+        "candidates": "{category}: {count} possible models"
+      }
+    },
+    "discovery_identification": {
+      "options": {
+        "target": "Type ID matches the inspected HWD120-B1558U profile and manufacturer catalog.",
+        "single": "One model matches this Type ID in the researched manufacturer catalog; not read from the device.",
+        "multiple": "This Type ID is shared by these catalog models; discovery cannot distinguish them.",
+        "category_only": "Category known from the APK; no source-backed model mapping.",
+        "unknown": "No source-backed model or category mapping for this Type ID."
+      }
+    },
+    "discovery_source": {
+      "options": {
+        "target": "Inspected U+ Euro 2.6.0 target profile, manufacturer product catalog and target hardware correlation.",
+        "catalog": "Manufacturer product-selection catalog, /uplusi/products categories 1/2/3. Catalog claims are not hardware verification of these models.",
+        "none": "No commercial-model correspondence is established. APK handler/class names are not model identification."
+      }
+    },
+    "discovery_category_source": {
+      "options": {
+        "apk": "U+ Euro 2.6.0 inspected factory and category resources",
+        "catalog": "Manufacturer product-selection catalog",
+        "none": "No established category mapping"
+      }
+    },
+    "discovery_device_status": {
+      "options": {
+        "configured": "Already configured in U+ Reborn",
+        "unsupported_type": "Unsupported device type",
+        "unsupported_security": "Unsupported security mode",
+        "conflict": "Conflicting identity/address evidence",
+        "stale": "Not seen in latest search",
+        "eligible": "Eligible for addition confirmation; a fresh TCP check is required before adding."
+      }
+    },
+    "discovery_category": {
+      "options": {
+        "freezer": "Freezer",
+        "washing_machine": "Washing machine",
+        "refrigerator": "Refrigerator",
+        "wine_cellar": "Wine cellar",
+        "unknown": "Unknown category"
+      }
+    },
+    "discovery_issue": {
+      "options": {
+        "fixed_port_unavailable": "UDP/7083 is occupied or unavailable; replies to sending ports are still collected",
+        "interface_unavailable": "An enabled interface could not be opened",
+        "no_enabled_interfaces": "No usable enabled IPv4 interface",
+        "receive_failed": "A receiving socket reported a network error",
+        "send_failed": "A discovery request could not be sent",
+        "catalog_limit": "Discovery capacity reached; results are incomplete",
+        "scan_failed": "The scan could not complete"
+      }
+    },
+    "discovery_confirmation": {
+      "options": {
+        "add": "Confirm and check the connection",
+        "catalog": "Back to catalog",
+        "local": "Back to discovery",
+        "manual": "Enter connection details manually"
+      }
+    },
+    "discovery_catalog": {
+      "options": {
+        "activity": "Last search activity"
+      }
+    },
+    "discovery_navigation": {
+      "options": {
+        "view": "View device / last activity",
+        "local": "Continue searching",
+        "manual": "Enter manually"
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_options": "Choose whether to enable controls and enter a whole-number polling interval from 15 to 30 seconds."
+    },
+    "step": {
+      "init": {
+        "title": "Polling and remote controls",
+        "description": "Enable local programme drafts and controls for both drums. Selecting settings does not contact the appliance; Start consumes the selected draft. Programmes and options follow the exact target app source; physical coverage is documented separately. Physical remote control must be enabled. Commands use fresh state, send once and never retry an uncertain outcome. Cancel requests standby mode, not guaranteed drainage. Power-off can lose remote control and cannot promise remote wake. Saving options sends no appliance command. Changing control opt-in reloads the entry and clears both drafts; polling-only changes do neither. Use Reconfigure for host/port changes and Home Assistant debug logging and diagnostics for troubleshooting.",
+        "data": {
+          "enable_verified_controls": "Enable remote controls",
+          "poll_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "enable_verified_controls": "Requires physical remote control. Changing this option clears both local drafts; re-enabling never restores them.",
+          "poll_interval": "Whole seconds from 15 to 30; default 15. Applies to subsequent polling without an immediate query or reload. An already scheduled poll keeps its current deadline."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "upper_reported_high_water": {
+        "name": "Upper Water Plus on"
+      },
+      "upper_reported_easy_iron": {
+        "name": "Upper Easy Ironing on"
+      },
+      "upper_reported_intensive": {
+        "name": "Upper Intensive on"
+      },
+      "upper_reported_eco": {
+        "name": "Upper Eco. wash on"
+      },
+      "upper_reported_soak": {
+        "name": "Upper Soak wash on"
+      },
+      "upper_reported_night": {
+        "name": "Upper Night wash on"
+      },
+      "upper_reported_smart_mode": {
+        "name": "Upper Smart wash on"
+      },
+      "upper_reported_delay_active": {
+        "name": "Upper End delay active"
+      },
+      "lower_reported_high_water": {
+        "name": "Lower Water Plus on"
+      },
+      "lower_reported_easy_iron": {
+        "name": "Lower Easy Ironing on"
+      },
+      "lower_reported_intensive": {
+        "name": "Lower Intensive on"
+      },
+      "lower_reported_eco": {
+        "name": "Lower Eco. wash on"
+      },
+      "lower_reported_soak": {
+        "name": "Lower Soak wash on"
+      },
+      "lower_reported_night": {
+        "name": "Lower Night wash on"
+      },
+      "lower_reported_smart_mode": {
+        "name": "Lower Smart wash on"
+      },
+      "lower_reported_delay_active": {
+        "name": "Lower End delay active"
+      },
+      "power": {
+        "name": "Power"
+      },
+      "remote_control": {
+        "name": "Remote control"
+      },
+      "local_control_lock": {
+        "name": "Local control lock"
+      },
+      "upper_door_lock": {
+        "name": "Upper \u200a\u200aDoor lock"
+      },
+      "lower_door_lock": {
+        "name": "Lower \u200a\u200aDoor lock"
+      }
+    },
+    "button": {
+      "upper_save_profile": {
+        "name": "Upper \u200a\u200a\u200aSave profile"
+      },
+      "lower_save_profile": {
+        "name": "Lower \u200a\u200a\u200aSave profile"
+      },
+      "upper_start": {
+        "name": "Upper \u200a\u200a\u200a\u200aStart"
+      },
+      "upper_pause": {
+        "name": "Upper \u200a\u200a\u200a\u200aPause"
+      },
+      "upper_resume": {
+        "name": "Upper \u200a\u200a\u200a\u200aResume"
+      },
+      "upper_cancel": {
+        "name": "Upper \u200a\u200a\u200a\u200aCancel"
+      },
+      "upper_reset": {
+        "name": "Upper \u200a\u200a\u200a\u200aStandby"
+      },
+      "lower_start": {
+        "name": "Lower \u200a\u200a\u200a\u200aStart"
+      },
+      "lower_pause": {
+        "name": "Lower \u200a\u200a\u200a\u200aPause"
+      },
+      "lower_resume": {
+        "name": "Lower \u200a\u200a\u200a\u200aResume"
+      },
+      "lower_cancel": {
+        "name": "Lower \u200a\u200a\u200a\u200aCancel"
+      },
+      "lower_reset": {
+        "name": "Lower \u200a\u200a\u200a\u200aStandby"
+      }
+    },
+    "text": {
+      "upper_profile_name": {
+        "name": "Upper \u200a\u200a\u200aNew profile"
+      },
+      "lower_profile_name": {
+        "name": "Lower \u200a\u200a\u200aNew profile"
+      }
+    },
+    "select": {
+      "upper_profile": {
+        "name": "Upper \u200a\u200a\u200aSaved profile",
+        "state": {
+          "none": "None (independent draft)"
+        }
+      },
+      "lower_profile": {
+        "name": "Lower \u200a\u200a\u200aSaved profile",
+        "state": {
+          "none": "None (independent draft)"
+        }
+      },
+      "upper_program_selection": {
+        "name": "Upper \u200a\u200aProgramme",
+        "state": {
+          "none": "None",
+          "kids_wear": "Kids´Wear",
+          "allergy_care": "Allergy Care",
+          "drum_clean": "Tub Clean",
+          "underwear": "Underwear",
+          "quick_wash": "Quick Wash",
+          "delicate_care": "Silk",
+          "baby_care": "Baby Care",
+          "casual": "Casual",
+          "colored_laundry": "Color Wear",
+          "towels": "Towels",
+          "rinse_spin": "Rinse & Spin",
+          "spin": "Spin"
+        }
+      },
+      "upper_fabric": {
+        "name": "Upper \u200a\u200aSmart washing",
+        "state": {
+          "none": "None",
+          "a1": "Outdoor jacket",
+          "a2": "Silk clothes",
+          "a4": "Cotton dress",
+          "a5": "Gauze dress",
+          "a6": "Woollen sweater",
+          "a8": "Synthetic shirt",
+          "a9": "Cotton and linen shirt",
+          "b1": "Synthetic coat",
+          "b2": "Synthetic trousers",
+          "c1": "Denim jacket",
+          "c2": "Jeans",
+          "e1": "Cotton and linen coat",
+          "e2": "Cotton and linen trousers",
+          "e3": "Cotton underwear",
+          "e4": "Children’s coat",
+          "e5": "Children’s underwear",
+          "e6": "Baby underwear",
+          "f1": "School uniform",
+          "f2": "Workwear"
+        }
+      },
+      "upper_wash_minutes": {
+        "name": "Upper Wash (min)"
+      },
+      "upper_temperature": {
+        "name": "Upper Temp. (°C)"
+      },
+      "upper_rinses": {
+        "name": "Upper Rinses"
+      },
+      "upper_spin_speed": {
+        "name": "Upper Spin (RPM)"
+      },
+      "upper_delay": {
+        "name": "Upper End delay (h)",
+        "state": {
+          "off": "OFF"
+        }
+      },
+      "upper_stain": {
+        "name": "Upper Stains",
+        "state": {
+          "none": "None",
+          "blood": "Blood",
+          "grass": "Grass",
+          "wine": "Wine",
+          "juice": "Juice",
+          "soil": "Soil",
+          "milk": "Milk",
+          "w1": "Fruit juice",
+          "w2": "Vegetable juice",
+          "w3": "Jam",
+          "w4": "Ketchup",
+          "w5": "Orange jam",
+          "w6": "Strawberry jam",
+          "w7": "Blueberry jam",
+          "w8": "Seesam jam",
+          "w9": "Milk stain",
+          "w10": "Milk tea",
+          "w11": "Chocolate",
+          "w12": "Wine stain",
+          "w13": "Wine",
+          "w14": "Tea stain",
+          "w15": "Blood stain",
+          "w16": "Grass stain",
+          "w17": "Lipstick",
+          "w18": "Lip gloss",
+          "w19": "Curry",
+          "w20": "Fermented bean curd",
+          "w21": "Coloured pencil",
+          "w22": "Shoe cream",
+          "w23": "Chili sauce",
+          "w24": "Chili oil",
+          "w25": "Coffee",
+          "w26": "Cooking oil",
+          "w27": "Chicken soup",
+          "w28": "Trotter soup",
+          "w29": "Oyster sauce",
+          "w30": "Soil stain"
+        }
+      },
+      "lower_program_selection": {
+        "name": "Lower \u200a\u200aProgramme",
+        "state": {
+          "none": "None",
+          "cotton": "Cotton",
+          "synthetic": "Synthetic",
+          "down": "Down",
+          "curtain": "Curtain",
+          "mix": "Mix",
+          "shirts": "Shirts",
+          "hygiene": "Hygiene",
+          "wool": "Wool",
+          "jeans": "Jeans",
+          "refresh": "Refresh",
+          "drum_clean": "Tub Clean",
+          "quick_wash": "Quick Wash",
+          "bulky": "Bulky",
+          "sports_wear": "Sports Wear",
+          "delicate_care": "Delicates",
+          "rinse_spin": "Rinse & Spin",
+          "spin": "Spin",
+          "dry": "Dry",
+          "bedding": "Bedding",
+          "outdoor_care": "Outdoor Care"
+        }
+      },
+      "lower_fabric": {
+        "name": "Lower \u200a\u200aSmart washing",
+        "state": {
+          "none": "None",
+          "a1": "Outdoor jacket",
+          "a2": "Silk clothes",
+          "a3": "Gauze curtain",
+          "a4": "Cotton dress",
+          "a5": "Gauze dress",
+          "a6": "Woollen sweater",
+          "a7": "Down garment",
+          "a8": "Synthetic shirt",
+          "a9": "Cotton and linen shirt",
+          "b1": "Synthetic coat",
+          "b2": "Synthetic trousers",
+          "c1": "Denim jacket",
+          "c2": "Jeans",
+          "d1": "Bed sheet",
+          "d2": "Duvet cover",
+          "d3": "Cotton curtain",
+          "d4": "Blanket",
+          "e1": "Cotton and linen coat",
+          "e2": "Cotton and linen trousers",
+          "e3": "Cotton underwear",
+          "e4": "Children’s coat",
+          "e5": "Children’s underwear",
+          "f1": "School uniform",
+          "f2": "Workwear"
+        }
+      },
+      "lower_wash_minutes": {
+        "name": "Lower Wash (min)"
+      },
+      "lower_temperature": {
+        "name": "Lower Temp. (°C)"
+      },
+      "lower_rinses": {
+        "name": "Lower Rinses"
+      },
+      "lower_spin_speed": {
+        "name": "Lower Spin (RPM)"
+      },
+      "lower_delay": {
+        "name": "Lower End delay (h)",
+        "state": {
+          "off": "OFF"
+        }
+      },
+      "lower_stain": {
+        "name": "Lower Stains",
+        "state": {
+          "none": "None",
+          "blood": "Blood",
+          "grass": "Grass",
+          "wine": "Wine",
+          "juice": "Juice",
+          "soil": "Soil",
+          "milk": "Milk",
+          "w1": "Fruit juice",
+          "w2": "Vegetable juice",
+          "w3": "Jam",
+          "w4": "Ketchup",
+          "w5": "Orange jam",
+          "w6": "Strawberry jam",
+          "w7": "Blueberry jam",
+          "w8": "Seesam jam",
+          "w9": "Milk stain",
+          "w10": "Milk tea",
+          "w11": "Chocolate",
+          "w12": "Wine stain",
+          "w13": "Wine",
+          "w14": "Tea stain",
+          "w15": "Blood stain",
+          "w16": "Grass stain",
+          "w17": "Lipstick",
+          "w18": "Lip gloss",
+          "w19": "Curry",
+          "w20": "Fermented bean curd",
+          "w21": "Coloured pencil",
+          "w22": "Shoe cream",
+          "w23": "Chili sauce",
+          "w24": "Chili oil",
+          "w25": "Coffee",
+          "w26": "Cooking oil",
+          "w27": "Chicken soup",
+          "w28": "Trotter soup",
+          "w29": "Oyster sauce",
+          "w30": "Soil stain"
+        }
+      },
+      "lower_drying": {
+        "name": "Lower Drying",
+        "state": {
+          "off": "OFF",
+          "auto": "AUTO",
+          "30_min": "30 minutes",
+          "60_min": "60 minutes",
+          "90_min": "90 minutes",
+          "120_min": "120 minutes"
+        }
+      }
+    },
+    "sensor": {
+      "upper_program": {
+        "name": "Upper \u200a\u200aProgramme now",
+        "state": {
+          "none": "None",
+          "kids_wear": "Kids´Wear",
+          "allergy_care": "Allergy Care",
+          "drum_clean": "Tub Clean",
+          "underwear": "Underwear",
+          "quick_wash": "Quick Wash",
+          "delicate_care": "Silk",
+          "baby_care": "Baby Care",
+          "casual": "Casual",
+          "colored_laundry": "Color Wear",
+          "towels": "Towels",
+          "rinse_spin": "Rinse & Spin",
+          "spin": "Spin",
+          "unsupported": "Unsupported programme"
+        }
+      },
+      "lower_program": {
+        "name": "Lower \u200a\u200aProgramme now",
+        "state": {
+          "none": "None",
+          "cotton": "Cotton",
+          "synthetic": "Synthetic",
+          "down": "Down",
+          "curtain": "Curtain",
+          "mix": "Mix",
+          "shirts": "Shirts",
+          "hygiene": "Hygiene",
+          "wool": "Wool",
+          "jeans": "Jeans",
+          "refresh": "Refresh",
+          "drum_clean": "Tub Clean",
+          "quick_wash": "Quick Wash",
+          "bulky": "Bulky",
+          "sports_wear": "Sports Wear",
+          "delicate_care": "Delicates",
+          "rinse_spin": "Rinse & Spin",
+          "spin": "Spin",
+          "dry": "Dry",
+          "bedding": "Bedding",
+          "outdoor_care": "Outdoor Care",
+          "unsupported": "Unsupported programme"
+        }
+      },
+      "upper_phase": {
+        "name": "Upper \u200a\u200aPhase",
+        "state": {
+          "standby": "Standby mode",
+          "weighing": "Weighing",
+          "washing": "Washing",
+          "spinning": "Spinning",
+          "drying": "Drying",
+          "cooling": "Cool down cycle",
+          "intermittent_rotation": "Intermittent rotation",
+          "delayed_start": "Delayed start",
+          "drying_finished": "Drying finished",
+          "completed": "Completed",
+          "unsupported": "Unsupported phase"
+        }
+      },
+      "lower_phase": {
+        "name": "Lower \u200a\u200aPhase",
+        "state": {
+          "standby": "Standby mode",
+          "weighing": "Weighing",
+          "washing": "Washing",
+          "spinning": "Spinning",
+          "drying": "Drying",
+          "cooling": "Cool down cycle",
+          "intermittent_rotation": "Intermittent rotation",
+          "delayed_start": "Delayed start",
+          "drying_finished": "Drying finished",
+          "completed": "Completed",
+          "unsupported": "Unsupported phase"
+        }
+      },
+      "upper_execution_state": {
+        "name": "Upper \u200a\u200aState",
+        "state": {
+          "running": "Running",
+          "paused": "Paused",
+          "standby": "Standby mode",
+          "completed": "Completed",
+          "delayed": "Delayed"
+        }
+      },
+      "lower_execution_state": {
+        "name": "Lower \u200a\u200aState",
+        "state": {
+          "running": "Running",
+          "paused": "Paused",
+          "standby": "Standby mode",
+          "completed": "Completed",
+          "delayed": "Delayed"
+        }
+      },
+      "upper_remaining_time": {
+        "name": "Upper \u200a\u200aTime left"
+      },
+      "lower_remaining_time": {
+        "name": "Lower \u200a\u200aTime left"
+      },
+      "upper_cycle_count": {
+        "name": "Upper Cycle count"
+      },
+      "lower_cycle_count": {
+        "name": "Lower Cycle count"
+      },
+      "upper_reported_temperature": {
+        "name": "Upper Target temp."
+      },
+      "upper_reported_wash_stage_time": {
+        "name": "Upper Wash-stage time"
+      },
+      "upper_reported_rinses": {
+        "name": "Upper Rinse count"
+      },
+      "upper_reported_spin_stage_time": {
+        "name": "Upper Spin-stage time"
+      },
+      "lower_reported_temperature": {
+        "name": "Lower Target temp."
+      },
+      "lower_reported_wash_stage_time": {
+        "name": "Lower Wash-stage time"
+      },
+      "lower_reported_rinses": {
+        "name": "Lower Rinse count"
+      },
+      "lower_reported_spin_stage_time": {
+        "name": "Lower Spin-stage time"
+      },
+      "lower_reported_drying_mode": {
+        "name": "Lower Drying mode",
+        "state": {
+          "off": "OFF",
+          "auto": "AUTO",
+          "30_min": "30 minutes",
+          "60_min": "60 minutes",
+          "90_min": "90 minutes",
+          "120_min": "120 minutes"
+        }
+      },
+      "session_water": {
+        "name": "Power-on water"
+      },
+      "cumulative_water": {
+        "name": "Cumulative water"
+      },
+      "session_energy": {
+        "name": "Power-on energy"
+      },
+      "cumulative_energy": {
+        "name": "Cumulative electricity"
+      }
+    },
+    "switch": {
+      "upper_high_water": {
+        "name": "Upper \u200aWater Plus"
+      },
+      "upper_easy_iron": {
+        "name": "Upper \u200aEasy Ironing"
+      },
+      "upper_intensive": {
+        "name": "Upper \u200aIntensive"
+      },
+      "upper_eco": {
+        "name": "Upper \u200aEco. wash"
+      },
+      "upper_soak": {
+        "name": "Upper \u200aSoak wash"
+      },
+      "upper_night": {
+        "name": "Upper \u200aNight wash"
+      },
+      "lower_high_water": {
+        "name": "Lower \u200aWater Plus"
+      },
+      "lower_easy_iron": {
+        "name": "Lower \u200aEasy Ironing"
+      },
+      "lower_intensive": {
+        "name": "Lower \u200aIntensive"
+      },
+      "lower_eco": {
+        "name": "Lower \u200aEco. wash"
+      },
+      "lower_soak": {
+        "name": "Lower \u200aSoak wash"
+      },
+      "lower_night": {
+        "name": "Lower \u200aNight wash"
+      },
+      "power": {
+        "name": "Appliance power"
+      },
+      "buzzer": {
+        "name": "Sound"
+      },
+      "child_lock": {
+        "name": "Child lock"
+      }
+    }
+  },
+  "exceptions": {
+    "control_failed": {
+      "message": "The appliance rejected the control: {reason}"
+    },
+    "outcome_unknown": {
+      "message": "The command was sent once, but its outcome could not be proven. Check fresh appliance state before taking another action."
+    },
+    "pause_resume_controls_disabled": {
+      "message": "Enable remote controls in the integration options before pausing or resuming."
+    },
+    "pause_resume_no_snapshot": {
+      "message": "No appliance state is available. Wait for a successful update before pausing or resuming."
+    },
+    "pause_resume_power_off": {
+      "message": "The appliance must be powered on before pausing or resuming."
+    },
+    "pause_resume_remote_control_off": {
+      "message": "Enable remote control on the appliance before pausing or resuming."
+    },
+    "pause_resume_local_lock": {
+      "message": "The appliance's local control lock prevents pausing or resuming."
+    },
+    "pause_resume_child_lock": {
+      "message": "The appliance's Child lock prevents pausing or resuming."
+    },
+    "pause_resume_unsupported_phase": {
+      "message": "This programme phase does not support pausing or resuming."
+    },
+    "pause_resume_not_active": {
+      "message": "Cannot pause: this drum is not running."
+    },
+    "pause_resume_not_paused": {
+      "message": "Cannot resume: this drum is not paused."
+    },
+    "pause_resume_state_changed": {
+      "message": "The appliance state changed before the command was sent. Wait for the state to update, then try again."
+    },
+    "pause_resume_invalid_state": {
+      "message": "The pause or resume command cannot be applied in the current appliance state. Check the drum's state before trying again."
+    },
+    "pause_resume_control_failed": {
+      "message": "The pause or resume request failed. Check the connection and current appliance state."
+    },
+    "unsafe_state": {
+      "message": "The control is not safe in the current appliance state: {reason}"
+    }
+  },
+  "services": {
+    "save_profile": {
+      "name": "Save programme profile",
+      "description": "Save the complete current drum draft locally under a new name. Sends no appliance command. A name collision never overwrites an existing profile.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured HWD120-B1558U that owns the draft."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The drum whose complete local draft will be saved."
+        },
+        "name": {
+          "name": "Profile name",
+          "description": "Unique for this drum, 1–100 characters. None, Unknown and Unavailable are reserved."
+        }
+      }
+    },
+    "update_profile": {
+      "name": "Update programme profile",
+      "description": "Explicitly replace every saved setting with the current complete drum draft. Keeps the profile ID and name. Sends no appliance command.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured appliance that owns the profile."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The profile's compatible drum and source of the replacement draft."
+        },
+        "profile_id": {
+          "name": "Profile",
+          "description": "Choose a saved profile or enter its stable ID. Device and drum must match."
+        }
+      }
+    },
+    "rename_profile": {
+      "name": "Rename programme profile",
+      "description": "Change the display name without changing the saved intent or stable automation reference.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured appliance that owns the profile."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The profile's compatible drum."
+        },
+        "profile_id": {
+          "name": "Profile",
+          "description": "Choose a saved profile or enter its stable ID."
+        },
+        "name": {
+          "name": "New name",
+          "description": "Unique for this drum, 1–100 characters. None, Unknown and Unavailable are reserved."
+        }
+      }
+    },
+    "delete_profile": {
+      "name": "Delete programme profile",
+      "description": "Delete only this saved profile. Does not clear drafts, stop a cycle or change another profile. Automations referencing the deleted ID will fail clearly.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured appliance that owns the profile."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The profile's compatible drum."
+        },
+        "profile_id": {
+          "name": "Profile",
+          "description": "Choose the profile to delete or enter its stable ID."
+        }
+      }
+    },
+    "apply_profile": {
+      "name": "Apply programme profile",
+      "description": "Atomically restore the complete saved intent into the local drum draft, clearing absent options. Never starts a cycle or sends an appliance command.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured appliance that owns the profile."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The profile's compatible drum."
+        },
+        "profile_id": {
+          "name": "Profile",
+          "description": "Choose a saved profile or enter its stable ID. Renames preserve this reference."
+        }
+      }
+    },
+    "start_profile": {
+      "name": "Start saved programme profile",
+      "description": "Explicitly start one immutable saved revision once through the normal control safety path. Does not use, change or consume UI drafts. Requires control opt-in and a fresh safe appliance state. Never retries an unknown outcome.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured appliance that owns the profile."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The profile's compatible drum."
+        },
+        "profile_id": {
+          "name": "Profile",
+          "description": "Choose the profile to start or enter its stable ID. Missing, incompatible or wrong-drum references are rejected without control dispatch."
+        }
+      }
+    },
+    "start_program": {
+      "name": "Start a programme",
+      "description": "Start one complete programme or smart washing fabric recipe without changing shared UI drafts. Omitted settings use source defaults. Allowed values depend on the selected drum and programme; generic input ranges are not programme capability claims.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The configured HWD120-B1558U."
+        },
+        "drum": {
+          "name": "Drum",
+          "description": "The drum to control."
+        },
+        "program": {
+          "name": "Programme",
+          "description": "Exact programme key; omit when selecting a smart washing fabric."
+        },
+        "fabric": {
+          "name": "Smart washing fabric",
+          "description": "Exact source fabric key; alternative to programme."
+        },
+        "wash_minutes": {
+          "name": "Wash duration",
+          "description": "Main-wash minutes before source heating and option adjustments. Omit for ordinary stains, which fix the full wash-stage duration including heating."
+        },
+        "temperature_c": {
+          "name": "Washing temperature",
+          "description": "Source-offered temperature in degrees Celsius. Omit for ordinary stains, which fix the treatment temperature."
+        },
+        "rinses": {
+          "name": "Rinses",
+          "description": "Source-offered rinse count."
+        },
+        "spin_rpm": {
+          "name": "Spin speed",
+          "description": "Source-offered revolutions per minute."
+        },
+        "drying_mode": {
+          "name": "Drying",
+          "description": "Lower-drum drying mode, where offered."
+        },
+        "delay_hours": {
+          "name": "End time delay",
+          "description": "OFF at zero; source-offered end-time delay in whole hours."
+        },
+        "enabled_functions": {
+          "name": "Cycle options",
+          "description": "Complete list of enabled source-offered boolean options. Eco. wash, Night wash and Soak wash are incompatible with ordinary stains and are rejected when explicitly requested."
+        },
+        "stains": {
+          "name": "Stains",
+          "description": "For a supported ordinary programme, choose at most one of blood, grass, wine, juice, soil or milk; the treatment fixes temperature and wash-stage duration and excludes Eco. wash, Night wash and Soak wash. For a smart washing fabric recipe, choose one or more W1 through W30 IDs. An empty list selects no stain."
+        }
+      }
+    }
+  }
+}

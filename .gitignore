@@ -1,0 +1,50 @@
+# Repository-local agent instructions are private
+/AGENTS.md
+/.agents
+
+# Independent private development documentation repository
+/.local/
+# Private reverse-engineering inputs and captures
+/raw/
+/captures/
+/decompiled/
+*.apk
+*.pcap
+*.pcapng
+*.cap
+*.log
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+/secrets/
+/config/
+/.homeassistant/
+
+# Python and tool caches
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+/dist/
+*.egg-info/
+
+# Node.js tooling
+/node_modules/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

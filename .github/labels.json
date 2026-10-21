@@ -1,0 +1,137 @@
+[
+  {
+    "name": "type:bug",
+    "color": "1d76db",
+    "description": "Type: bug"
+  },
+  {
+    "name": "type:feature",
+    "color": "1d76db",
+    "description": "Type: feature"
+  },
+  {
+    "name": "type:refactor",
+    "color": "1d76db",
+    "description": "Type: refactor"
+  },
+  {
+    "name": "type:test",
+    "color": "1d76db",
+    "description": "Type: test"
+  },
+  {
+    "name": "type:docs",
+    "color": "1d76db",
+    "description": "Type: docs"
+  },
+  {
+    "name": "type:chore",
+    "color": "1d76db",
+    "description": "Type: chore"
+  },
+  {
+    "name": "priority:P0",
+    "color": "d93f0b",
+    "description": "Priority: P0"
+  },
+  {
+    "name": "priority:P1",
+    "color": "d93f0b",
+    "description": "Priority: P1"
+  },
+  {
+    "name": "priority:P2",
+    "color": "d93f0b",
+    "description": "Priority: P2"
+  },
+  {
+    "name": "priority:P3",
+    "color": "d93f0b",
+    "description": "Priority: P3"
+  },
+  {
+    "name": "area:protocol",
+    "color": "0e8a16",
+    "description": "Area: protocol"
+  },
+  {
+    "name": "area:controls",
+    "color": "0e8a16",
+    "description": "Area: controls"
+  },
+  {
+    "name": "area:entities",
+    "color": "0e8a16",
+    "description": "Area: entities"
+  },
+  {
+    "name": "area:discovery",
+    "color": "0e8a16",
+    "description": "Area: discovery"
+  },
+  {
+    "name": "area:localization",
+    "color": "0e8a16",
+    "description": "Area: localization"
+  },
+  {
+    "name": "area:compatibility",
+    "color": "0e8a16",
+    "description": "Area: compatibility"
+  },
+  {
+    "name": "area:testing",
+    "color": "0e8a16",
+    "description": "Area: testing"
+  },
+  {
+    "name": "area:ci-release",
+    "color": "0e8a16",
+    "description": "Area: ci release"
+  },
+  {
+    "name": "area:security",
+    "color": "0e8a16",
+    "description": "Area: security"
+  },
+  {
+    "name": "status:needs-info",
+    "color": "fbca04",
+    "description": "Status: needs info"
+  },
+  {
+    "name": "status:needs-reproduction",
+    "color": "fbca04",
+    "description": "Status: needs reproduction"
+  },
+  {
+    "name": "status:blocked",
+    "color": "fbca04",
+    "description": "Status: blocked"
+  },
+  {
+    "name": "epic",
+    "color": "5319e7",
+    "description": "Outcome spanning several issues"
+  },
+  {
+    "name": "dependencies",
+    "color": "0366d6",
+    "description": "Dependency manifest, lockfile or automation update"
+  },
+  {
+    "name": "breaking-change",
+    "color": "b60205",
+    "description": "Public compatibility or migration impact"
+  },
+  {
+    "name": "good first issue",
+    "color": "7057ff",
+    "description": "Small documented contribution"
+  },
+  {
+    "name": "help wanted",
+    "color": "008672",
+    "description": "Maintainer requests contribution or evidence"
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "domain": "uplus_reborn",
+  "name": "U+ Reborn",
+  "after_dependencies": ["http"],
+  "codeowners": ["@Zuz666"],
+  "config_flow": true,
+  "dependencies": ["dhcp", "network"],
+  "dhcp": [
+    {
+      "macaddress": "98AAFC*"
+    }
+  ],
+  "documentation": "https://github.com/Zuz666/uplus-reborn",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Zuz666/uplus-reborn/issues",
+  "version": "1.0.0"
+}

@@ -1,0 +1,113 @@
+# Release workflow
+
+U+ Reborn is distributed as a **HACS Custom repository**, category Integration.
+This is not acceptance into the default HACS catalogue. The only supported
+appliance is Haier HWD120-B1558U; software tests do not imply additional hardware
+coverage. See [CONTRIBUTING](../CONTRIBUTING.md) and
+[the verification contract](development-verification.md).
+
+## Prepare a candidate
+
+1. Use a release-preparation PR against `master`. Select a stable SemVer version,
+   without a `v` prefix in metadata. The first public release is **1.0.0**;
+   unpublished development versions are not earlier public releases.
+2. Set the same version in `custom_components/uplus_reborn/manifest.json` and
+   `pyproject.toml`; run `uv lock` and commit the matching root package in
+   `uv.lock`. Ordinary feature/fix/dependency PRs do not bump these versions.
+3. Add a dated `## [VERSION] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
+   Curate user-visible changes, migrations/breaking changes and known limits.
+   Do not fabricate historical releases or substitute generated commit titles.
+4. Keep `hacs.json` in source-tree mode during first-repository bootstrap. After
+   an actual bootstrap installation succeeds, set `zip_release: true`,
+   `filename: uplus_reborn.zip` and `hide_default_branch: true` in the release PR.
+   ZIP mode has no guaranteed source-branch fallback before a release exists.
+5. Review the exact diff and sensitive material. Include the MIT license in the
+   integration package; documentation remains separately CC BY 4.0. Keep private
+   instructions, plans, captures, APKs, credentials and generated files out.
+6. Run required CI and the complete finite release matrix. Merge only the
+   accepted candidate; record its full public `master` commit SHA.
+
+Initial publication starts from one independent, reviewed root snapshot. Never
+mirror an unrelated development history, publish private provenance, or replace
+the local development repository to achieve that boundary. Subsequent public
+changes use ordinary PR history.
+
+## Build committed bytes
+
+Use Python 3.13+ and Git from a clean public checkout; no private workspace is
+required. Output directories must not already exist.
+
+```sh
+uv run --no-project --python 3.13 python tools/release.py check --commit HEAD --version 1.0.0
+uv run --no-project --python 3.13 python tools/release.py build --commit HEAD --version 1.0.0 --output build/release-candidate
+```
+
+The CLI reads metadata, notes and integration files from the selected commit,
+not the working tree. It rejects version/lock mismatches, missing release notes,
+missing license/runtime files, unsafe archive members and occupied output paths.
+It reuses the existing committed-byte artifact validator rather than defining
+another extraction policy.
+
+The output contains:
+
+- `uplus_reborn.zip`: integration contents at archive root, with no extra
+  `custom_components/uplus_reborn/` directory;
+- `SHA256SUMS`: the ZIP's SHA-256;
+- `release.json`: public source commit, version, ZIP digest and member hashes;
+- `release-notes.md`: only the selected changelog section;
+- `bundle/`: the validated tar/manifest input for isolated Core acceptance, not
+  an additional HACS download asset.
+
+Only the ZIP, checksum and sanitized provenance are release assets. Hashes prove
+byte integrity, not a signature, security audit or hardware compatibility. Never
+package a dirty checkout or use an unavailable private commit in public provenance.
+
+## Publish deliberately
+
+Run the manual **Release** workflow from `master` for the accepted version and
+full SHA. Its default mode validates/builds without publishing. Publishing needs
+the explicit publish input and the configured release approval environment.
+Read-only validation/build jobs must finish before a job receives write access.
+Do not grant write credentials to untrusted pull-request code.
+
+The publication gate checks the current default-branch SHA, synchronized version,
+required checks, existing release/tag state and version ordering. An existing tag
+or release is not overwritten. A draft receives the exact ZIP/checksum/provenance;
+download the uploaded bytes and compare their hashes before publishing. Resolve
+the actual tag object to the accepted commit: `targetCommitish` alone is not proof.
+
+If a write times out or its outcome is unknown, inspect the repository, tag,
+draft and assets before acting. Do not blindly rerun, delete tags/drafts, replace
+assets, retarget a tag or pass a clobber flag. An unexpected partially completed
+release requires a maintainer decision based on its observed state.
+
+Published versions/assets are immutable by project policy. Enable GitHub's native
+immutable-release protection when available and verify the effective setting;
+policy text alone is not platform enforcement. Correct a published defect with a
+new patch release and a clear advisory/migration note, not an asset replacement.
+
+## Acceptance after publication
+
+Use disposable isolated Core/HACS, not a live appliance installation:
+
+1. Add the public repository as category Integration. The bootstrap source-tree
+   check and the final ZIP check are distinct observations.
+2. Install the published stable version through real HACS; restart the isolated
+   Core, compare installed member hashes, and exercise synthetic TCP discovery,
+   config entry loading and profile persistence.
+3. Exercise an upgrade fixture and confirm entity/statistic identity, preferences
+   and saved profiles. A source download or passing pytest alone is not proof of
+   HACS installation, restart or upgrade.
+4. Check release URL/tag/version, downloadable asset bytes and README links.
+   Enable Release/Downloads badges only once their release/asset exists. The
+   Downloads badge counts `uplus_reborn.zip`, not checksums or unique users.
+5. Record tested Core/HACS versions and remaining limits. Never mark hardware or
+   current/latest compatibility beyond the evidence actually obtained.
+
+The ordinary `ha_smoke.py` network guard allows loopback only. It cannot perform
+GitHub-backed HACS installation. That acceptance needs a separately controlled
+HACS environment with bounded GitHub egress, synthetic loopback appliance state
+and no real appliance/account credentials. It does not authorize live operations.
+
+Licensed under [CC BY 4.0](LICENSE). Attribution: U+ Reborn contributors,
+[U+ Reborn repository](https://github.com/Zuz666/uplus-reborn).

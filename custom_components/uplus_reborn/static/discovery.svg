@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Local appliance discovery</title>
+  <style>
+    :root { --fg: #438493; --accent: #008c91; --c1: #009de0; }
+    .outbound { animation: outbound 3.2s ease-in-out infinite; }
+    .inbound { animation: inbound 3.2s ease-in-out infinite; }
+    .echo { opacity: 0; transform-box: view-box; transform-origin: 15.5px 27px; animation: echo 3.2s ease-out 2.8s infinite; }
+    .echo.second { animation-delay: 3.04s; }
+    @keyframes outbound {
+      0%, 5% { opacity: .2; transform: translateX(0); }
+      12% { opacity: 1; }
+      38% { opacity: 1; transform: translateX(3px); }
+      45%, 100% { opacity: 0; transform: translateX(3px); }
+    }
+    @keyframes inbound {
+      0%, 50% { opacity: 0; transform: translateX(0); }
+      58% { opacity: 1; }
+      88% { opacity: 1; transform: translateX(-3px); }
+      95%, 100% { opacity: 0; transform: translateX(-3px); }
+    }
+    @keyframes echo {
+      0% { opacity: 0; transform: scale(.75); }
+      8% { opacity: .95; }
+      35%, 100% { opacity: 0; transform: scale(1.6); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .outbound, .inbound { animation: none; opacity: .9; }
+      .echo { animation: none; opacity: .65; transform: scale(1.1); }
+      .echo.second { opacity: .35; transform: scale(1.55); }
+    }
+  </style>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="12" width="19" height="40" rx="3" stroke="var(--fg)" stroke-width="2.5"/>
+    <path d="M12 17h7" stroke="var(--fg)" stroke-width="2"/>
+    <circle cx="15.5" cy="27" r="5" stroke="var(--fg)" stroke-width="2.5"/>
+    <circle cx="15.5" cy="42" r="6.5" stroke="var(--fg)" stroke-width="2.5"/>
+    <path d="M36 29l12-10 12 10v18H36Z" stroke="var(--fg)" stroke-width="2.5"/>
+    <path d="M48 42V29m0 7-5-5m5 8 5-5" stroke="var(--accent)" stroke-width="2.5"/>
+  </g>
+  <g fill="none" stroke="var(--c1)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path class="outbound" d="m28 25 4 4-4 4"/>
+    <path class="inbound" d="m33 35-4 4 4 4"/>
+  </g>
+  <g fill="none" stroke="var(--c1)" stroke-width="2.5" stroke-linecap="round">
+    <path class="echo" d="M15.5 15a12 12 0 0 1 12 12"/>
+    <path class="echo second" d="M15.5 15a12 12 0 0 1 12 12"/>
+  </g>
+</svg>

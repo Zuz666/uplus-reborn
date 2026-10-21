@@ -1,0 +1,12 @@
+{
+  "config": {
+    "default": true,
+    // Prose, protocol tables and source URLs are intentionally not hard-wrapped.
+    "MD013": false,
+    // Existing tables use both compact and spaced delimiter rows.
+    "MD060": false
+  },
+  "customRules": ["./tools/closed-fences.cjs"],
+  "fix": false,
+  "gitignore": false
+}
