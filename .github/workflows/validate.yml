@@ -41,9 +41,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Verify MIT license on the exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: test "$(gh api "repos/$REPOSITORY/license?ref=$COMMIT" --jq .license.spdx_id)" = MIT
       - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
         with:
           category: integration
+          # HACS reads default-branch metadata; the required step above checks this SHA.
+          ignore: license
   supply-chain:
     name: Workflow and secret checks
     runs-on: ubuntu-latest
