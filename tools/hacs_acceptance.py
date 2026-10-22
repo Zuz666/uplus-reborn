@@ -126,8 +126,10 @@ def main(argv: list[str] | None = None) -> int:
                      "upgrade_smoke.py", "ha_smoke.py", "delivery.py", "publish_release.py")
     }
     name = "uplus-hacs-" + uuid.uuid4().hex
+    owns_output = False
     try:
         output.mkdir(parents=True)
+        owns_output = True
         _write_json(output / "acceptance.json", result)
         require_docker()
         inputs, receipts = output / "inputs", output / "receipts"
@@ -178,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                 result["timeout_container_removed"] = False
     finally:
         result["duration_seconds"] = time.monotonic() - started
-        if output.is_dir():
+        if owns_output:
             _write_json(output / "acceptance.json", result)
     print(json.dumps({key: result[key] for key in ("schema", "status", "success", "duration_seconds", "error") if key in result}))
     return 0 if result["success"] else 1

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import socket
@@ -10,9 +11,11 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
-from hacs_acceptance import verify_release_package
+from hacs_acceptance import main, verify_release_package
 from hacs_fixture import InstallerGuard, extract_hacs, safe_error
 
 
@@ -109,6 +112,22 @@ class LauncherFailureTests(unittest.TestCase):
             self.assertFalse(receipt["success"])
             self.assertIn("DOCKER_UNAVAILABLE", receipt["error"])
             self.assertFalse((output / "inputs").exists())
+
+    def test_concurrent_output_owner_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "attempt"
+            original_mkdir = Path.mkdir
+
+            def concurrent_mkdir(path, *args, **kwargs):
+                if path == output:
+                    original_mkdir(path, *args, **kwargs)
+                    (path / "acceptance.json").write_text("other attempt", encoding="utf-8")
+                return original_mkdir(path, *args, **kwargs)
+
+            with patch.object(Path, "mkdir", concurrent_mkdir), redirect_stdout(io.StringIO()):
+                code = main(["--tag", "v1.0.1", "--baseline", "v1.0.0", "--output", str(output)])
+            self.assertNotEqual(code, 0)
+            self.assertEqual((output / "acceptance.json").read_text(encoding="utf-8"), "other attempt")
 
 
 class UpstreamArchiveTests(unittest.TestCase):
