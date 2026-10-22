@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Container worker for hacs_acceptance.py; real HACS, no live credentials."""
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 from zipfile import ZipFile
 
 import ha_smoke as smoke
-from delivery import _member_name, verify_installed
+from delivery import archive_member_name, verify_installed
 
 HOSTS = frozenset({"api.github.com", "github.com", "codeload.github.com",
                    "raw.githubusercontent.com", "release-assets.githubusercontent.com"})
@@ -56,16 +55,16 @@ class InstallerGuard(smoke.LoopbackGuard):
 
 async def install(args, expected, addresses, guard, result):
     import aiohttp
-    from aiohttp.abc import AbstractResolver
     from aiogithubapi import GitHub, GitHubAPI
     from aiogithubapi.const import ACCEPT_HEADERS
+    from aiohttp.abc import AbstractResolver
     from awesomeversion import AwesomeVersion
+    from custom_components.hacs.base import HacsBase
+    from custom_components.hacs.enums import HacsCategory
     from homeassistant import bootstrap, loader
     from homeassistant.config_entries import ConfigEntries
     from homeassistant.const import __version__ as core_version
     from homeassistant.core import HomeAssistant
-    from custom_components.hacs.base import HacsBase
-    from custom_components.hacs.enums import HacsCategory
 
     class PinnedResolver(AbstractResolver):
         async def resolve(self, host, port=0, family=socket.AF_INET):
@@ -177,6 +176,7 @@ def installer_main(args):
         result["success"] = True
     except Exception as error:
         result["error"] = safe_error(error)
+        logging.getLogger(__name__).exception("HACS installer phase failed")
     finally:
         result["duration_seconds"] = time.monotonic() - started
         if "guard" in locals():
@@ -186,16 +186,14 @@ def installer_main(args):
     return 0 if result["success"] else 1
 
 
-def extract_hacs(root):
-    fixture = json.loads(Path("/inputs/fixture.json").read_text())
-    archive_path = Path("/inputs/hacs.zip")
+def extract_hacs(root, archive_path, fixture):
     smoke._require(hashlib.sha256(archive_path.read_bytes()).hexdigest() == fixture["hacs_sha256"],
                    "Official HACS bytes changed")
     with ZipFile(archive_path) as archive:
         smoke._require(sum(row.file_size for row in archive.infolist()) <= 128 * 1024 * 1024,
                        "Official HACS archive is too large")
         for row in archive.infolist():
-            _member_name("custom_components/uplus_reborn/" + row.filename, directory=row.is_dir())
+            archive_member_name(row.filename, directory=row.is_dir())
             smoke._require(not stat.S_ISLNK(row.external_attr >> 16), "Unsafe HACS archive link")
         archive.extractall(root / "custom_components" / "hacs")
 
@@ -234,16 +232,17 @@ def main(args):
         run_phase(name, command)
 
     try:
+        fixture = json.loads(Path("/inputs/fixture.json").read_text())
         with tempfile.TemporaryDirectory(prefix="uplus-hacs-") as temporary:
             directory = Path(temporary)
             fresh = directory / "fresh"
-            extract_hacs(fresh)
+            extract_hacs(fresh, Path("/inputs/hacs.zip"), fixture)
             install_phase("fresh_install", fresh, "target")
             core_phase("fresh_boot", fresh)
             core_phase("fresh_restart", fresh, "fresh_boot")
             if args.baseline:
                 upgrade = directory / "upgrade"
-                extract_hacs(upgrade)
+                extract_hacs(upgrade, Path("/inputs/hacs.zip"), fixture)
                 install_phase("baseline_install", upgrade, "baseline")
                 core_phase("upgrade_before", upgrade)
                 install_phase("upgrade_install", upgrade, "target", "baseline_install")
@@ -251,6 +250,7 @@ def main(args):
         result["success"] = True
     except Exception as error:
         result["error"] = safe_error(error)
+        logging.getLogger(__name__).exception("HACS acceptance failed")
     finally:
         result["duration_seconds"] = time.monotonic() - started
         result["temporary_configs_removed"] = "directory" in locals() and not directory.exists()

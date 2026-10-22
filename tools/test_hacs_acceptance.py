@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 from hacs_acceptance import verify_release_package
-from hacs_fixture import InstallerGuard, safe_error
+from hacs_fixture import InstallerGuard, extract_hacs, safe_error
 
 
 class ReleasePackageTests(unittest.TestCase):
@@ -109,6 +109,31 @@ class LauncherFailureTests(unittest.TestCase):
             self.assertFalse(receipt["success"])
             self.assertIn("DOCKER_UNAVAILABLE", receipt["error"])
             self.assertFalse((output / "inputs").exists())
+
+
+class UpstreamArchiveTests(unittest.TestCase):
+    def test_upstream_bytecode_is_allowed_but_traversal_and_wrong_hash_never_extract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            archive = directory / "hacs.zip"
+            member = "hacs_frontend/__pycache__/bundle.cpython-313.pyc"
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr(member, b"trusted upstream package bytecode")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            extract_hacs(directory / "valid", archive, {"hacs_sha256": digest})
+            installed = directory / "valid/custom_components/hacs"
+            self.assertEqual({p.relative_to(installed).as_posix() for p in installed.rglob("*") if p.is_file()}, {member})
+            with self.assertRaisesRegex(RuntimeError, "bytes changed"):
+                extract_hacs(directory / "wrong-hash", archive, {"hacs_sha256": "0" * 64})
+            self.assertFalse((directory / "wrong-hash").exists())
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("../outside", b"escape")
+            with self.assertRaisesRegex(ValueError, "Unsafe"):
+                extract_hacs(directory / "unsafe", archive, {
+                    "hacs_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                })
+            self.assertFalse((directory / "unsafe").exists())
+            self.assertFalse((directory / "outside").exists())
 
 
 if __name__ == "__main__":

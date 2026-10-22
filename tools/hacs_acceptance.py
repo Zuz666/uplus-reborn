@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Repeat actual published HACS installation/upgrade in disposable Docker Core.
 
 No publication, account onboarding or live appliance access. The host needs GitHub
@@ -10,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import stat
 import subprocess
@@ -18,7 +18,14 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from delivery import PACKAGE, _member_name, _no_links, _write_json, ensure_docker_image, require_docker
+from delivery import (
+    PACKAGE,
+    _member_name,
+    _no_links,
+    _write_json,
+    ensure_docker_image,
+    require_docker,
+)
 from publish_release import api, gh, tag_commit
 from release import ASSET, VERSION
 
@@ -112,13 +119,20 @@ def main(argv: list[str] | None = None) -> int:
     result = {"schema": 1, "scenario": "published-hacs", "status": "running", "success": False,
               "repository": args.repository, "tag": args.tag, "baseline": args.baseline,
               "account_onboarding": False, "live_appliance_access": False}
+    result["python_version"] = platform.python_version()
+    result["tool_hashes"] = {
+        name: hashlib.sha256((TOOLS / name).read_bytes()).hexdigest()
+        for name in ("hacs_acceptance.py", "hacs_fixture.py", "hacs-fixture.json",
+                     "upgrade_smoke.py", "ha_smoke.py", "delivery.py", "publish_release.py")
+    }
     name = "uplus-hacs-" + uuid.uuid4().hex
     try:
         output.mkdir(parents=True)
         _write_json(output / "acceptance.json", result)
         require_docker()
         inputs, receipts = output / "inputs", output / "receipts"
-        inputs.mkdir(); receipts.mkdir()
+        inputs.mkdir()
+        receipts.mkdir()
         fixture = json.loads((TOOLS / "hacs-fixture.json").read_text(encoding="utf-8"))
         gh("release", "download", fixture["hacs_version"], "--repo", "hacs/integration",
            "--pattern", "hacs.zip", "--dir", str(inputs))
