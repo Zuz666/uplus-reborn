@@ -6,7 +6,8 @@
   },
   "scripts": {
     "test:docs": "node tools/check-docs.mjs",
-    "test:docs:tooling": "node --test tools/check-docs.test.mjs"
+    "test:docs:tooling": "node --test tools/check-docs.test.mjs",
+    "test:labels": "node --test tools/pr-labels.test.cjs"
   },
   "devDependencies": {
     "@mermaid-lint/cli": "0.53.1",

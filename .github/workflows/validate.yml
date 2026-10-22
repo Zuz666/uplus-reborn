@@ -75,3 +75,20 @@ jobs:
         run: |
           "$RUNNER_TEMP/validators/actionlint"
           "$RUNNER_TEMP/validators/gitleaks" dir . --config .gitleaks.toml --redact --no-banner
+  pr-labels:
+    name: PR label rules (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Exercise classification and metadata safety
+        run: npm run test:labels
