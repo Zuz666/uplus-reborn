@@ -24,8 +24,9 @@ coverage. See [CONTRIBUTING](../CONTRIBUTING.md) and
 5. Review the exact diff and sensitive material. Include the MIT license in the
    integration package; documentation remains separately CC BY 4.0. Keep private
    instructions, plans, captures, APKs, credentials and generated files out.
-6. Run required CI and the complete finite release matrix. Merge only the
-   accepted candidate; record its full public `master` commit SHA.
+6. Pass protected PR CI and merge the accepted candidate. Wait for the complete
+   CI matrix on that exact public `master` SHA; record its run and attempt.
+   PR synthetic-merge evidence cannot authorize the later squash commit.
 
 Initial publication starts from one independent, reviewed root snapshot. Never
 mirror an unrelated development history, publish private provenance, or replace
@@ -38,8 +39,8 @@ Use Python 3.13+ and Git from a clean public checkout; no private workspace is
 required. Output directories must not already exist.
 
 ```sh
-uv run --no-project --python 3.13 python tools/release.py check --commit HEAD --version 1.0.0
-uv run --no-project --python 3.13 python tools/release.py build --commit HEAD --version 1.0.0 --output build/release-candidate
+uv run --no-project --python 3.13 python tools/release.py check --commit HEAD
+uv run --no-project --python 3.13 python tools/release.py build --commit HEAD --output build/release-candidate
 ```
 
 The CLI reads metadata, notes and integration files from the selected commit,
@@ -69,8 +70,9 @@ download that same immutable Actions artifact ID. The candidate is not rebuilt
 in each matrix job. Source verification reads actual committed blob hashes
 without generating another package. Transfer digest validation remains enabled.
 
-`producer.json` binds the candidate to the repository identity, tested commit,
-source tree, workflow source, run/attempt and explicit policy/input hashes.
+Schema-2 `producer.json` binds the ZIP and complete bundle archive/member map
+to repository identity, tested commit, source tree, workflow source,
+run/attempt and explicit policy/input hashes.
 For pull requests the API head and tested synthetic merge SHA are distinct:
 neither is silently substituted for the other.
 
@@ -86,13 +88,46 @@ artifact metadata. Names include the attempt to avoid mixing reruns. These
 records describe runtime evidence, not a self-issued publication authorization:
 the aggregate CI and deliberate publication gates still apply.
 
+### Trusted master consumption
+
+Release consumes the canonical `.github/workflows/ci.yml` run for the identical
+accepted master SHA. It does not call CI again or rebuild that candidate.
+Authenticated backend records must identify this repository, a master push or
+explicit master CI dispatch, the current successful attempt and all 18 declared
+successful jobs. The required protected `CI` check is bound to that run's actual
+job, not an arbitrary same-name check from the same GitHub App.
+
+Selection never searches backward for green: a newer failed, cancelled or
+incomplete trusted run blocks release. PR/fork/other-workflow evidence is not
+a release source. Recheck current master/protection, source attempt and immutable
+artifact identities before the first write and after draft upload.
+
+Candidate and schema-2 matrix artifacts are downloaded by backend ID/run with
+digest checks enabled. The verifier also retrieves the matrix archive directly
+by ID, validates its server digest and bounded single-member layout, and compares
+the actual JSON bytes. A locally invented success record cannot authorize release.
+
+Expired/missing artifacts or incomplete gates stop before writes. Inspect the
+exact failed gate; if otherwise valid evidence genuinely expired or is missing,
+explicitly run one read-only **CI** refresh on the same current master SHA.
+There is no hidden matrix fallback or cross-SHA package-equivalence shortcut.
+Artifacts retain the bounded 14-day policy.
+
+The independent candidate-ZIP upgrade guard remains: `release.py baseline`
+fetches the actual frozen stable tag into a validated baseline bundle without
+moving a branch, then `upgrade_smoke.py` proves the candidate preserves user
+data in fresh offline Core processes. This is not the full support matrix or
+post-publication HACS download proof. First-release mode records the absence
+of an older baseline rather than fabricating an upgrade.
+
 ## Publish deliberately
 
 Run the manual **Release** workflow from `master` for the accepted version and
-full SHA. Its default mode validates/builds without publishing. Publishing needs
-the explicit publish input and the configured release approval environment.
-Read-only validation/build jobs must finish before a job receives write access.
-Do not grant write credentials to untrusted pull-request code.
+full SHA. Its default is a read-only evidence/upgrade audit: it makes no writes
+and does not assert publication eligibility, so existing-version rehearsals are
+safe. Publishing separately requires the explicit publish input, the configured
+release approval environment and strict fresh tag/version/state checks.
+Only accepted-master checkout code receives a release write token.
 
 The publication gate checks the current default-branch SHA, synchronized version,
 required checks, existing release/tag state and version ordering. An existing tag

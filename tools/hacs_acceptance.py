@@ -26,7 +26,7 @@ from delivery import (
     ensure_docker_image,
     require_docker,
 )
-from publish_release import api, gh, tag_commit
+from github_api import api, gh, tag_commit
 from release import ASSET, VERSION
 
 TOOLS = Path(__file__).resolve().parent
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     result["tool_hashes"] = {
         name: hashlib.sha256((TOOLS / name).read_bytes()).hexdigest()
         for name in ("hacs_acceptance.py", "hacs_fixture.py", "hacs-fixture.json",
-                     "upgrade_smoke.py", "ha_smoke.py", "delivery.py", "publish_release.py")
+                     "upgrade_smoke.py", "ha_smoke.py", "delivery.py", "github_api.py", "release.py")
     }
     name = "uplus-hacs-" + uuid.uuid4().hex
     owns_output = False

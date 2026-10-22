@@ -2,9 +2,20 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import io
 import unittest
+import zipfile
 
-from release_evidence import SCENARIOS, artifact_metadata, validate_core_receipts
+from release_evidence import (
+    REQUIRED_JOBS,
+    SCENARIOS,
+    artifact_metadata,
+    choose_source_run,
+    validate_core_receipts,
+    validate_matrix_archive,
+    validate_source_jobs,
+)
 
 
 class CoreEvidenceTests(unittest.TestCase):
@@ -70,6 +81,79 @@ class BackendArtifactTests(unittest.TestCase):
                 artifact_metadata([wrong], "candidate", context)
         with self.assertRaises(ValueError):
             artifact_metadata([artifact, artifact], "candidate", context)
+
+
+class TrustedSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.repo = {"id": 34, "full_name": "Zuz666/uplus-reborn", "default_branch": "master", "private": False}
+        self.workflow = {"id": 78, "path": ".github/workflows/ci.yml", "state": "active"}
+        self.metadata = {"commit": "a" * 40}
+        self.run = {"id": 12, "run_attempt": 1, "workflow_id": 78, "path": ".github/workflows/ci.yml",
+                    "event": "push", "head_branch": "master", "head_sha": "a" * 40,
+                    "repository": copy.deepcopy(self.repo), "head_repository": copy.deepcopy(self.repo),
+                    "status": "completed", "conclusion": "success", "created_at": "2026-10-22T12:00:00Z"}
+        self.context = {"run_id": 12, "attempt": 1, "repository": self.repo["full_name"]}
+        self.jobs = [{"id": index, "run_id": 12, "run_attempt": 1, "name": name,
+                      "status": "completed", "conclusion": "success",
+                      "check_run_url": f"https://api.github.com/repos/Zuz666/uplus-reborn/check-runs/{index}",
+                      "started_at": "2026-10-22T12:00:00Z", "completed_at": "2026-10-22T12:05:00Z"}
+                     for index, name in enumerate(sorted(REQUIRED_JOBS), 1)]
+
+    def test_newer_failure_or_pending_attempt_cannot_hide_behind_old_success(self):
+        self.assertEqual(choose_source_run(self.repo, self.workflow, self.metadata, [self.run])["id"], 12)
+        for status, conclusion in (("completed", "failure"), ("in_progress", None), ("completed", "cancelled")):
+            newer = {**self.run, "id": 13, "created_at": "2026-10-22T12:10:00Z",
+                     "status": status, "conclusion": conclusion}
+            with self.subTest(status=status, conclusion=conclusion), self.assertRaises(ValueError):
+                choose_source_run(self.repo, self.workflow, self.metadata, [self.run, newer])
+        rerun = {**self.run, "run_attempt": 2, "status": "in_progress", "conclusion": None}
+        with self.assertRaises(ValueError):
+            choose_source_run(self.repo, self.workflow, self.metadata, [rerun])
+
+    def test_green_pr_fork_wrong_branch_sha_or_workflow_is_not_a_source(self):
+        for changes in (
+            {"event": "pull_request"}, {"head_branch": "feature"}, {"head_sha": "b" * 40},
+            {"head_repository": {**self.repo, "id": 35}}, {"workflow_id": 79},
+            {"path": ".github/workflows/release.yml"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                choose_source_run(self.repo, self.workflow, self.metadata, [{**self.run, **changes}])
+        with self.assertRaises(ValueError):
+            choose_source_run(self.repo, {**self.workflow, "path": ".github/workflows/unrelated.yml"},
+                              self.metadata, [self.run])
+
+    def test_every_source_job_and_its_check_must_belong_to_the_selected_attempt(self):
+        validate_source_jobs(self.context, self.jobs)
+        missing = [row for row in self.jobs if row["name"] != "delivery / Isolated Core (test)"]
+        with self.assertRaises(ValueError):
+            validate_source_jobs(self.context, missing)
+        for changes in (
+            {"conclusion": "failure"}, {"status": "queued"}, {"run_attempt": 2}, {"run_id": 13},
+            {"check_run_url": "https://api.github.com/repos/other/repo/check-runs/1"},
+        ):
+            wrong = copy.deepcopy(self.jobs)
+            wrong[0].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_source_jobs(self.context, wrong)
+
+
+class AuthenticatedMatrixBytesTests(unittest.TestCase):
+    def test_local_self_report_and_corrupt_archive_cannot_replace_backend_bytes(self):
+        payload = b'{"schema": 1, "success": true}\n'
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("matrix-evidence.json", payload)
+        raw = stream.getvalue()
+        backend = {"size_in_bytes": len(raw), "digest": "sha256:" + hashlib.sha256(raw).hexdigest()}
+        validate_matrix_archive(raw, backend, payload)
+        with self.assertRaises(ValueError):
+            validate_matrix_archive(raw, backend, payload.replace(b"true", b"false"))
+        corrupted = bytearray(raw)
+        corrupted[40] ^= 1
+        with self.assertRaises(ValueError):
+            validate_matrix_archive(bytes(corrupted), backend, payload)
+        with self.assertRaises(ValueError):
+            validate_matrix_archive(raw, {**backend, "size_in_bytes": 0}, payload)
 
 
 if __name__ == "__main__":
