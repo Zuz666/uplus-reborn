@@ -1,8 +1,10 @@
 # U+ Reborn
 
 <!-- markdownlint-disable-next-line MD033 -->
-<img src="custom_components/uplus_reborn/brand/icon.png" alt="U+ Reborn icon" align="left" width="128" height="128">
+<img src="https://raw.githubusercontent.com/Zuz666/uplus-reborn/master/custom_components/uplus_reborn/brand/icon.png" alt="U+ Reborn icon" align="left" width="128" height="128">
 
+[![GitHub Release](https://img.shields.io/github/v/release/Zuz666/uplus-reborn?style=flat-square)](https://github.com/Zuz666/uplus-reborn/releases)
+[![GitHub ZIP Downloads](https://img.shields.io/github/downloads/Zuz666/uplus-reborn/uplus_reborn.zip?displayAssetName=false&style=flat-square)](https://github.com/Zuz666/uplus-reborn/releases)
 [![GitHub last commit](https://img.shields.io/github/last-commit/Zuz666/uplus-reborn/master?style=flat-square)](https://github.com/Zuz666/uplus-reborn/commits/master)
 [![GitHub code size](https://img.shields.io/github/languages/code-size/Zuz666/uplus-reborn?style=flat-square)](https://github.com/Zuz666/uplus-reborn)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://www.hacs.xyz/docs/faq/custom_repositories/)
