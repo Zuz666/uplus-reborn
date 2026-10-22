@@ -22,6 +22,26 @@ Recorder/statistics checks apply to identity/history, units or state-class chang
 Do not rerun them for unrelated prose or command-error wording. A new report or
 phase does not invalidate an unchanged successful result.
 
+## Temporary Hassfest source build
+
+The Hassfest job builds the official Home Assistant Dockerfile from a fixed
+upstream commit because the published validator predates manifest categories.
+The workflow pins the source archive by SHA-256 and overrides the recipe's Python
+base by immutable digest. The official recipe and validator are not patched;
+the selected source includes both categories support and uv 0.13.4.
+
+Build-time dependency downloads are separate from validation: the validator runs
+without network, with the candidate checkout mounted read-only and no credentials
+passed into the container. The required Hassfest check and aggregate CI gate
+remain enforced. This development-tool revision does not raise the integration's
+minimum supported Core version or replace its isolated runtime checks.
+
+The pins and commands live in [the validation workflow](../.github/workflows/validate.yml).
+[Issue #27](https://github.com/Zuz666/uplus-reborn/issues/27) tracks removal of this
+temporary build when a compatible official image is available. Verify that
+replacement accepts the valid manifest and still rejects invalid metadata before
+switching to its immutable digest; remove the obsolete build steps and guidance.
+
 ## Commit-only artifact tooling (Windows and Linux)
 
 The standard-library CLI requires Python 3.13 or newer and Git; no Home Assistant,
