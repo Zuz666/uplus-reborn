@@ -11,10 +11,13 @@ coverage. See [CONTRIBUTING](../CONTRIBUTING.md) and
 1. Use a release-preparation PR against `master`. Select a stable SemVer version,
    without a `v` prefix in metadata. The first public release is **1.0.0**;
    unpublished development versions are not earlier public releases.
-2. Set the same version in `custom_components/uplus_reborn/manifest.json` and
-   `pyproject.toml`; run `uv lock` and commit the matching root package in
-   `uv.lock`. Ordinary feature/fix/dependency PRs do not bump these versions.
-3. Add a dated `## [VERSION] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
+2. With an explicit managed Python 3.13+ interpreter, prepare metadata together:
+   `python tools/release.py prepare --version VERSION --date YYYY-MM-DD --notes PATH`.
+   Supply owner-curated bullet notes. Clean release metadata is required; unrelated
+   work is preserved. Only the non-installed virtual root's lock version changes:
+   no dependency resolution, commit or publication. Run `uv lock --check --offline`
+   and review the diff. Ordinary feature/fix/dependency PRs do not bump versions.
+3. Review the prepared dated `## [VERSION] - YYYY-MM-DD` changelog section.
    Curate user-visible changes, migrations/breaking changes and known limits.
    Do not fabricate historical releases or substitute generated commit titles.
 4. Keep `hacs.json` in source-tree mode during first-repository bootstrap. After
@@ -113,6 +116,11 @@ digest checks enabled. The verifier also retrieves the matrix archive directly
 by ID, validates its server digest and bounded single-member layout, and compares
 the actual JSON bytes. A locally invented success record cannot authorize release.
 
+Selection paginates the canonical workflow's unfiltered run list and applies
+identity/freshness gates locally, rather than trusting a head-SHA search index.
+Missing or contradictory backend observations remain blocked; a later successful
+read does not establish the earlier discrepancy's cause.
+
 Expired/missing artifacts or incomplete gates stop before writes. Inspect the
 exact failed gate; if otherwise valid evidence genuinely expired or is missing,
 explicitly run one read-only **CI** refresh on the same current master SHA.
@@ -150,6 +158,41 @@ Published versions/assets are immutable by project policy. Enable GitHub's nativ
 immutable-release protection when available and verify the effective setting;
 policy text alone is not platform enforcement. Correct a published defect with a
 new patch release and a clear advisory/migration note, not an asset replacement.
+
+### Portable status, advisory delta and terminal report
+
+Use the existing CLI, not a newly authored per-release probe/watcher. Here
+`python` is an explicit managed Python 3.13+ interpreter, without a project
+virtual environment. Quote paths containing spaces.
+
+```sh
+python tools/release.py baseline-select --repository Zuz666/uplus-reborn --version VERSION --output build/baseline-selection.json
+python tools/release.py status --repository Zuz666/uplus-reborn --workflow ci --run-id RUN_ID --commit FULL_SHA --output build/source-status.json
+python tools/release.py advisories --repository Zuz666/uplus-reborn --output build/advisory-inventory.json
+python tools/release.py advisories --repository Zuz666/uplus-reborn --baseline PREVIOUS_INVENTORY --output build/advisory-delta.json
+python tools/release.py report --repository Zuz666/uplus-reborn --run-id RELEASE_RUN_ID --commit FULL_SHA --version VERSION --publication-requested false --output build/release-outcome.json
+```
+
+`status` reads the exact run/attempt directly and rechecks the attempt. Pending,
+failed or inconsistent observations return nonzero, never publication eligibility.
+After native `gh run watch RUN_ID`, repeat only this read if job indexing lags.
+No command retries a write. Use fresh output paths; prior evidence is preserved.
+
+The first advisory inventory is snapshot-only, not “all findings are new”.
+Compare an observed inventory for the identical repository to distinguish new,
+changed and no-longer-open alerts. No-longer-open does not prove a fix or
+authorize dismissal. Limited access is unavailable, not zero findings. No extra
+PAT, automatic approval or security dismissal is required. Preserve the previous
+inventory for the next comparison; accepted risks stay separately tracked.
+
+Release's always-run outcome job uploads schema-versioned JSON and writes a
+native summary: inspection, publication request/outcome, HACS status, source run,
+release URL/tag/commit, evidence IDs/digests and limits. Read-only audits do not
+assert eligibility. Uncertain publication needs inspection before writes;
+published-but-blocked HACS is not accepted. Missing evidence is not success.
+An existing release's commit remains distinct from a later tooling audit's SHA.
+Artifacts retain 14 days: download records before expiry. The summary is not
+independent artifact byte verification.
 
 ## Acceptance after publication
 

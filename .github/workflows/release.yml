@@ -97,17 +97,11 @@ jobs:
         id: baseline
         env:
           GH_TOKEN: ${{ github.token }}
-          PYTHONPATH: tools
           VERSION: ${{ inputs.version }}
         run: |
-          uv run --no-project --python 3.13 python - <<'PY'
-          import os
-          from github_api import pages
-          from release import previous_stable
-          baseline = previous_stable(pages(f"repos/{os.environ['GITHUB_REPOSITORY']}/releases?per_page=100"), os.environ["VERSION"])
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"tag={baseline or ''}\nfirst_release={str(baseline is None).lower()}\n")
-          PY
+          uv run --no-project --python 3.13 python tools/release.py baseline-select \
+            --repository "$GITHUB_REPOSITORY" --version "$VERSION" \
+            --output build/baseline-selection.json --github-output "$GITHUB_OUTPUT"
       - name: Materialize the independent upgrade environment
         id: environment
         if: steps.baseline.outputs.first_release != 'true'
@@ -145,6 +139,7 @@ jobs:
             build/selection.json
             build/evidence.json
             build/candidate-upgrade.json
+            build/baseline-selection.json
           if-no-files-found: warn
           retention-days: 14
   publish:
@@ -210,23 +205,44 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     steps:
-      - name: Report publication separately from acceptance
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.4"
+          python-version: "3.13"
+      - name: Observe advisory availability without security dismissal
+        continue-on-error: true
         env:
-          REQUESTED: ${{ inputs.publish }}
-          PUBLICATION: ${{ needs.publish.result }}
-          ACCEPTANCE: ${{ needs.hacs.result }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 - <<'PY'
-          import os
-          if os.environ["REQUESTED"] != "true":
-              status = "Read-only evidence/upgrade audit; no publication requested or publication eligibility asserted. Inspect the audit job's actual result."
-          elif os.environ["PUBLICATION"] != "success":
-              status = "Publication not confirmed. Inspect actual tag/draft/assets before any mutation; never blindly rerun publication."
-          elif os.environ["ACCEPTANCE"] != "success":
-              status = "Published, but HACS acceptance failed or is blocked. Assets stay immutable; rerun only the read-only acceptance workflow."
-          else:
-              status = "Published and accepted through real isolated HACS."
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-              stream.write("## Release outcome\n\n" + status + "\n")
-          PY
+          uv run --no-project --python 3.13 python tools/release.py advisories \
+            --repository "$GITHUB_REPOSITORY" --output build/advisories.json
+      - name: Retain the exact release, acceptance and evidence outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REQUESTED: ${{ inputs.publish }}
+          SOURCE_RUN: ${{ needs.inspect.outputs.run_id }}
+        run: |
+          args=(--repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
+                --version "$VERSION" --publication-requested "$REQUESTED"
+                --output build/release-outcome.json --summary "$GITHUB_STEP_SUMMARY")
+          if [ -n "$SOURCE_RUN" ]; then args+=(--source-run "$SOURCE_RUN"); fi
+          if [ -f build/advisories.json ]; then args+=(--advisories build/advisories.json); fi
+          uv run --no-project --python 3.13 python tools/release.py report "${args[@]}"
+      - name: Upload the terminal report including unavailable evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: release-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/release-outcome.json
+            build/advisories.json
+          if-no-files-found: warn
+          retention-days: 14

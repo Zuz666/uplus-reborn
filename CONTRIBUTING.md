@@ -433,6 +433,14 @@ snapshot; subsequent development follows the ordinary PR workflow above.
 The release runbook defines version validation, committed-byte ZIP packaging,
 manual approval, immutable tag/asset handling and actual HACS acceptance.
 
+Use the [portable release commands](docs/release-workflow.md#portable-status-advisory-delta-and-terminal-report)
+for baseline selection, exact-run status, advisory inventory/delta and the final
+report; do not author a new private probe for each release. `release.py prepare`
+updates synchronized version metadata and curated notes without resolving
+dependencies, committing or publishing. Preserve the prior advisory inventory:
+unchanged accepted risks are not new findings, and unavailable access is not
+zero alerts. Approval, source verification and immutable publication stay separate.
+
 ## Private material and security
 
 Never commit secrets or sensitive artifacts. This includes credentials, tokens, personal data, device-specific identifiers, proprietary application materials, decompiled content, and unredacted network captures or diagnostics. Redact issue and pull-request evidence before posting it. Keep private or ignored artifacts local, and never use force-add to make them tracked.
