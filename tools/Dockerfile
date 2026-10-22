@@ -1,9 +1,7 @@
 # Reproducible Linux verification environments for U+ Reborn.
-# Built once per lockfile/recipe fingerprint by tools/delivery.py; never mutates at runtime.
+# Built from explicit stage inputs by tools/delivery.py; never mutates at runtime.
 
-FROM python:3.13@sha256:debad600e8d6e754012528dc796488acc52438fea3d28596b87262df9b91c71e AS test
-
-COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /usr/local/bin/uv
+FROM python:3.13@sha256:debad600e8d6e754012528dc796488acc52438fea3d28596b87262df9b91c71e AS node
 
 ARG NODE_VERSION=22.23.3
 ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
@@ -12,13 +10,16 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz
 
+FROM node AS test
+COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /usr/local/bin/uv
+
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
     PATH="/opt/venv/bin:/usr/local/bin:${PATH}"
 
 ARG SMOKE_COMPONENTS="homeassistant persistent_notification http api websocket_api config logger diagnostics dhcp sensor binary_sensor"
 WORKDIR /tmp/build
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --group test --no-group research \
     && SMOKE_COMPONENTS="${SMOKE_COMPONENTS}" /opt/venv/bin/python -c "\
 import importlib.util, importlib.metadata, json, os; \
@@ -32,6 +33,6 @@ assert not missing, f'Locked smoke prerequisites do not match Core: {missing}'" 
 WORKDIR /workspace
 
 FROM ghcr.io/home-assistant/home-assistant:2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 AS core-current
-COPY --from=test /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
 ENTRYPOINT []
 WORKDIR /workspace

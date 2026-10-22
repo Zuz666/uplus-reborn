@@ -1,0 +1,68 @@
+name: Build isolated environment image
+description: Load an image with bounded, trusted-master-only BuildKit cache exports
+inputs:
+  context:
+    description: Explicit local build context
+    required: true
+  file:
+    description: Reviewed Dockerfile path
+    required: true
+  tag:
+    description: Local image tag; images are never pushed
+    required: true
+  scope:
+    description: One of test, core-current or hassfest
+    required: true
+  target:
+    description: Optional named Docker stage
+    default: ""
+  build-args:
+    description: Explicit newline-separated build arguments
+    default: ""
+  build-contexts:
+    description: Explicit upstream base overrides, if required
+    default: ""
+outputs:
+  imageid:
+    description: Actual locally loaded image ID
+    value: ${{ steps.build.outputs.imageid }}
+runs:
+  using: composite
+  steps:
+    - name: Require a bounded environment cache namespace
+      shell: bash
+      env:
+        CACHE_SCOPE: ${{ inputs.scope }}
+      run: |
+        case "$CACHE_SCOPE" in
+          test|core-current|hassfest) ;;
+          *) echo 'Unsupported environment cache scope.' >&2; exit 2 ;;
+        esac
+    - name: Set up the pinned isolated builder
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        version: v0.38.1
+        driver: docker-container
+        driver-opts: image=moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
+        buildkitd-flags: --oci-worker-gc=true
+        cache-binary: false
+        keep-state: false
+        cleanup: true
+    - name: Build and load without publishing images or test results
+      id: build
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        target: ${{ inputs.target }}
+        tags: ${{ inputs.tag }}
+        platforms: linux/amd64
+        build-args: ${{ inputs.build-args }}
+        build-contexts: ${{ inputs.build-contexts }}
+        push: false
+        load: true
+        provenance: false
+        cache-from: type=gha,version=2,scope=uplus-env-${{ inputs.scope }},timeout=2m
+        cache-to: ${{ github.repository == 'Zuz666/uplus-reborn' && github.workflow == 'CI' && github.event_name == 'push' && github.ref == 'refs/heads/master' && format('type=gha,version=2,mode=max,scope=uplus-env-{0},timeout=2m,ignore-error=true', inputs.scope) || '' }}

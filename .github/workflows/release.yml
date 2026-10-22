@@ -108,6 +108,21 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"tag={baseline or ''}\nfirst_release={str(baseline is None).lower()}\n")
           PY
+      - name: Materialize the independent upgrade environment
+        id: environment
+        if: steps.baseline.outputs.first_release != 'true'
+        run: |
+          uv run --no-project --python 3.13 python tools/delivery.py docker-context \
+            --target core-current --output "$RUNNER_TEMP/uplus-env-core-current" --github-output "$GITHUB_OUTPUT"
+      - name: Build the independent upgrade environment
+        if: steps.baseline.outputs.first_release != 'true'
+        uses: ./.github/actions/build-image
+        with:
+          context: ${{ steps.environment.outputs.directory }}
+          file: ${{ steps.environment.outputs.file }}
+          tag: ${{ steps.environment.outputs.tag }}
+          target: core-current
+          scope: core-current
       - name: Preserve the independent candidate-ZIP upgrade guard
         if: steps.baseline.outputs.first_release != 'true'
         env:
@@ -182,6 +197,7 @@ jobs:
     needs: [inspect, publish]
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/hacs-acceptance.yml
     with:
       tag: v${{ inputs.version }}

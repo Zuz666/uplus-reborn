@@ -12,6 +12,9 @@ jobs:
     name: Python tests and lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -20,6 +23,20 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
+      - name: Materialize the locked test environment inputs
+        id: environment
+        run: |
+          uv run --no-project --python 3.13 python tools/delivery.py docker-context \
+            --target test --output "$RUNNER_TEMP/uplus-env-test" --github-output "$GITHUB_OUTPUT"
+      - name: Build the locked test environment
+        uses: ./.github/actions/build-image
+        with:
+          context: ${{ steps.environment.outputs.directory }}
+          file: ${{ steps.environment.outputs.file }}
+          tag: ${{ steps.environment.outputs.tag }}
+          target: test
+          scope: test
+          build-args: ${{ steps.environment.outputs.build_args }}
       - name: HA tests in the locked offline container
         run: uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q
       - name: Lint maintained Python
@@ -28,6 +45,9 @@ jobs:
     name: Hassfest
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     env:
       # Temporary official-source build; return to a compatible published image in #27.
       HASSFEST_COMMIT: 853491cd0bdfbbf54b24eab9306ded23e3c43925
@@ -45,12 +65,14 @@ jobs:
           echo "$HASSFEST_SOURCE_SHA256  $RUNNER_TEMP/hassfest-source.tar.gz" | sha256sum -c -
           mkdir "$RUNNER_TEMP/hassfest-source"
           tar -xzf "$RUNNER_TEMP/hassfest-source.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/hassfest-source"
-      - name: Build the unchanged upstream recipe with an immutable base
-        run: |
-          docker buildx build --load --platform linux/amd64 \
-            --file "$RUNNER_TEMP/hassfest-source/script/hassfest/docker/Dockerfile" \
-            --build-context "python:3.14.8-alpine=docker-image://$HASSFEST_BASE" \
-            --tag "uplus-hassfest:$HASSFEST_COMMIT" "$RUNNER_TEMP/hassfest-source"
+      - name: Cache construction of the unchanged official Hassfest recipe
+        uses: ./.github/actions/build-image
+        with:
+          context: ${{ runner.temp }}/hassfest-source
+          file: ${{ runner.temp }}/hassfest-source/script/hassfest/docker/Dockerfile
+          tag: uplus-hassfest:${{ env.HASSFEST_COMMIT }}
+          scope: hassfest
+          build-contexts: python:3.14.8-alpine=docker-image://${{ env.HASSFEST_BASE }}
       - name: Validate without network or checkout writes
         run: |
           docker run --rm --network=none \

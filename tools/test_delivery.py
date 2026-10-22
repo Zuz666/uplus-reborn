@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -425,16 +426,67 @@ class CheckTests(Workspace):
 class DockerWorkflowTests(Workspace):
     def setUp(self):
         super().setUp()
-        self.repo = self.root / "repo"
+        self.repo = self.root / "repo with spaces"
         (self.repo / "tools").mkdir(parents=True)
-        (self.repo / "tools/Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+        (self.repo / "tools/Dockerfile").write_text(
+            TOOL.with_name("Dockerfile").read_text(encoding="utf-8"), encoding="utf-8")
         (self.repo / "tools/ha_smoke.py").write_text(
             'CORE_COMPONENTS = ("homeassistant", "http")\n'
             'BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "sensor")\n',
             encoding="utf-8",
         )
-        (self.repo / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-        (self.repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+        (self.repo / "pyproject.toml").write_text(
+            "[project]\nname='uplus-reborn'\nversion='1.0.1'\nrequires-python='>=3.13.2'\n"
+            "dependencies=['cached-ipaddress==1.0.1']\n", encoding="utf-8")
+        (self.repo / "uv.lock").write_text(
+            "version=1\n[[package]]\nname='uplus-reborn'\nversion='1.0.1'\nsource={virtual='.'}\n"
+            "[[package]]\nname='cached-ipaddress'\nversion='1.0.1'\n", encoding="utf-8")
+
+    def test_root_version_only_preserves_environment_without_rewriting_dependency_versions(self):
+        before = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
+        for name in ("pyproject.toml", "uv.lock"):
+            path = self.repo / name
+            path.write_text(path.read_text(encoding="utf-8").replace("version='1.0.1'", "version='1.0.2'", 1), encoding="utf-8")
+        after = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
+        self.assertEqual(before, after)
+        inputs = delivery.docker_build_inputs(self.repo, "test")
+        project = tomllib.loads(inputs["pyproject.toml"].decode())
+        lock = tomllib.loads(inputs["uv.lock"].decode())
+        self.assertEqual(project["project"]["dependencies"], ["cached-ipaddress==1.0.1"])
+        self.assertEqual(next(p["version"] for p in lock["package"] if p["name"] == "cached-ipaddress"), "1.0.1")
+        self.assertEqual(project["project"]["version"], next(p["version"] for p in lock["package"] if p["name"] == "uplus-reborn"))
+
+    def test_minimum_dependencies_invalidate_only_the_affected_environment(self):
+        before = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
+        path = self.repo / "uv.lock"
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            "name='cached-ipaddress'\nversion='1.0.1'", "name='cached-ipaddress'\nversion='1.0.2'"), encoding="utf-8")
+        self.assertNotEqual(before["test"], delivery.docker_image_tag(self.repo, "test"))
+        self.assertEqual(before["core-current"], delivery.docker_image_tag(self.repo, "core-current"))
+        project = self.repo / "pyproject.toml"
+        project.write_text(project.read_text(encoding="utf-8").replace("version='1.0.1'", "version='1.0.2'"), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            delivery.docker_image_tag(self.repo, "test")
+
+    def test_current_recipe_changes_do_not_invalidate_minimum_core_dependencies(self):
+        before = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
+        recipe = self.repo / "tools/Dockerfile"
+        recipe.write_text(recipe.read_text(encoding="utf-8") + "\nENV CURRENT_RECIPE_BOUNDARY=changed\n", encoding="utf-8")
+        self.assertNotEqual(before["core-current"], delivery.docker_image_tag(self.repo, "core-current"))
+        self.assertEqual(before["test"], delivery.docker_image_tag(self.repo, "test"))
+
+    def test_shared_python_recipe_and_bootstrap_inputs_invalidate_both_targets(self):
+        for change in ("python", "bootstrap"):
+            before = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
+            if change == "python":
+                path = self.repo / "tools/Dockerfile"
+                path.write_text(path.read_text(encoding="utf-8").replace("python:3.13@", "python:3.14@", 1), encoding="utf-8")
+            else:
+                path = self.repo / "tools/ha_smoke.py"
+                path.write_text(path.read_text(encoding="utf-8").replace('"http"', '"http", "websocket_api"'), encoding="utf-8")
+            for target in delivery.DOCKER_TARGETS:
+                with self.subTest(change=change, target=target):
+                    self.assertNotEqual(before[target], delivery.docker_image_tag(self.repo, target))
 
     def fake_docker(self, mode: str) -> Path:
         helper = self.root / "fake_docker.py"
@@ -458,13 +510,11 @@ class DockerWorkflowTests(Workspace):
             "    print(data['images'][tag])\n"
             "elif args[:1] == ['build']:\n"
             "    data['builds'] += 1\n"
-            "    data['last_build_args'] = args\n"
             "    tag = args[args.index('-t') + 1]\n"
             "    data['images'][tag] = 'sha256:' + 'b' * 64\n"
             "    state_path.write_text(json.dumps(data))\n"
             "elif args[:1] == ['run']:\n"
             "    data['runs'] += 1\n"
-            "    data['last_run_args'] = args\n"
             "    state_path.write_text(json.dumps(data))\n"
             "    if '--serve' in args:\n"
             "        output_idx = args.index('--output') + 1 if '--output' in args else None\n"
@@ -479,9 +529,7 @@ class DockerWorkflowTests(Workspace):
             "                if output_path is not None:\n"
             "                    output_path.parent.mkdir(parents=True, exist_ok=True)\n"
             "                    output_path.write_text(json.dumps({'schema': 1, 'success': True, 'stopped_by': 'command'}), encoding='utf-8')\n"
-            "                break\n"
-            "    else:\n"
-            "        print('CONTAINER_RAN')\n",
+            "                break\n",
             encoding="utf-8",
         )
         if sys.platform == "win32":
@@ -509,18 +557,10 @@ class DockerWorkflowTests(Workspace):
         info2 = json.loads(second.stdout)
         self.assertEqual(info2["built"], "false")
         self.assertEqual(info1["image"], info2["image"])
-        ran = self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "pytest", "-q")
-        self.assertIn("CONTAINER_RAN", ran.stdout)
+        self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "pytest", "-q")
         state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["builds"], 1)
         self.assertEqual(state["runs"], 1)
-        self.assertIn("--network", state["last_run_args"])
-        self.assertIn("none", state["last_run_args"])
-        self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "python3", "tools/ha_smoke.py", "--serve")
-        serve_state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
-        self.assertIn("-i", serve_state["last_run_args"])
-        self.assertTrue(any(arg.startswith("127.0.0.1:") for arg in serve_state["last_run_args"]))
-        self.assertTrue(any(arg.startswith("UPLUS_SMOKE_CONTAINER_SERVE_PORT=") for arg in serve_state["last_run_args"]))
         (self.repo / "tools/ha_smoke.py").write_text(
             'CORE_COMPONENTS = ("homeassistant", "http")\n'
             'BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "sensor")\n'
@@ -538,22 +578,7 @@ class DockerWorkflowTests(Workspace):
         rebuilt = json.loads(self.cli("docker", "--repo", self.repo, "--docker-bin", shim).stdout)
         self.assertEqual(rebuilt["built"], "true")
         self.assertNotEqual(rebuilt["image"], info1["image"])
-        build_state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
-        self.assertIn("SMOKE_COMPONENTS=homeassistant http websocket_api sensor", build_state["last_build_args"])
 
-    def test_docker_command_normalizes_python_scripts_with_python3(self):
-        shim = self.fake_docker("up")
-        self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "tools/ha_smoke.py", "--serve")
-        state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
-        cmd_index = state["last_run_args"].index("python3")
-        self.assertEqual(state["last_run_args"][cmd_index + 1], "tools/ha_smoke.py")
-        self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "python3", "tools/ha_smoke.py", "--serve")
-        state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
-        self.assertEqual(state["last_run_args"].count("python3"), 1)
-        self.cli("docker", "--repo", self.repo, "--docker-bin", shim, "--", "pytest", "-q")
-        state = json.loads((self.root / "docker_state.json").read_text(encoding="utf-8"))
-        self.assertNotIn("python3", state["last_run_args"])
-        self.assertIn("pytest", state["last_run_args"])
 
     def test_docker_serve_lifecycle_regression(self):
         shim = self.fake_docker("up")

@@ -109,6 +109,35 @@ prose-only commit. Preserve the original commit/result; do not rewrite it to
 appear new. An archive's compression metadata can change while its installed
 files remain identical; transfer checks still bind the exact archive SHA-256.
 
+## Environment construction and cache trust
+
+`delivery.py docker-context --target test --output build/test-context` creates a
+new minimal build context; `--target core-current` selects the other environment.
+The shared `node` stage supplies checksum-pinned Node.js. The minimum `test`
+stage adds frozen uv dependencies; `core-current` copies Node directly from
+`node`, never from the minimum test environment.
+
+Only the non-installed root project's version is normalized in temporary
+`pyproject.toml`/`uv.lock` copies. The real files remain unchanged. A release-only
+version change therefore does not rebuild dependencies; changed dependency pins,
+shared bootstrap inputs or the relevant recipe still change the environment key.
+Current Core does not depend on the minimum dependency lock. Fingerprints identify
+construction inputs, not a promise of byte-identical independently rebuilt images.
+
+The [shared build action](../.github/actions/build-image/action.yml) pins Buildx
+and BuildKit and uses three bounded GitHub cache scopes: `test`, `core-current`
+and `hassfest`. Only a canonical **CI** push on `master` exports cache entries.
+PRs, manual Release and HACS acceptance import caches but cannot promote their
+builds into the trusted master cache. No image is pushed and no successful test
+result is cached. Validation and isolated scenarios still execute.
+
+Measure construction using the native Actions build step. Local `docker` output
+records preparation/build seconds and whether an image was already present;
+`built: false` after the shared action loaded an image is not proof of a remote
+cache hit. Core receipts separately record scenario elapsed time, excluding
+host-side image preparation. Compare cold/warm construction separately from
+runtime; existing daemon layers make a new image tag only partially cold.
+
 ## Real isolated Core fixture (Docker)
 
 `tools/ha_smoke.py` boots actual Core base functionality/registries, required API
@@ -119,8 +148,8 @@ config and unloads/stops afterward.
 
 Use `tools/delivery.py docker` to run against the immutable container images
 (`--target core-current` for Home Assistant 2026.10.2 on Python 3.14; `--target test`
-for minimum supported Core 2026.2.3 on Python 3.13). Each image is built at most
-once per recipe/lockfile hash and reused without checking mutable `.venv` state.
+for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
+stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
 
 Docker Desktop Windows bind mounts can expose Git `100644` files as mode `0777`.
