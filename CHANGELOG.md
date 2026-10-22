@@ -5,6 +5,13 @@ are listed in
 [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases).
 Unpublished development versions are not historical public releases.
 
+## [1.0.2] - 2026-10-23
+
+- Simplify the English and Russian options dialog, with concise remote-control and polling help plus a read-only appliance connection status captured when the dialog opens. Status follows the frontend language, including when it differs from the Core language, and opening options sends no extra appliance request.
+- Load already configured washers when they are switched off or temporarily unreachable. Readings and appliance commands stay unavailable until a fresh valid response; ordinary polling restores communication automatically without recreating the entry or restarting Home Assistant. The offline message explains possible power/network causes and respects disabled polling.
+- Keep onboarding validation, protocol/configuration errors, command safety, entity identities, saved profiles and history unchanged. Existing uncertain command outcomes are never replayed automatically.
+- Maintenance: release publication now consumes the exact trusted master CI candidate and complete runtime matrix, with repeatable real HACS installation/upgrade acceptance and stage-specific environment caching. No additional hardware coverage or live deployment is implied.
+
 ## [1.0.1] - 2026-10-22
 
 ### Fixed
