@@ -194,6 +194,14 @@ An existing release's commit remains distinct from a later tooling audit's SHA.
 Artifacts retain 14 days: download records before expiry. The summary is not
 independent artifact byte verification.
 
+Within that exact master workflow/run/attempt/SHA, native `needs` results are the
+terminal dependency outcomes. REST jobs may still report in-progress after the
+dependent outcome job starts. Retain both observations separately; do not relabel
+REST state, wait indefinitely or repeat writes. Contradictory completed outcomes
+remain blocked. Standalone status/report commands have no native override.
+Published-version metadata is read by exact tag, not an eventually indexed list.
+None of this changes the publisher's independent authenticated CI/source gates.
+
 ## Acceptance after publication
 
 Use disposable isolated Core/HACS, not a live appliance installation:

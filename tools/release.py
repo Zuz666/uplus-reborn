@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -352,6 +353,27 @@ def release_outcome(requested: bool, inspection: str, publication: str, acceptan
     return "published_and_accepted" if acceptance == "success" else "published_acceptance_blocked"
 
 
+def native_release_phases(observed: dict, environment: dict) -> dict | None:
+    """Use native dependency results only for this exact Actions report context."""
+    if "UPLUS_RELEASE_NEEDS" not in environment:
+        return None
+    repository, run = observed["repository"], observed["run"]
+    expected = {
+        "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": repository,
+        "GITHUB_RUN_ID": str(run["id"]), "GITHUB_RUN_ATTEMPT": str(run["run_attempt"]),
+        "GITHUB_SHA": observed["commit"],
+        "GITHUB_WORKFLOW_REF": f"{repository}/.github/workflows/release.yml@refs/heads/master",
+    }
+    if any(environment.get(key) != value for key, value in expected.items()):
+        raise ValueError("Native dependency results belong to another workflow/run/attempt/SHA")
+    needs = json.loads(environment["UPLUS_RELEASE_NEEDS"])
+    phases = {phase: needs[job]["result"] for phase, job in (
+        ("inspection", "inspect"), ("publication", "publish"), ("hacs", "hacs"))}
+    if any(value not in {"success", "failure", "cancelled", "skipped"} for value in phases.values()):
+        raise ValueError("Missing terminal native dependency results")
+    return phases
+
+
 def release_report(repository: str, run_id: int, commit: str, version: str, requested: bool,
                    source_run: int | None, advisories: Path | None) -> dict:
     if not VERSION.fullmatch(version):
@@ -368,13 +390,26 @@ def release_report(repository: str, run_id: int, commit: str, version: str, requ
         return "success" if all(row["conclusion"] == "success" for row in rows) else "failure"
     phases = {"inspection": phase("Inspect accepted master evidence"), "publication": phase("publish"),
               "hacs": phase("hacs")}
+    backend_phases = dict(phases)
+    native = native_release_phases(observed, os.environ)
+    if native is not None:
+        if any(backend_phases[name] not in {"unknown", "pending", "failure" if value == "cancelled" else value}
+               for name, value in native.items()):
+            raise ValueError("Completed backend results contradict native dependency outcomes")
+        phases = dict(native)
     if not requested:
         for name in ("publication", "hacs"):
             if phases[name] in {"unknown", "skipped"}:
                 phases[name] = "not_requested"
     state = release_outcome(requested, *phases.values())
-    releases = github.pages(f"repos/{repository}/releases?per_page=100")
-    published = next((row for row in releases if row["tag_name"] == "v" + version and not row["draft"]), None)
+    try:
+        published = github.api(f"repos/{repository}/releases/tags/v{version}")
+    except github.GitHubOperationError as error:
+        if "HTTP 404" not in str(error):
+            raise
+        published = None
+    if published is not None and (published["tag_name"] != "v" + version or published["draft"]):
+        raise ValueError("Published release tag/state differs")
     release = None if published is None else {
         "url": published["html_url"], "tag": published["tag_name"],
         "commit": github.tag_commit(repository, published["tag_name"]),
@@ -399,6 +434,7 @@ def release_report(repository: str, run_id: int, commit: str, version: str, requ
         limits.append("Advisory inventory unavailable; no zero-risk or no-new-advisory claim.")
     return {"schema": 1, "state": state, "version": version, "source": observed,
             "source_ci_run": source_run, "publication_requested": requested, "phases": phases,
+            "phase_observations": {"native": native, "backend": backend_phases},
             "release": release, "hacs": {"status": phases["hacs"], "evidence": [
                 row["id"] for row in artifacts if row["name"].startswith("hacs-acceptance-")]},
             "evidence": [{key: row.get(key) for key in ("id", "name", "digest", "expired", "expires_at")}
