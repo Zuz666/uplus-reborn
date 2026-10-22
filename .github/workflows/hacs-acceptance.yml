@@ -1,0 +1,108 @@
+name: Published HACS acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable target tag, including v
+        required: true
+        type: string
+      baseline:
+        description: Existing stable baseline tag; leave empty only for first-release mode
+        required: false
+        default: ""
+        type: string
+      first_release:
+        description: Explicit fresh-install-only acceptance without a baseline
+        required: false
+        default: false
+        type: boolean
+      expect_latest:
+        description: Require the target to be the current latest stable release
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      baseline:
+        required: false
+        default: ""
+        type: string
+      first_release:
+        required: false
+        default: false
+        type: boolean
+      expect_latest:
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hacs-acceptance-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: Actual HACS install and upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.4"
+          python-version: "3.13"
+      - name: Accept the existing published release without writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_TAG: ${{ inputs.tag }}
+          BASELINE_TAG: ${{ inputs.baseline }}
+          FIRST_RELEASE: ${{ inputs.first_release }}
+          EXPECT_LATEST: ${{ inputs.expect_latest }}
+        run: |
+          args=(--repository "$GITHUB_REPOSITORY" --tag "$TARGET_TAG" --output build/hacs-acceptance)
+          if [ -n "$BASELINE_TAG" ]; then
+            if [ "$FIRST_RELEASE" = true ]; then
+              echo 'A baseline and first-release mode are mutually exclusive.' >&2
+              exit 2
+            fi
+            args+=(--baseline "$BASELINE_TAG")
+          elif [ "$FIRST_RELEASE" = true ]; then
+            args+=(--first-release)
+          else
+            echo 'Supply a baseline or explicitly choose first-release mode.' >&2
+            exit 2
+          fi
+          if [ "$EXPECT_LATEST" = true ]; then args+=(--expect-latest); fi
+          uv run --no-project --python 3.13 python tools/hacs_acceptance.py "${args[@]}"
+      - name: Summarize actual acceptance status
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path("build/hacs-acceptance/acceptance.json")
+          result = json.loads(path.read_text()) if path.exists() else {"success": False, "status": "blocked", "error": "No acceptance receipt; inspect the failed preparation step."}
+          summary = {key: result.get(key) for key in ("status", "success", "tag", "baseline", "duration_seconds", "error")}
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+              stream.write("## Read-only published HACS acceptance\n\nNo tag, asset or release writes. No live appliance access.\n\n```json\n" + json.dumps(summary, indent=2) + "\n```\n")
+          PY
+      - name: Retain sanitized success and failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: hacs-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/hacs-acceptance/acceptance.json
+            build/hacs-acceptance/receipts/*.json
+          if-no-files-found: warn
+          retention-days: 14

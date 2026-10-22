@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.guard.outputs.commit }}
+      baseline: ${{ steps.baseline.outputs.tag }}
+      first_release: ${{ steps.baseline.outputs.first_release }}
     steps:
       - name: Require the accepted master invocation
         id: guard
@@ -48,6 +50,21 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
+      - name: Freeze the pre-publication stable baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: tools
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-project --python 3.13 python - <<'PY'
+          import os
+          from publish_release import pages
+          from release import previous_stable
+          baseline = previous_stable(pages(f"repos/{os.environ['GITHUB_REPOSITORY']}/releases?per_page=100"), os.environ["VERSION"])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"tag={baseline or ''}\nfirst_release={str(baseline is None).lower()}\n")
+          PY
       - name: Package the accepted version and commit
         env:
           VERSION: ${{ inputs.version }}
@@ -114,3 +131,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: uv run --no-project --python 3.13 python tools/publish_release.py --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" --candidate build/release --approve
+  hacs:
+    if: inputs.publish
+    needs: [candidate, publish]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/hacs-acceptance.yml
+    with:
+      tag: v${{ inputs.version }}
+      baseline: ${{ needs.candidate.outputs.baseline }}
+      first_release: ${{ needs.candidate.outputs.first_release == 'true' }}
+      expect_latest: true
+  outcome:
+    if: always()
+    needs: [candidate, publish, hacs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Report publication separately from acceptance
+        env:
+          REQUESTED: ${{ inputs.publish }}
+          PUBLICATION: ${{ needs.publish.result }}
+          ACCEPTANCE: ${{ needs.hacs.result }}
+        run: |
+          python3 - <<'PY'
+          import os
+          if os.environ["REQUESTED"] != "true":
+              status = "Read-only preparation; no publication requested. Inspect validation jobs for their actual result."
+          elif os.environ["PUBLICATION"] != "success":
+              status = "Publication not confirmed. Inspect actual tag/draft/assets before any mutation; never blindly rerun publication."
+          elif os.environ["ACCEPTANCE"] != "success":
+              status = "Published, but HACS acceptance failed or is blocked. Assets stay immutable; rerun only the read-only acceptance workflow."
+          else:
+              status = "Published and accepted through real isolated HACS."
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+              stream.write("## Release outcome\n\n" + status + "\n")
+          PY

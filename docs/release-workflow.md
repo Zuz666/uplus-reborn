@@ -139,5 +139,21 @@ Only ephemeral repository-scoped Actions tokens may enter the container; local
 installer workers use anonymous public access and need no personal token.
 The ordinary offline tooling tests never download HACS or contact GitHub.
 
+### Hosted acceptance and release outcome
+
+Use **Published HACS acceptance** in Actions for a repeatable read-only run:
+provide the existing target/baseline tags, or explicitly choose first-release
+mode. Do not rerun the publisher merely to repeat acceptance. Historical runs
+leave the latest assertion disabled. Per-attempt sanitized receipts are retained
+as `hacs-acceptance-RUN_ID-ATTEMPT` artifacts.
+
+The Release workflow freezes the greatest older published stable baseline before
+publication and calls the same read-only workflow afterward, with latest
+selection required. The acceptance job has no release write permission. A failed
+post-publication check means **published, acceptance failed or blocked**; assets
+remain immutable and the release work item stays open. The workflow summary
+distinguishes that state from accepted, read-only preparation and an uncertain
+publication. Preserve receipts and inspect actual state before any further write.
+
 Licensed under [CC BY 4.0](LICENSE). Attribution: U+ Reborn contributors,
 [U+ Reborn repository](https://github.com/Zuz666/uplus-reborn).
