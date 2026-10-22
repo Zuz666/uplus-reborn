@@ -72,6 +72,8 @@ force-push release tags, or bypass required checks.
 
 Use the public issue forms for bug, feature and compatibility evidence. A new
 model report does not establish support or authorize appliance controls.
+Include the integration and Core versions; HACS version and installation method
+are optional context, not prerequisites for reporting a problem.
 Maintainer work items state scope/non-goals, evidence, observable acceptance,
 test layer, dependencies and migration/release impact before becoming Ready.
 An epic links child outcomes rather than duplicating their implementation text.
