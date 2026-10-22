@@ -18,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 import zlib
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -411,21 +412,116 @@ def smoke_bootstrap_components(repo: Path) -> tuple[str, ...]:
     return components
 
 
-def docker_image_tag(repo: Path, target: str) -> str:
-    """Compute a deterministic image tag from the Docker recipe, lockfiles, and smoke components."""
+def replace_toml_version(text: str, original: str, replacement: str, expected: dict) -> bytes:
+    """Replace one scalar only when the complete parsed document matches intent."""
+    if original == replacement and tomllib.loads(text) == expected:
+        return text.encode("utf-8")
+    for match in re.finditer(r"(?m)^[ \t]*version[ \t]*=[ \t]*(['\"])(?P<value>[^'\"\r\n]*)\1", text):
+        if match.group("value") != original:
+            continue
+        candidate = text[:match.start("value")] + replacement + text[match.end("value"):]
+        if tomllib.loads(candidate) == expected:
+            return candidate.encode("utf-8")
+    raise ValueError("Cannot replace the root version without changing other TOML semantics")
+
+
+def docker_build_inputs(repo: Path, target: str) -> dict[str, bytes]:
+    """Snapshot exactly the named stage closure; root metadata is never installed."""
     if target not in DOCKER_TARGETS:
         raise ValueError(f"Unsupported Docker target: {target}")
-    components = smoke_bootstrap_components(repo)
-    digest = hashlib.sha256(f"target={target}\n".encode())
-    for rel in ("tools/Dockerfile", "pyproject.toml", "uv.lock"):
-        path = repo / rel
+
+    def text(relative: str) -> str:
+        path = repo / relative
         _no_links(path.absolute())
         if not path.is_file():
-            raise ValueError(f"Missing Docker recipe input: {rel}")
-        digest.update(f"{rel}:{_sha(path)}\n".encode())
+            raise ValueError(f"Missing Docker recipe input: {relative}")
+        return path.read_text(encoding="utf-8")
+
+    recipe = text("tools/Dockerfile")
+    stages: list[tuple[int, str]] = []
+    continued, offset = False, 0
+    for line in recipe.splitlines(keepends=True):
+        if not line.strip() or line.lstrip().startswith("#"):
+            offset += len(line)
+            continue
+        if not continued and re.match(r"(?i)^[ \t]*FROM[ \t]+", line):
+            match = re.fullmatch(r"(?i)[ \t]*FROM[ \t]+[^\r\n]+[ \t]+AS[ \t]+([a-z0-9_-]+)[ \t]*", line.rstrip("\r\n"))
+            if match is None:
+                raise ValueError("Docker recipe requires named FROM stages")
+            stages.append((offset, match.group(1)))
+        continued = line.rstrip().endswith("\\")
+        offset += len(line)
+    if [name for _, name in stages] != ["node", "test", "core-current"]:
+        raise ValueError("Docker recipe must declare named node, test and core-current stages")
+    sections = {name: recipe[start:stages[index + 1][0] if index + 1 < len(stages) else len(recipe)]
+                for index, (start, name) in enumerate(stages)}
+    selected = recipe[:stages[0][0]] + sections["node"] + sections[target]
+    if re.search(r"--from=[0-9]+\b", selected) or target == "core-current" and re.search(
+            r"(?im)^FROM[ \t]+test\b|--from=test\b", selected):
+        raise ValueError("Stage-specific inputs require named dependencies; current Core cannot depend on test")
+    inputs = {"Dockerfile": selected.encode("utf-8")}
     if target == "test":
-        digest.update(f"smoke_components:{' '.join(components)}\n".encode())
+        project_text, lock_text = text("pyproject.toml"), text("uv.lock")
+        project, lock = tomllib.loads(project_text), tomllib.loads(lock_text)
+        root, packages = project["project"], lock["package"]
+        if not isinstance(root, dict) or not isinstance(packages, list) or any(not isinstance(p, dict) for p in packages):
+            raise TypeError("Expected project and locked package metadata")
+        name, version = root["name"], root["version"]
+        if not isinstance(name, str) or not isinstance(version, str):
+            raise TypeError("Expected scalar project name/version")
+        roots = [p for p in packages if p.get("name") == name]
+        if len(roots) != 1 or roots[0].get("version") != version:
+            raise ValueError("Project and lock root versions differ")
+        normalized_project = {**project, "project": {**root, "version": "0.0.0"}}
+        normalized_lock = {**lock, "package": [{**p, "version": "0.0.0"} if p is roots[0] else p for p in packages]}
+        inputs["pyproject.toml"] = replace_toml_version(project_text, version, "0.0.0", normalized_project)
+        inputs["uv.lock"] = replace_toml_version(lock_text, version, "0.0.0", normalized_lock)
+    return inputs
+
+
+def _docker_tag(target: str, inputs: dict[str, bytes], components: tuple[str, ...]) -> str:
+    digest = hashlib.sha256(f"environment-schema=2\ntarget={target}\ncomponents={' '.join(components)}\n".encode())
+    for name, data in sorted(inputs.items()):
+        digest.update(f"{name}:{hashlib.sha256(data).hexdigest()}\n".encode())
     return f"uplus-reborn-{target}:{digest.hexdigest()[:12]}"
+
+
+def docker_image_tag(repo: Path, target: str) -> str:
+    """Fingerprint the same stage inputs/closure that the builder actually consumes."""
+    return _docker_tag(target, docker_build_inputs(repo, target), smoke_bootstrap_components(repo))
+
+
+def _materialize_docker_inputs(output: Path, inputs: dict[str, bytes]) -> None:
+    _no_links(output.absolute())
+    output.mkdir(parents=True, exist_ok=False)
+    try:
+        for name, content in inputs.items():
+            (output / name).write_bytes(content)
+    except BaseException:
+        shutil.rmtree(output)
+        raise
+
+
+def docker_context(repo: Path, target: str, output: Path) -> dict:
+    inputs, components = docker_build_inputs(repo, target), smoke_bootstrap_components(repo)
+    output = output.absolute()
+    _materialize_docker_inputs(output, inputs)
+    return {
+        "schema": 1, "target": target, "tag": _docker_tag(target, inputs, components),
+        "directory": str(output), "file": str(output / "Dockerfile"),
+        "build_args": f"SMOKE_COMPONENTS={' '.join(components)}" if target == "test" else "",
+        "inputs": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(inputs.items())},
+    }
+
+
+def append_github_output(path: Path, values: dict[str, str | int]) -> None:
+    if any(not isinstance(value, (str, int)) for value in values.values()):
+        raise TypeError("Actions outputs must be strings or integers")
+    if any(not re.fullmatch(r"[a-z_]+", key) or "\n" in str(value) or "\r" in str(value) for key, value in values.items()):
+        raise ValueError("Actions output names/values must be single-line scalars")
+    _no_links(path.absolute())
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write("".join(f"{key}={value}\n" for key, value in values.items()))
 
 
 def require_docker(docker_bin: str = "docker") -> str:
@@ -452,11 +548,12 @@ def require_docker(docker_bin: str = "docker") -> str:
     return version
 
 
-def ensure_docker_image(repo: Path, target: str, *, docker_bin: str = "docker") -> dict[str, str]:
-    """Reuse an existing content-addressed test image or build it once."""
+def ensure_docker_image(repo: Path, target: str, *, docker_bin: str = "docker") -> dict[str, str | float]:
+    """Reuse an explicit-input image; never reuse a check/scenario result."""
+    started = time.monotonic()
     server_version = require_docker(docker_bin)
-    components = " ".join(smoke_bootstrap_components(repo))
-    tag = docker_image_tag(repo, target)
+    inputs, components = docker_build_inputs(repo, target), smoke_bootstrap_components(repo)
+    tag = _docker_tag(target, inputs, components)
     inspect = subprocess.run(
         [docker_bin, "image", "inspect", "--format", "{{.Id}}", tag],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -466,16 +563,20 @@ def ensure_docker_image(repo: Path, target: str, *, docker_bin: str = "docker") 
         return {
             "built": "false", "image": tag, "image_id": inspect.stdout.strip(),
             "server_version": server_version, "target": target,
+            "preparation_seconds": time.monotonic() - started, "build_seconds": 0.0,
         }
-    build = subprocess.run(
-        [
-            docker_bin, "build", "--target", target,
-            "--build-arg", f"SMOKE_COMPONENTS={components}",
-            "-t", tag, "-f", str(repo / "tools/Dockerfile"), str(repo),
-        ],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, shell=False,
-    )
+    build_started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="uplus-docker-context-") as temporary:
+        directory = Path(temporary) / "context"
+        _materialize_docker_inputs(directory, inputs)
+        command = [docker_bin, "build", "--target", target]
+        if target == "test":
+            command.extend(["--build-arg", f"SMOKE_COMPONENTS={' '.join(components)}"])
+        command.extend(["-t", tag, "-f", str(directory / "Dockerfile"), str(directory)])
+        build = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, shell=False,
+        )
+    build_seconds = time.monotonic() - build_started
     if build.returncode != 0:
         detail = (build.stderr or build.stdout).strip()
         raise ValueError(f"Docker image build failed for {target}: {detail}")
@@ -489,6 +590,7 @@ def ensure_docker_image(repo: Path, target: str, *, docker_bin: str = "docker") 
     return {
         "built": "true", "image": tag, "image_id": after.stdout.strip(),
         "server_version": server_version, "target": target,
+        "preparation_seconds": time.monotonic() - started, "build_seconds": build_seconds,
     }
 
 
@@ -571,6 +673,11 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--input", type=Path, action="append", required=True)
     check.add_argument("--context", action="append", default=[], metavar="KEY=VALUE")
     check.add_argument("command", nargs=argparse.REMAINDER)
+    context = commands.add_parser("docker-context", help="Materialize only declared normalized stage inputs into a new directory")
+    context.add_argument("--target", choices=DOCKER_TARGETS, required=True)
+    context.add_argument("--repo", type=Path, default=Path.cwd())
+    context.add_argument("--output", type=Path, required=True)
+    context.add_argument("--github-output", type=Path)
     docker = commands.add_parser("docker", help="Verify Docker availability, build test image once if absent, and run inside container")
     docker.add_argument("--target", choices=DOCKER_TARGETS, default="test")
     docker.add_argument("--repo", type=Path, default=Path.cwd())
@@ -587,6 +694,10 @@ def main(argv: list[str] | None = None) -> int:
             manifest = load_artifact(args.bundle)
             if args.installed is not None:
                 verify_installed(manifest, args.installed)
+        elif args.action == "docker-context":
+            manifest = docker_context(args.repo, args.target, args.output)
+            if args.github_output is not None:
+                append_github_output(args.github_output, {key: manifest[key] for key in ("directory", "file", "tag", "build_args")})
         elif args.action == "check":
             context = _parse_context(args.context)
             command = args.command[1:] if args.command and args.command[0] == "--" else args.command
@@ -604,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as error:
         print(f"delivery: {error}", file=sys.stderr)
         return DOCKER_UNAVAILABLE_EXIT
-    except (ValueError, TypeError, OSError) as error:
+    except (ValueError, TypeError, KeyError, OSError) as error:
         print(f"delivery: {error}", file=sys.stderr)
         return 1
 

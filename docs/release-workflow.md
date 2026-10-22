@@ -83,10 +83,16 @@ It rejects missing/failed scenarios, wrong source or Core versions, changed
 installed members, incomplete shutdown and missing temporary-config cleanup.
 
 The `matrix-evidence-SHA-ATTEMPT` artifact records that candidate's backend
-ID/digest, per-target receipt hashes, image identities and backend receipt
-artifact metadata. Names include the attempt to avoid mixing reruns. These
+ID/digest, per-target receipt hashes, scenario elapsed seconds, image identities
+and backend receipt artifact metadata. Names include the attempt to avoid mixing reruns. These
 records describe runtime evidence, not a self-issued publication authorization:
 the aggregate CI and deliberate publication gates still apply.
+
+Environment construction uses the
+[stage-specific, trusted-master cache](development-verification.md#environment-construction-and-cache-trust).
+It does not cache successful scenarios or replace their execution. Native build
+step timing and Core scenario timing describe different costs; do not sum an
+already-loaded image's zero build time as proof of a remote cache hit.
 
 ### Trusted master consumption
 

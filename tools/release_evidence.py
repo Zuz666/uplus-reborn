@@ -19,7 +19,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import github_api as github
-from delivery import _json, _no_links, docker_image_tag, load_artifact
+from delivery import (
+    _json,
+    _no_links,
+    append_github_output,
+    docker_image_tag,
+    load_artifact,
+)
 from release import git, release_metadata, verify_candidate
 
 SCENARIOS = ("standby", "execution", "profiles", "discovery", "discovery-identification")
@@ -41,6 +47,7 @@ POLICY_FILES = (
     ".github/workflows/docs.yml", ".github/workflows/codeql.yml", "tools/release_evidence.py",
     "tools/release.py", "tools/publish_release.py", "tools/delivery.py", "tools/ha_smoke.py", "tools/discovery_fixture.py",
     "tools/github_api.py",
+    ".github/actions/build-image/action.yml",
     "tools/Dockerfile", "pyproject.toml", "uv.lock", "package.json", "package-lock.json",
 )
 
@@ -238,6 +245,7 @@ def collect_matrix(repo: Path, candidate: Path, metadata: dict, context: dict,
             "core_version": versions[target], "environment": environment,
             "artifact": artifact_metadata(artifacts, f"core-{target}-{metadata['commit']}-{context['attempt']}", context),
             "scenarios": {name: hashlib.sha256((directory / f"{name}.json").read_bytes()).hexdigest() for name in SCENARIOS},
+            "durations_seconds": {name: rows[name]["elapsed_seconds"] for name in SCENARIOS},
         }
     return {"schema": 2, "producer": producer,
             "candidate_artifact": uploaded,
@@ -405,9 +413,10 @@ def main(argv: list[str] | None = None) -> int:
                 json.dump(result, stream, indent=2, sort_keys=True)
                 stream.write("\n")
         if args.action == "select" and args.github_output is not None:
-            with args.github_output.open("a", encoding="utf-8") as stream:
-                stream.write(f"run_id={result['source']['run_id']}\nrun_attempt={result['source']['attempt']}\n"
-                             f"candidate_id={result['candidate_artifact']['id']}\nmatrix_id={result['matrix_artifact']['id']}\n")
+            append_github_output(args.github_output, {
+                "run_id": result["source"]["run_id"], "run_attempt": result["source"]["attempt"],
+                "candidate_id": result["candidate_artifact"]["id"], "matrix_id": result["matrix_artifact"]["id"],
+            })
         print(json.dumps({"verified": True, "action": args.action, "commit": metadata["commit"],
                           "source_run": result.get("source", result.get("selection", result.get("producer", {})).get("source", {})),
                           "publication_eligibility": "not_evaluated"}, indent=2))

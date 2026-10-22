@@ -16,6 +16,9 @@ concurrency:
 
 jobs:
   validation:
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/validate.yml
   documentation:
     uses: ./.github/workflows/docs.yml
