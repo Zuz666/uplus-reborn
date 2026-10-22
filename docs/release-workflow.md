@@ -229,6 +229,8 @@ uv run --no-project --python 3.13 python tools/hacs_acceptance.py --repository Z
 Use a new output directory for every attempt. This command never publishes,
 changes tags or touches live HA. Historical target tags need not equal current
 `master` or latest; add `--expect-latest` only for a new release's acceptance.
+That assertion applies to the target install/upgrade, never to the deliberately
+older baseline; the baseline still requires exact installed version/member hashes.
 For the first-ever release, explicitly replace `--baseline` with `--first-release`;
 that mode proves fresh installation/restart, not an unavailable prior upgrade.
 Select a non-default client with `--docker-bin` or `UPLUS_DOCKER_BIN`, matching
