@@ -69,6 +69,9 @@ Core **2026.10.1** acceptance has exercised native UI/API, entity migration,
 options, lifecycle and the actual TCP path against a synthetic appliance.
 Software fixtures are not hardware verification or actual HACS installation.
 
+Automated runtime checks target **2026.10.2**; this does not relabel the earlier
+native UI evidence.
+
 Representative hardware observations cover upper/lower Spin, concurrent ordinary
 programs, both-drum Pause/Resume/Cancel, a lower smart recipe, delayed Start,
 timed lower Dry and upper completed-state Reset. Reported buzzer/child-lock
