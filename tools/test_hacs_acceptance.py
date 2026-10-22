@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hacs_acceptance import main, verify_release_package
-from hacs_fixture import InstallerGuard, extract_hacs, safe_error
+from hacs_fixture import InstallerGuard, extract_hacs, run_phase, safe_error
 
 
 class ReleasePackageTests(unittest.TestCase):
@@ -94,6 +94,34 @@ class InstallerIsolationTests(unittest.TestCase):
         message = safe_error(ValueError("https://release-assets.githubusercontent.com/file?sig=private"))
         self.assertNotIn("sig=private", message)
         self.assertIn("[redacted]", message)
+
+    def test_core_workers_cannot_read_installer_credentials(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            code = (
+                "import json,os,sys; from pathlib import Path; "
+                "visible=any(os.environ.get(k) for k in ('GH_TOKEN','GITHUB_TOKEN')); "
+                "Path(sys.argv[1]).write_text(json.dumps({'success':not visible,"
+                "'credential_visible':visible,'error':'Core inherited installer credential'}))"
+            )
+            result = {"phases": {}}
+            with patch.dict(os.environ, {"GH_TOKEN": "fixture-read-token", "GITHUB_TOKEN": "fixture-token"}):
+                run_phase("core", [sys.executable, "-c", code, str(directory / "core.json")], directory, result)
+            self.assertFalse(result["phases"]["core"]["receipt"]["credential_visible"])
+
+    def test_only_installer_receives_the_github_read_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            code = (
+                "import json,os,sys; from pathlib import Path; "
+                "allowed=bool(os.environ.get('GH_TOKEN')) and not os.environ.get('GITHUB_TOKEN'); "
+                "Path(sys.argv[1]).write_text(json.dumps({'success':allowed,'read_token_available':allowed}))"
+            )
+            result = {"phases": {}}
+            with patch.dict(os.environ, {"GH_TOKEN": "fixture-read-token", "GITHUB_TOKEN": "fixture-token"}):
+                run_phase("installer", [sys.executable, "-c", code, str(directory / "installer.json")],
+                          directory, result, installer=True)
+            self.assertTrue(result["phases"]["installer"]["receipt"]["read_token_available"])
 
 
 class LauncherFailureTests(unittest.TestCase):

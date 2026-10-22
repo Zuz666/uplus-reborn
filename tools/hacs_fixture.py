@@ -198,20 +198,28 @@ def extract_hacs(root, archive_path, fixture):
         archive.extractall(root / "custom_components" / "hacs")
 
 
+def run_phase(name, command, output, result, *, installer=False):
+    """Run a fresh worker; only the installer receives GitHub read credentials."""
+    phase_started = time.monotonic()
+    environment = dict(os.environ)
+    environment.pop("GITHUB_TOKEN", None)
+    if not installer:
+        environment.pop("GH_TOKEN", None)
+    completed = subprocess.run(
+        command, env=environment, capture_output=True, text=True, timeout=330, check=False,
+    )
+    path = output / f"{name}.json"
+    phase = json.loads(path.read_text()) if path.exists() else {}
+    result["phases"][name] = {"returncode": completed.returncode,
+                              "duration_seconds": time.monotonic() - phase_started, "receipt": phase}
+    smoke._require(completed.returncode == 0 and phase.get("success"),
+                   f"{name} failed: {phase.get('error', 'worker failed without a receipt')}")
+
+
 def main(args):
     result = {"schema": 1, "success": False, "phases": {}, "temporary_configs_removed": False}
     output = Path("/evidence")
     started = time.monotonic()
-
-    def run_phase(name, command):
-        phase_started = time.monotonic()
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=330, check=False)
-        path = output / f"{name}.json"
-        phase = json.loads(path.read_text()) if path.exists() else {}
-        result["phases"][name] = {"returncode": completed.returncode,
-                                  "duration_seconds": time.monotonic() - phase_started, "receipt": phase}
-        smoke._require(completed.returncode == 0 and phase.get("success"),
-                       f"{name} failed: {phase.get('error', 'worker failed without a receipt')}")
 
     def install_phase(name, root, target, previous=None):
         tag = args.baseline if target == "baseline" else args.tag
@@ -222,14 +230,14 @@ def main(args):
             command.append("--expect-latest")
         if previous:
             command.extend(["--previous", str(output / f"{previous}.json"), "--baseline", args.baseline])
-        run_phase(name, command)
+        run_phase(name, command, output, result, installer=True)
 
     def core_phase(name, root, previous=None):
         command = [sys.executable, "/workspace/tools/upgrade_smoke.py", "phase", str(root),
                    str(output / f"{name}.json")]
         if previous:
             command.append(str(output / f"{previous}.json"))
-        run_phase(name, command)
+        run_phase(name, command, output, result)
 
     try:
         fixture = json.loads(Path("/inputs/fixture.json").read_text())
