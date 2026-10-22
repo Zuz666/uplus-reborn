@@ -92,6 +92,39 @@ administrators. Additional independent approval can become required when another
 maintainer is available. Automated review is advisory, not a replacement for
 review or evidence.
 
+#### CodeRabbit review
+
+[`.coderabbit.yaml`](.coderabbit.yaml) owns the repository review configuration.
+CodeRabbit uses this contribution contract and the security policy as guidelines,
+with focused path instructions rather than a second copy of every project rule.
+Reviews use English, the balanced `chill` profile and advisory feedback; required
+CI and maintainer review remain authoritative. Automatic review targets the
+default `master` branch, skips drafts and pauses after two reviewed commits.
+Dependency PR authors are not excluded, and lockfiles remain reviewable.
+
+Service eligibility and rate limits can still prevent automatic review; YAML
+does not override an account or OSS-plan restriction. On a ready PR, comment
+`@coderabbitai review` for new changes, `@coderabbitai full review` for a deliberate
+fresh pass, or `@coderabbitai configuration` to inspect the effective settings.
+Use explicit mentions for follow-up questions; automatic chat replies are off.
+
+Evaluate each finding against code and evidence. Fix valid findings, or explain
+why they are obsolete, incorrect or out of scope before resolving the discussion.
+Do not treat generated approval or a skipped review as test evidence. Configured
+code-writing finishing touches, issue enrichment and automatic labeling are off.
+Do not enable Autopilot/Autofix or request bot-authored commits as part of ordinary
+review; those require their own explicit scope. Repository YAML is not a GitHub
+App permission boundary and does not claim to disable every service-side agent.
+Context is repository-local; no other repository, Jira, Linear or MCP is linked.
+Never submit credentials, APKs, raw captures or private workspace evidence to chat.
+
+For configuration changes, validate against the
+[official schema](https://www.coderabbit.ai/integrations/schema.v2.json) and inspect
+the bot's actual response on the PR. See the
+[configuration reference](https://docs.coderabbit.ai/reference/configuration),
+[automatic-review controls](https://docs.coderabbit.ai/configuration/auto-review)
+and [guideline ingestion](https://docs.coderabbit.ai/knowledge-base/code-guidelines).
+
 ### Dependency updates
 
 Dependabot proposes weekly uv, npm, GitHub Actions and Docker updates. Keep
