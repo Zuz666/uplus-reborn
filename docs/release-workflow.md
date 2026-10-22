@@ -109,5 +109,35 @@ GitHub-backed HACS installation. That acceptance needs a separately controlled
 HACS environment with bounded GitHub egress, synthetic loopback appliance state
 and no real appliance/account credentials. It does not authorize live operations.
 
+### Repeatable published HACS acceptance
+
+From a clean checkout on Windows or Linux, with Docker and authenticated GitHub
+CLI read access available, run:
+
+```sh
+uv run --no-project --python 3.13 python tools/hacs_acceptance.py --repository Zuz666/uplus-reborn --tag v1.0.1 --baseline v1.0.0 --output build/hacs-1.0.1
+```
+
+Use a new output directory for every attempt. This command never publishes,
+changes tags or touches live HA. Historical target tags need not equal current
+`master` or latest; add `--expect-latest` only for a new release's acceptance.
+For the first-ever release, explicitly replace `--baseline` with `--first-release`;
+that mode proves fresh installation/restart, not an unavailable prior upgrade.
+
+The runner pins official HACS bytes in `tools/hacs-fixture.json` and uses the
+digest-pinned `core-current` Docker target. Downloaded release members must match
+the immutable tag's actual Git tree, not just its checksum/provenance claims.
+It performs real HACS ZIP installation, fresh Core boot/persistence restart and
+an actual baseline-to-target upgrade. Shared `upgrade_smoke.py phase` workers
+verify identity, preferences, profiles, units, history and statistics in fresh
+Core processes. Installer HTTPS is bounded to GitHub; runtime traffic is synthetic
+loopback only. This is not account-onboarding or physical-appliance proof.
+
+`acceptance.json` and per-phase receipts retain versions, exact members, duration,
+failures and cleanup. Docker/network/rate-limit failures are not acceptance.
+Only ephemeral repository-scoped Actions tokens may enter the container; local
+installer workers use anonymous public access and need no personal token.
+The ordinary offline tooling tests never download HACS or contact GitHub.
+
 Licensed under [CC BY 4.0](LICENSE). Attribution: U+ Reborn contributors,
 [U+ Reborn repository](https://github.com/Zuz666/uplus-reborn).

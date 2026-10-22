@@ -76,7 +76,8 @@ def _write_json(path: Path, value: dict) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-def _member_name(name: str, *, directory: bool = False) -> str:
+def archive_member_name(name: str, *, directory: bool = False) -> str:
+    """Validate a portable relative archive path; callers own content policy."""
     if directory and name.endswith("/"):
         name = name[:-1]
     parts = name.split("/")
@@ -87,6 +88,12 @@ def _member_name(name: str, *, directory: bool = False) -> str:
         for part in parts
     ):
         raise ValueError(f"Unsafe member path: {name!r}")
+    return name
+
+
+def _member_name(name: str, *, directory: bool = False) -> str:
+    name = archive_member_name(name, directory=directory)
+    parts = name.split("/")
     if not (name.startswith(PACKAGE + "/") or directory and name in {
         "custom_components", PACKAGE,
     }):
