@@ -228,6 +228,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           REQUESTED: ${{ inputs.publish }}
           SOURCE_RUN: ${{ needs.inspect.outputs.run_id }}
+          UPLUS_RELEASE_NEEDS: ${{ toJSON(needs) }}
         run: |
           args=(--repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --commit "$GITHUB_SHA"
                 --version "$VERSION" --publication-requested "$REQUESTED"

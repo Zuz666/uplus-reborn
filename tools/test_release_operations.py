@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
 
-from release import advisory_delta, release_outcome, validated_run_status
+from release import (
+    advisory_delta,
+    native_release_phases,
+    release_outcome,
+    validated_run_status,
+)
 
 
 class RunStatusTests(unittest.TestCase):
@@ -50,6 +56,19 @@ class ReleaseOutcomeTests(unittest.TestCase):
         self.assertEqual(release_outcome(True, "success", "success", "failure"),
                          "published_acceptance_blocked")
         self.assertEqual(release_outcome(True, "success", "success", "success"), "published_and_accepted")
+
+    def test_native_dependency_completion_survives_delayed_backend_status_without_publication(self):
+        observed = {"repository": "owner/repo", "commit": "a" * 40, "run": {"id": 3, "run_attempt": 2}}
+        environment = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "owner/repo",
+                       "GITHUB_RUN_ID": "3", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_SHA": "a" * 40,
+                       "GITHUB_WORKFLOW_REF": "owner/repo/.github/workflows/release.yml@refs/heads/master",
+                       "UPLUS_RELEASE_NEEDS": json.dumps({name: {"result": result} for name, result in (
+                           ("inspect", "success"), ("publish", "skipped"), ("hacs", "skipped"))})}
+        phases = native_release_phases(observed, environment)
+        self.assertEqual(release_outcome(False, *phases.values()), "audited_publication_not_requested")
+        for field in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_WORKFLOW_REF"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                native_release_phases(observed, {**environment, field: "foreign"})
 
 
 class AdvisoryDeltaTests(unittest.TestCase):
