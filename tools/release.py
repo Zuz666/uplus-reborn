@@ -212,7 +212,7 @@ def prepare_release(repo: Path, version: str, released: str, notes_path: Path) -
     current = release_metadata(repo, "HEAD")
     if not VERSION.fullmatch(version) or tuple(map(int, version.split("."))) <= tuple(map(int, current["version"].split("."))):
         raise ValueError("Preparation requires a strictly newer stable version")
-    date.fromisoformat(released)
+    released = date.fromisoformat(released).isoformat()
     names = (f"{PACKAGE}/manifest.json", "pyproject.toml", "uv.lock", "CHANGELOG.md")
     if git(repo, "diff", "--name-only", "HEAD", "--", *names).strip():
         raise ValueError("Release metadata has owner changes; preserve and review them before preparation")

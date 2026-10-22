@@ -85,7 +85,7 @@ class ReleaseTests(unittest.TestCase):
         self.put(f"{PACKAGE}/__init__.py", "VALUE = 'owner work'\n")
         notes = self.root / "owner release notes.md"
         notes.write_text("- Preserve actual user profiles.\n", encoding="utf-8")
-        self.cli("prepare", "--version", "1.0.1", "--date", "2026-10-22", "--notes", notes)
+        self.cli("prepare", "--version", "1.0.1", "--date", "20261022", "--notes", notes)
         lock = tomllib.loads((self.repo / "uv.lock").read_text())
         self.assertEqual(next(p["version"] for p in lock["package"] if p["name"] == "other"), "1.0.0")
         self.assertEqual((self.repo / PACKAGE / "__init__.py").read_text(), "VALUE = 'owner work'\n")
