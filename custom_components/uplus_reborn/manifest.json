@@ -2,6 +2,7 @@
   "domain": "uplus_reborn",
   "name": "U+ Reborn",
   "after_dependencies": ["http"],
+  "categories": ["appliances_cleaning.laundry"],
   "codeowners": ["@Zuz666"],
   "config_flow": true,
   "dependencies": ["dhcp", "network"],

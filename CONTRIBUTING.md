@@ -43,6 +43,12 @@ version, dependencies, discovery declarations, documentation URL, issue
 tracker, and Home Assistant integration metadata. Keep this map synchronized
 when moving code, but do not duplicate mutable manifest values here.
 
+Declare catalog categories in the manifest using the
+[official taxonomy](https://contributors.home-assistant.io/core/integrations/categories/).
+Classify the appliance's purpose, not its entity platforms; the HACS repository
+category is a separate setting. Fix missing-category warnings rather than
+suppressing the metadata check.
+
 ## Development and verification
 
 Use `uv` to manage the Python environment and dependency lockfile. The repository's **Developer commands** section in [README.md](README.md#developer-commands) contains the current setup, test, lint, protocol-CLI, and documentation-check commands.
