@@ -492,6 +492,14 @@ address on a loaded entry does not reload it.
 
 Open **Configure** on the integration entry:
 
+The dialog shows the last known appliance connection **when opened**: Connected
+after a fresh successful read, Offline after a failed read, or Not yet known
+before any result or when the last success is stale. It does not actively test
+the connection or update this label while open. Close and reopen it to see the
+latest result. Connection status is separate from physical Remote Control mode
+and permission to send commands; opening the dialog sends no extra requests.
+See [Control model](#control-model) for command behavior and safety details.
+
 - **Polling interval (seconds):** a whole number from **15 to 30**, default
   **15**. Changing only this value updates the existing coordinator without
   a reload, immediate query, or discarded draft. An already scheduled poll
