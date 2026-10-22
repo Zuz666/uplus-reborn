@@ -43,6 +43,12 @@ version, dependencies, discovery declarations, documentation URL, issue
 tracker, and Home Assistant integration metadata. Keep this map synchronized
 when moving code, but do not duplicate mutable manifest values here.
 
+Declare catalog categories in the manifest using the
+[official taxonomy](https://contributors.home-assistant.io/core/integrations/categories/).
+Classify the appliance's purpose, not its entity platforms; the HACS repository
+category is a separate setting. Fix missing-category warnings rather than
+suppressing the metadata check.
+
 ## Development and verification
 
 Use `uv` to manage the Python environment and dependency lockfile. The repository's **Developer commands** section in [README.md](README.md#developer-commands) contains the current setup, test, lint, protocol-CLI, and documentation-check commands.
@@ -72,6 +78,8 @@ force-push release tags, or bypass required checks.
 
 Use the public issue forms for bug, feature and compatibility evidence. A new
 model report does not establish support or authorize appliance controls.
+Include the integration and Core versions; HACS version and installation method
+are optional context, not prerequisites for reporting a problem.
 Maintainer work items state scope/non-goals, evidence, observable acceptance,
 test layer, dependencies and migration/release impact before becoming Ready.
 An epic links child outcomes rather than duplicating their implementation text.
@@ -89,6 +97,79 @@ of their own PR. Required checks and resolved conversations still apply to
 administrators. Additional independent approval can become required when another
 maintainer is available. Automated review is advisory, not a replacement for
 review or evidence.
+
+#### Pull request labels
+
+[Classify pull requests](.github/workflows/pr-labels.yml) fills missing `type:*`
+and `area:*` groups on open, edit, push, reopen, readiness and manual label
+changes, including draft PRs. It uses only labels declared in
+[the catalogue](.github/labels.json) and already present in the repository;
+[Synchronize labels](.github/workflows/labels.yml) owns catalogue provisioning.
+
+Exactly one native closing issue in this repository supplies its existing
+classification. With no such unambiguous source, a Conventional Commit title
+provides the type: `fix` → bug, `feat` → feature, `docs` → docs, `test` → test,
+`refactor`/`perf` → refactor, and `build`/`ci`/`chore`/`style`/`revert` → chore.
+Changed paths supply areas. Accompanying tests/Markdown do not inflate the areas
+of implementation changes; test-only changes use testing. Rename paths count
+on both sides. More than two inferred areas, conflicting labels within the source
+issue, unknown paths/types and incomplete file data require manual classification;
+the workflow logs what it cannot infer rather than picking an arbitrary label.
+
+Existing label groups win. The action only adds labels: it never removes or
+replaces manual labels, infers priority or adds lifecycle/special labels.
+This deliberately does not continuously synchronize an already labeled PR
+after its scope or issue labels change. To correct it, apply the intended
+labels manually or clear the affected group and rerun **Classify pull requests**
+from `master` with its open PR number. Inspect the result before merge.
+
+The privileged job uses `pull_request_target` so fork PRs can be labeled, but
+executes only the trusted base-commit module/catalogue. No PR-head code,
+dependency install, cache, artifact, PAT or repository secret is consumed.
+PR text is API data, never interpolated into shell/JavaScript. The token has
+only contents/issue read and PR write permissions; API failures remain failed
+runs. Runs serialize per PR and re-read metadata before adding labels. This
+reduces stale decisions but is not an atomic lock against simultaneous human
+edits. Fork execution and required CI protections are not relaxed.
+
+Where GitHub's Actions event policy restricts `pull_request_target`, permit only
+this workflow's target/dispatch events, not the event repository-wide. See
+[GitHub's security guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
+Run `npm run test:labels` with Node.js 22+; CI exercises Windows and Linux.
+CodeRabbit labeling remains disabled and is not a dependency of this process.
+
+#### CodeRabbit review
+
+[`.coderabbit.yaml`](.coderabbit.yaml) owns the repository review configuration.
+CodeRabbit uses this contribution contract and the security policy as guidelines,
+with focused path instructions rather than a second copy of every project rule.
+Reviews use English, the balanced `chill` profile and advisory feedback; required
+CI and maintainer review remain authoritative. Automatic review targets the
+default `master` branch, skips drafts and pauses after two reviewed commits.
+Dependency PR authors are not excluded, and lockfiles remain reviewable.
+
+Service eligibility and rate limits can still prevent automatic review; YAML
+does not override an account or OSS-plan restriction. On a ready PR, comment
+`@coderabbitai review` for new changes, `@coderabbitai full review` for a deliberate
+fresh pass, or `@coderabbitai configuration` to inspect the effective settings.
+Use explicit mentions for follow-up questions; automatic chat replies are off.
+
+Evaluate each finding against code and evidence. Fix valid findings, or explain
+why they are obsolete, incorrect or out of scope before resolving the discussion.
+Do not treat generated approval or a skipped review as test evidence. Configured
+code-writing finishing touches, issue enrichment and automatic labeling are off.
+Do not enable Autopilot/Autofix or request bot-authored commits as part of ordinary
+review; those require their own explicit scope. Repository YAML is not a GitHub
+App permission boundary and does not claim to disable every service-side agent.
+Context is repository-local; no other repository, Jira, Linear or MCP is linked.
+Never submit credentials, APKs, raw captures or private workspace evidence to chat.
+
+For configuration changes, validate against the
+[official schema](https://www.coderabbit.ai/integrations/schema.v2.json) and inspect
+the bot's actual response on the PR. See the
+[configuration reference](https://docs.coderabbit.ai/reference/configuration),
+[automatic-review controls](https://docs.coderabbit.ai/configuration/auto-review)
+and [guideline ingestion](https://docs.coderabbit.ai/knowledge-base/code-guidelines).
 
 ### Dependency updates
 

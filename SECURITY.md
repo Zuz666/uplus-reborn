@@ -6,11 +6,12 @@ Security fixes target the current minor release line. Install its latest patch.
 
 | Version | Security support |
 | --- | --- |
-| 1.0.x | Supported once released |
+| 1.0.x | Supported |
 | Unreleased development snapshots | Reports welcome; no separate support commitment |
 
-Older release lines receive no routine security backports. The initial public
-release is being prepared; this table does not claim that it has been published.
+Older release lines receive no routine security backports. The table does not
+establish publication; consult [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
+for published versions.
 
 ## Report privately
 

@@ -968,7 +968,8 @@ class _LocalSession:
         self.writer.write(request)
         await self.writer.drain()
 
-    async def query_state(self) -> _StateResult:
+    async def _send_state_query(self) -> int:
+        """Dispatch one query; its caller owns all incoming proof channels."""
         sequence = self._allocate_sequence()
         self.begin_request("state_query", sequence)
         await self._send(
@@ -976,6 +977,10 @@ class _LocalSession:
             frame_type=_FRAME_CONTROL,
             payload=_QUERY_STATE.to_bytes(2, "big"),
         )
+        return sequence
+
+    async def query_state(self) -> _StateResult:
+        sequence = await self._send_state_query()
         while True:
             envelope, frame = await self.receive_inner()
             if result := _state_result(envelope, frame):
@@ -1055,43 +1060,48 @@ class _LocalSession:
 
         Normal proof is a matching accepted 02/03 plus an independent report.
         A post-dispatch query can instead establish requested state without that
-        response. If it precedes the transition, a later candidate report schedules
-        another query within the same deadline. The control write is never resent.
+        response. Pending snapshots schedule further serialized state queries
+        within the same deadline. The control write is never resent.
         """
         accepted = False
         observed: DeviceSnapshot | None = None
-        query_due: float | None = (
-            asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
-        )
+        query_due = asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
+        query_sequence: int | None = None
         while True:
-            if query_due is None:
-                envelope, frame = await self.receive_inner()
-            else:
+            if query_sequence is None:
                 try:
                     async with asyncio.timeout_at(query_due):
                         envelope, frame = await self.receive_inner()
                 except TimeoutError:
-                    query_due = None
-                    fresh = (await self.query_state()).snapshot
-                    if predicate(fresh):
-                        self.log_event(
-                            "postcondition_observed", proof="independent_query"
-                        )
-                        return fresh
-                    self.log_event(
-                        "postcondition_pending",
-                        control=self.control_name,
-                        power=fresh.power,
-                        buzzer_enabled=fresh.buzzer_enabled,
-                        child_lock=fresh.child_lock,
-                        upper=fresh.upper,
-                        lower=fresh.lower,
-                    )
-                    # A false result is not an ACK. Wait for a later candidate
-                    # report before scheduling another independent query.
-                    observed = None
+                    query_sequence = await self._send_state_query()
                     continue
+            else:
+                envelope, frame = await self.receive_inner()
             result = _state_result(envelope, frame)
+            if (
+                query_sequence is not None
+                and envelope.sequence == query_sequence
+                and result is not None
+            ):
+                self.log_event("correlated", response_kind=_response_kind(frame))
+                if predicate(result.snapshot):
+                    self.log_event("postcondition_observed", proof="independent_query")
+                    return result.snapshot
+                self.log_event(
+                    "postcondition_pending",
+                    control=self.control_name,
+                    power=result.snapshot.power,
+                    buzzer_enabled=result.snapshot.buzzer_enabled,
+                    child_lock=result.snapshot.child_lock,
+                    upper=result.snapshot.upper,
+                    lower=result.snapshot.lower,
+                )
+                observed = None
+                query_sequence = None
+                query_due = (
+                    asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
+                )
+                continue
             if envelope.sequence == sequence and (
                 frame.frame_type == _FRAME_ACK
                 or (frame.frame_type == _FRAME_STATUS and result is not None)
@@ -1108,10 +1118,6 @@ class _LocalSession:
             if accepted and observed is not None:
                 self.log_event("postcondition_observed", proof="accepted_and_report")
                 return observed
-            if query_due is None and observed is not None:
-                query_due = (
-                    asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
-                )
 
     async def _send_heartbeat(self) -> None:
         sequence = self._allocate_sequence()

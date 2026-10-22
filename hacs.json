@@ -1,5 +1,8 @@
 {
   "name": "U+ Reborn",
   "homeassistant": "2026.2.3",
-  "render_readme": true
+  "render_readme": true,
+  "zip_release": true,
+  "filename": "uplus_reborn.zip",
+  "hide_default_branch": true
 }

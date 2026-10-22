@@ -28,11 +28,34 @@ jobs:
     name: Hassfest
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Temporary official-source build; return to a compatible published image in #27.
+      HASSFEST_COMMIT: 853491cd0bdfbbf54b24eab9306ded23e3c43925
+      HASSFEST_SOURCE_SHA256: a4990d3bb05e28063d9fd5da6d37995e23894179de252384cf4dfeebb5250c2f
+      HASSFEST_BASE: python:3.14.8-alpine@sha256:7f2ec713f0436c59df2362d973b6a05af9e87ba78f0e94f5245c302984a7a1fd
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6
+      - name: Fetch verified official Hassfest source
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' \
+            --output "$RUNNER_TEMP/hassfest-source.tar.gz" \
+            "https://codeload.github.com/home-assistant/core/tar.gz/$HASSFEST_COMMIT"
+          echo "$HASSFEST_SOURCE_SHA256  $RUNNER_TEMP/hassfest-source.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/hassfest-source"
+          tar -xzf "$RUNNER_TEMP/hassfest-source.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/hassfest-source"
+      - name: Build the unchanged upstream recipe with an immutable base
+        run: |
+          docker buildx build --load --platform linux/amd64 \
+            --file "$RUNNER_TEMP/hassfest-source/script/hassfest/docker/Dockerfile" \
+            --build-context "python:3.14.8-alpine=docker-image://$HASSFEST_BASE" \
+            --tag "uplus-hassfest:$HASSFEST_COMMIT" "$RUNNER_TEMP/hassfest-source"
+      - name: Validate without network or checkout writes
+        run: |
+          docker run --rm --network=none \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/github/workspace,readonly" \
+            "uplus-hassfest:$HASSFEST_COMMIT"
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
@@ -75,3 +98,20 @@ jobs:
         run: |
           "$RUNNER_TEMP/validators/actionlint"
           "$RUNNER_TEMP/validators/gitleaks" dir . --config .gitleaks.toml --redact --no-banner
+  pr-labels:
+    name: PR label rules (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Exercise classification and metadata safety
+        run: npm run test:labels

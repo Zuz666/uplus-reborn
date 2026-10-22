@@ -1,8 +1,10 @@
 # U+ Reborn
 
 <!-- markdownlint-disable-next-line MD033 -->
-<img src="custom_components/uplus_reborn/brand/icon.png" alt="U+ Reborn icon" align="left" width="128" height="128">
+<img src="https://raw.githubusercontent.com/Zuz666/uplus-reborn/master/custom_components/uplus_reborn/brand/icon.png" alt="U+ Reborn icon" align="left" width="128" height="128">
 
+[![GitHub Release](https://img.shields.io/github/v/release/Zuz666/uplus-reborn?style=flat-square)](https://github.com/Zuz666/uplus-reborn/releases)
+[![GitHub ZIP Downloads](https://img.shields.io/github/downloads/Zuz666/uplus-reborn/uplus_reborn.zip?displayAssetName=false&style=flat-square)](https://github.com/Zuz666/uplus-reborn/releases)
 [![GitHub last commit](https://img.shields.io/github/last-commit/Zuz666/uplus-reborn/master?style=flat-square)](https://github.com/Zuz666/uplus-reborn/commits/master)
 [![GitHub code size](https://img.shields.io/github/languages/code-size/Zuz666/uplus-reborn?style=flat-square)](https://github.com/Zuz666/uplus-reborn)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://www.hacs.xyz/docs/faq/custom_repositories/)
@@ -316,14 +318,14 @@ reports or packet captures.
 
 ### HACS
 
-The first stable release, **1.0.0**, is being prepared and is not published yet.
-`master` is a pre-release source tree used for HACS bootstrap acceptance, not a
-published stable ZIP. Check [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
+Stable HACS installation requires a published GitHub Release and its download
+archive; the default branch is not a stable download. Check
+[GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
 and the [release notes and known limitations](CHANGELOG.md) before installation.
 
-1. In HACS, open **Integrations**.
-2. Add `https://github.com/Zuz666/uplus-reborn` as a custom repository with category **Integration**.
-3. Install **U+ Reborn**.
+1. In HACS, open the top-right menu and select **Custom repositories**.
+2. Add `https://github.com/Zuz666/uplus-reborn` with type **Integration**.
+3. Open **U+ Reborn** and download the published stable version.
 4. Restart Home Assistant.
 
 ### Development installation
@@ -332,7 +334,7 @@ For development and isolated testing, copy `custom_components/uplus_reborn`
 into the Home Assistant configuration directory as
 `custom_components/uplus_reborn`, then restart Home Assistant.
 This bypasses HACS repository validation and packaging; it is not proof of a
-HACS installation. Supported user distribution is through HACS once published.
+HACS installation. Supported user distribution is through HACS.
 
 ## Configuration
 
@@ -495,6 +497,11 @@ Open **Configure** on the integration entry:
   selectors, option switches and lifecycle buttons, plus shared controls.
   Power remains disabled in the entity registry until explicitly enabled.
   Program-specific source constraints determine which settings are available.
+  Fixed wash-time, temperature, rinse and spin values are not editable selectors.
+  Tub Clean offers only **Night wash** as an additional option on either drum;
+  its fixed settings still participate in the complete draft and Start encoding.
+  Read-only reported cycle settings remain separate and are not hidden by this
+  editability rule.
 
 Saving options never sends an appliance command. Changing control opt-in
 reloads a loaded entry and discards both drafts. Disabling revokes permission

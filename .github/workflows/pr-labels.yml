@@ -1,0 +1,47 @@
+name: Classify pull requests
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, reopened, edited, synchronize, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Open PR number to repair
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number || inputs.pull_request }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    name: Apply missing classification
+    if: >-
+      github.repository == 'Zuz666/uplus-reborn' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+    steps:
+      # The privileged job must never check out a PR head/merge ref or execute it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            tools/pr-labels.cjs
+            .github/labels.json
+      - name: Apply declared metadata labels only
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { labelPullRequest } = require('./tools/pr-labels.cjs');
+            return await labelPullRequest({ github, context, core });
