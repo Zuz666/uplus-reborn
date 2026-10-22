@@ -226,7 +226,7 @@ def main(args):
         command = [sys.executable, str(Path(__file__).resolve()), "installer", "--root", str(root),
                    "--expected", f"/inputs/{target}/expected.json", "--repository", args.repository,
                    "--tag", tag, "--latest", args.tag, "--receipt", str(output / f"{name}.json")]
-        if args.expect_latest:
+        if args.expect_latest and target == "target":
             command.append("--expect-latest")
         if previous:
             command.extend(["--previous", str(output / f"{previous}.json"), "--baseline", args.baseline])

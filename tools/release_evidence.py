@@ -83,7 +83,14 @@ def choose_source_run(repository: dict, workflow: dict, metadata: dict, runs: li
         and run.get("head_repository", {}).get("id") == repository["id"]
     )]
     if not candidates:
-        raise ValueError("No trusted canonical master CI source for this exact SHA")
+        exact = [run for run in runs if run.get("head_sha") == metadata["commit"]]
+        raise ValueError(
+            f"No trusted canonical master CI source for this exact SHA "
+            f"(observed={len(runs)}, exact_sha={len(exact)}, "
+            f"master={sum(run.get('head_branch') == 'master' for run in exact)}, "
+            f"same_repository={sum(run.get('repository', {}).get('id') == repository['id'] for run in exact)}); "
+            "inspect the exact run through release.py status; no write retry is authorized"
+        )
     # Selection does not filter for green: a newer failed/pending run wins and blocks.
     latest = max(candidates, key=lambda run: (
         datetime.fromisoformat(run["created_at"]), run["id"], run["run_attempt"]))
@@ -261,7 +268,7 @@ def select_source(repo: Path, repository: str, metadata: dict) -> dict:
         raise ValueError("Repository identity differs from the requested public source")
     workflow = github.api(f"repos/{repository}/actions/workflows/ci.yml")
     runs = github.pages(
-        f"repos/{repository}/actions/workflows/{workflow['id']}/runs?head_sha={metadata['commit']}&per_page=100",
+        f"repos/{repository}/actions/workflows/{workflow['id']}/runs?per_page=100",
         key="workflow_runs")
     selected = choose_source_run(info, workflow, metadata, runs)
     current = github.api(f"repos/{repository}/actions/runs/{selected['id']}")

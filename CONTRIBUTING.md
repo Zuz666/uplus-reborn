@@ -425,13 +425,27 @@ The integration uses Semantic Versioning: `MAJOR.MINOR.PATCH`.
 - Increment **PATCH** for a backward-compatible bug fix.
 - Before `1.0.0`, use a **MINOR** increment to signal user-visible additions or incompatible public changes, and reserve **PATCH** for backward-compatible bug fixes.
 
-Do not change the integration version in ordinary feature or bug-fix commits. A version bump belongs only in a release commit. In that release commit, set the same version in `pyproject.toml` and `custom_components/uplus_reborn/manifest.json`, then refresh and commit `uv.lock` so its root package entry matches. Create or update `CHANGELOG.md` in the same release commit. The changelog entry must include the version, release date, user-visible features, fixes, and breaking changes. Do not create a changelog entry until preparing an actual release.
+Do not change the integration version in ordinary feature or bug-fix commits.
+A version bump belongs only in a release commit. Run
+`python tools/release.py prepare --version VERSION --date YYYY-MM-DD --notes PATH`
+to synchronize manifest/project/root-lock versions and the dated changelog
+section, then run `uv lock --check --offline` and review the diff. Commit these
+files together. Notes must describe user-visible features, fixes and breaking
+changes. Do not create a changelog entry until preparing an actual release.
 
 The first public release is **1.0.0**. Unpublished development versions are not
 historical public releases. Initial public history starts from a reviewed clean
 snapshot; subsequent development follows the ordinary PR workflow above.
 The release runbook defines version validation, committed-byte ZIP packaging,
 manual approval, immutable tag/asset handling and actual HACS acceptance.
+
+Use the [portable release commands](docs/release-workflow.md#portable-status-advisory-delta-and-terminal-report)
+for baseline selection, exact-run status, advisory inventory/delta and the final
+report; do not author a new private probe for each release. `release.py prepare`
+updates synchronized version metadata and curated notes without resolving
+dependencies, committing or publishing. Preserve the prior advisory inventory:
+unchanged accepted risks are not new findings, and unavailable access is not
+zero alerts. Approval, source verification and immutable publication stay separate.
 
 ## Private material and security
 

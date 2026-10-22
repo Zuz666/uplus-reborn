@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -76,6 +77,30 @@ class ReleaseTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result
+
+    def test_prepare_preserves_dependency_versions_and_unrelated_dirty_work(self):
+        self.put("uv.lock", self.files["uv.lock"] + 'source = { virtual = "." }\n'
+                 '[[package]]\nname = "other"\nversion = "1.0.0"\n')
+        self.save()
+        self.put(f"{PACKAGE}/__init__.py", "VALUE = 'owner work'\n")
+        notes = self.root / "owner release notes.md"
+        notes.write_text("- Preserve actual user profiles.\n", encoding="utf-8")
+        self.cli("prepare", "--version", "1.0.1", "--date", "20261022", "--notes", notes)
+        lock = tomllib.loads((self.repo / "uv.lock").read_text())
+        self.assertEqual(next(p["version"] for p in lock["package"] if p["name"] == "other"), "1.0.0")
+        self.assertEqual((self.repo / PACKAGE / "__init__.py").read_text(), "VALUE = 'owner work'\n")
+        metadata = release_metadata(self.repo, self.save(), "1.0.1")
+        self.assertEqual(metadata["notes"], "- Preserve actual user profiles.\n")
+        self.assertIn("## [1.0.0]", (self.repo / "CHANGELOG.md").read_text())
+
+    def test_prepare_refuses_dirty_metadata_without_partial_writes(self):
+        self.put("pyproject.toml", self.files["pyproject.toml"] + "# owner edit\n")
+        notes = self.root / "notes.md"
+        notes.write_text("- Preserve actual user profiles.\n", encoding="utf-8")
+        paths = [self.repo / p for p in (f"{PACKAGE}/manifest.json", "pyproject.toml", "uv.lock", "CHANGELOG.md")]
+        before = [p.read_bytes() for p in paths]
+        self.cli("prepare", "--version", "1.0.1", "--date", "2026-10-22", "--notes", notes, expected=1)
+        self.assertEqual([p.read_bytes() for p in paths], before)
 
     def test_zip_installs_at_component_root_from_selected_commit_only(self):
         self.put(f"{PACKAGE}/__init__.py", "VALUE = 'dirty'\n")
