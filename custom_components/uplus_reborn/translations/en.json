@@ -266,8 +266,9 @@
     "step": {
       "init": {
         "title": "Polling and remote controls",
-        "description": "**Appliance connection: {connection_status}** (when opened).\n\nChoose remote controls and how often to refresh the appliance status. Saving these settings sends no appliance command.\n\n[Control help](https://github.com/Zuz666/uplus-reborn#control-model)",
+        "description": "Choose remote controls and how often to refresh the appliance status. Saving these settings sends no appliance command.\n\n[Control help]({control_help_url})",
         "data": {
+          "connection_status": "Appliance connection (when opened)",
           "enable_verified_controls": "Enable remote controls",
           "poll_interval": "Polling interval (seconds)"
         },

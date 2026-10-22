@@ -975,14 +975,37 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class UplusRebornOptionsFlow(config_entries.OptionsFlow):
     """Configure safety-sensitive integration behavior."""
 
+    def __init__(self) -> None:
+        """Capture connectivity once, independently of the form user's locale."""
+        super().__init__()
+        self._connection_status: str | None = None
+
     @override
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Save integration settings without issuing an appliance command."""
         enabled = self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        if self._connection_status is None:
+            self._connection_status = "unknown"
+            if coordinator is not None:
+                health = coordinator.health
+                if health.freshness == "fresh":
+                    self._connection_status = "connected"
+                elif health.last_error is not None and not health.available:
+                    self._connection_status = "offline"
         schema = vol.Schema(
             {
+                vol.Optional(
+                    "connection_status", default=self._connection_status
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[self._connection_status],
+                        translation_key="connection_status",
+                        read_only=True,
+                    )
+                ),
                 vol.Required(CONF_ENABLE_VERIFIED_CONTROLS, default=enabled): bool,
                 vol.Required(
                     CONF_POLL_INTERVAL,
@@ -999,31 +1022,18 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             except vol.Invalid:
                 errors["base"] = "invalid_options"
             else:
+                options.pop("connection_status", None)
                 if options[CONF_ENABLE_VERIFIED_CONTROLS] != enabled:
                     # Discard intent before saving, even across rapid off/on saves.
-                    coordinator = getattr(self.config_entry, "runtime_data", None)
                     if coordinator is not None:
                         coordinator.clear_drafts()
                 return self.async_create_entry(title="", data=options)
 
-        coordinator = getattr(self.config_entry, "runtime_data", None)
-        status = "unknown"
-        if coordinator is not None:
-            health = coordinator.health
-            if health.freshness == "fresh":
-                status = "connected"
-            elif health.last_error is not None and not health.available:
-                status = "offline"
-        labels = await async_get_translations(
-            self.hass, self.hass.config.language, "selector", {DOMAIN}
-        )
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(schema, user_input),
             errors=errors,
             description_placeholders={
-                "connection_status": labels[
-                    f"component.{DOMAIN}.selector.connection_status.options.{status}"
-                ],
+                "control_help_url": "https://github.com/Zuz666/uplus-reborn#control-model",
             },
         )

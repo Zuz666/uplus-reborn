@@ -20,7 +20,6 @@ from homeassistant.const import CONF_EMAIL, CONF_HOST, CONF_PASSWORD, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
-from homeassistant.helpers.translation import async_get_translations
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.uplus_reborn.cloud import (
@@ -452,6 +451,7 @@ async def test_options_flow_requires_explicit_control_opt_in(
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     assert result["data_schema"]({}) == {
+        "connection_status": "unknown",
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: 15,
     }
@@ -501,10 +501,7 @@ async def test_options_show_cached_connection_without_probing(
             await coordinator.async_refresh()
         read_state.reset_mock()
         result = await hass.config_entries.options.async_init(entry.entry_id)
-        labels = await async_get_translations(hass, "en", "selector", {DOMAIN})
-        assert result["description_placeholders"]["connection_status"] == labels[
-            f"component.{DOMAIN}.selector.connection_status.options.{status}"
-        ]
+        assert result["data_schema"]({})["connection_status"] == status
         read_state.assert_not_awaited()
 
 
