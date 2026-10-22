@@ -1,11 +1,20 @@
 {
   "domain": "uplus_reborn",
   "name": "U+ Reborn",
-  "after_dependencies": ["http"],
-  "categories": ["appliances_cleaning.laundry"],
-  "codeowners": ["@Zuz666"],
+  "after_dependencies": [
+    "http"
+  ],
+  "categories": [
+    "appliances_cleaning.laundry"
+  ],
+  "codeowners": [
+    "@Zuz666"
+  ],
   "config_flow": true,
-  "dependencies": ["dhcp", "network"],
+  "dependencies": [
+    "dhcp",
+    "network"
+  ],
   "dhcp": [
     {
       "macaddress": "98AAFC*"
@@ -15,5 +24,5 @@
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Zuz666/uplus-reborn/issues",
-  "version": "1.0.1"
+  "version": "1.0.2"
 }
