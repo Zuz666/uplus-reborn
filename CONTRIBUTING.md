@@ -192,6 +192,11 @@ External Actions and required container bases are pinned by immutable SHA/digest
 Review upstream changes and the effective runtime, not only the version comment.
 Required minimum/current Core baselines change through an explicit PR; moving
 stable/beta/dev canaries report drift separately and do not redefine support.
+
+Workflow bootstrap pins uv and Python explicitly; a `setup-uv` major update
+does not update either runtime. Preserve its sensitive-event cache protections
+instead of enabling dependency caches under privileged triggers.
+
 Internal tooling updates normally need no user-facing release note; changed
 contributor prerequisites do. See [SECURITY.md](SECURITY.md) for vulnerability
 reporting and [the release runbook](docs/release-workflow.md) for publishing.
