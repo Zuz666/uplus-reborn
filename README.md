@@ -524,6 +524,17 @@ user names, hidden flags, and explicitly disabled entities are retained.
 
 ### Troubleshooting availability and unsupported actions
 
+An already configured integration loads even when the washer is switched off or
+temporarily unreachable. Appliance readings and commands remain **Unavailable**;
+the connection status in **Configure** explains that power or networking may be
+the cause. Normal polling reconnects automatically when communication returns,
+without restarting Home Assistant or recreating the device. A successful read
+restores current readings, not previously attempted commands. Disabling polling
+in Home Assistant also disables this automatic polling recovery.
+
+Offline loading does not bypass initial onboarding validation or hide invalid
+protocol responses, incompatible profile storage or other setup errors.
+
 An unavailable appliance means the integration has no current successful
 local read. Check physical power, local network access, host/port, and
 **Reconfigure** if the address changed; allow normal polling to recover.

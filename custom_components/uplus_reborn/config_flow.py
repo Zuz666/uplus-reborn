@@ -994,7 +994,11 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 if health.freshness == "fresh":
                     self._connection_status = "connected"
                 elif health.last_error is not None and not health.available:
-                    self._connection_status = "offline"
+                    self._connection_status = (
+                        "offline_polling_disabled"
+                        if self.config_entry.pref_disable_polling
+                        else "offline"
+                    )
         schema = vol.Schema(
             {
                 vol.Optional(

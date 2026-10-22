@@ -27,6 +27,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     mock_restore_cache,
@@ -593,6 +594,91 @@ async def test_poll_failure_marks_entities_unavailable(
     assert read_state.await_count == 2
 
 
+async def test_offline_startup_loads_entities_and_recovers_without_reload(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """A configured washer can be off at startup without breaking its entry."""
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with (
+        patch.object(
+            UwtClient, "read_state", AsyncMock(side_effect=CannotConnect("offline"))
+        ) as read_state,
+        patch.object(UwtClient, "start_program", AsyncMock()) as start,
+        patch.object(UwtClient, "control_drum", AsyncMock()) as control,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+        coordinator = entry.runtime_data
+        assert coordinator.data is None
+        registry = er.async_get(hass)
+        power_id = _entity_id(registry, "binary_sensor", "power")
+        phase_id = _entity_id(registry, "sensor", "upper_phase")
+        start_id = _entity_id(registry, "button", "upper_start")
+        assert _state(hass, power_id) == STATE_UNAVAILABLE
+        assert _state(hass, phase_id) == STATE_UNAVAILABLE
+        assert _state(hass, start_id) == STATE_UNAVAILABLE
+        with pytest.raises(UnsafeState, match="No appliance snapshot"):
+            await coordinator.async_control_drum("upper", "cancel")
+        start.assert_not_awaited()
+        control.assert_not_awaited()
+        identities = {
+            row.unique_id: (row.id, row.entity_id)
+            for row in er.async_entries_for_config_entry(registry, entry.entry_id)
+        }
+        for connected in (True, False, True):
+            read_state.side_effect = None if connected else CannotConnect("offline")
+            read_state.return_value = standby_snapshot
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            assert entry.runtime_data is coordinator
+            assert entry.state is ConfigEntryState.LOADED
+            assert _state(hass, power_id) == ("on" if connected else STATE_UNAVAILABLE)
+            assert _state(hass, phase_id) == (
+                "standby" if connected else STATE_UNAVAILABLE
+            )
+        assert identities == {
+            row.unique_id: (row.id, row.entity_id)
+            for row in er.async_entries_for_config_entry(registry, entry.entry_id)
+        }
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        start.assert_not_awaited()
+        control.assert_not_awaited()
+
+
+@pytest.mark.parametrize("error", [InvalidFrame("bad checksum"), RuntimeError("bug")])
+async def test_offline_startup_does_not_hide_protocol_or_unexpected_errors(
+    hass: HomeAssistant, error: Exception
+) -> None:
+    """Only a classified connection failure permits offline initialization."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    with patch.object(UwtClient, "read_state", AsyncMock(side_effect=error)):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert not er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+
+
+async def test_offline_startup_preserves_incompatible_profile_storage(
+    hass: HomeAssistant,
+) -> None:
+    """Future local storage is a configuration error, not an offline appliance."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    store = Store(hass, 2, f"{DOMAIN}.profiles.{entry.entry_id}")
+    future = {"device_id": DEVICE_ID, "profiles": {}, "future_metadata": ["retained"]}
+    await store.async_save(future)
+    with patch.object(UwtClient, "read_state", AsyncMock()) as read_state:
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        read_state.assert_not_awaited()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert await store.async_load() == future
+
+
 @pytest.mark.parametrize("controls", [False, True])
 @pytest.mark.parametrize("online", [False, True])
 async def test_upgrade_removes_only_obsolete_selectors_even_when_opted_out_or_offline(
@@ -647,7 +733,7 @@ async def test_upgrade_removes_only_obsolete_selectors_even_when_opted_out_or_of
         patch.object(UwtClient, "start_program", AsyncMock()) as start,
         patch.object(UwtClient, "control_drum", AsyncMock()) as cancel,
     ):
-        assert await hass.config_entries.async_setup(entry.entry_id) is online
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         for removed in obsolete:
             assert registry.async_get(removed.entity_id) is None

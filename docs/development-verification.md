@@ -173,6 +173,17 @@ Spinning. It records Core/Python versions, the artifact and installed hashes,
 real query counts, authoritative snapshots/entity states and shutdown evidence.
 A control or malformed request fails acceptance. Output files are never replaced.
 
+The `offline` scenario refuses the first real TCP connection while loading a
+previously configured entry. It requires a loaded entry, absent authoritative
+snapshot, unavailable readings/Start, then restores the same peer and observes
+online → offline → online through ordinary 15-second polling, without forced
+refresh or reload. It verifies unchanged entity identities and the normal
+artifact, socket-guard and cleanup boundaries.
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/offline-smoke.json --scenario offline
+```
+
 The `profiles` scenario enables controls only on that synthetic entry. It proves
 per-drum native text-name → Save button → restore-selector behavior with no peer
 traffic, stable native action choices, invalid ID/drum/state rejection,
@@ -234,8 +245,10 @@ and `--output` remain mandatory. Stdin must be held open with a persistent pipe
 inspection. It creates a disposable local admin user and token, emits one JSON
 readiness line on `stdout` (`event: "serving"`, `url`, `entry_id`,
 `frontend_loaded`, `access_token`, `refresh_token`), accepts line-delimited
-`standby`, `running`, `paused` or `stop` commands on `stdin`, and revokes the token
-and removes the user before unloading the entry and writing `--output`. Clean
+`standby`, `running`, `paused`, `offline`, `online` or `stop` commands on `stdin`,
+and revokes the token and removes the user before unloading the entry and writing
+`--output`. `offline`/`online` close/reopen only the synthetic TCP peer; subsequent
+production polling, not a forced refresh, observes the changed connectivity. Clean
 shutdown requires writing `stop\n` to `stdin` and waiting for completion (never
 terminate host processes on Windows, as child Docker containers become orphaned).
 Temporary tokens are never stored in `--output`.

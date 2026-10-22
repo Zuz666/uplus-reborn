@@ -393,25 +393,25 @@ async def test_precondition_rejection_does_not_consume_or_dispatch(
     _assert_private(json.dumps(result) + caplog.text)
 
 
-async def test_failed_first_setup_retains_classified_diagnostics(
+async def test_offline_first_setup_retains_classified_diagnostics(
     hass: HomeAssistant,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A retrying setup retains its cache but is not reported as loaded."""
+    """A loaded offline entry has no fabricated state and retains safe diagnostics."""
     entry = _entry()
     entry.add_to_hass(hass)
     with patch.object(
         UwtClient, "read_state", AsyncMock(side_effect=CannotConnect(TOKEN))
     ):
-        assert not await hass.config_entries.async_setup(entry.entry_id)
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.state is ConfigEntryState.LOADED
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["device"]["state"] is None
-    assert result["health"]["entry_state"] == ConfigEntryState.SETUP_RETRY.value
+    assert result["health"]["entry_state"] == ConfigEntryState.LOADED.value
     assert result["health"]["freshness"] == "never_read"
     assert result["health"]["last_error"]["cause"] == "connection_closed"
-    assert not result["health"]["loaded"]
+    assert result["health"]["loaded"]
     assert not result["health"]["available"]
     _assert_private(json.dumps(result) + caplog.text)
 
