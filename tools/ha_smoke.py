@@ -616,11 +616,14 @@ async def _exercise(
                 _require(coordinator.data is None and not coordinator.last_update_success,
                          "Offline startup fabricated an authoritative snapshot")
                 _require(not peer.queries, "Offline startup unexpectedly reached a peer")
-                identities = {row.unique_id: (row.id, row.entity_id) for row in registered}
+                identities = {(row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
+                              for row in registered}
                 power_id = next(row.entity_id for row in registered
-                                if row.unique_id == f"{DEVICE_ID}_power")
+                                if row.domain == "binary_sensor"
+                                and row.unique_id == f"{DEVICE_ID}_power")
                 start_id = next(row.entity_id for row in registered
-                                if row.unique_id == f"{DEVICE_ID}_upper_start")
+                                if row.domain == "button"
+                                and row.unique_id == f"{DEVICE_ID}_upper_start")
                 _require(hass.states.get(power_id).state == "unavailable"
                          and hass.states.get(start_id).state == "unavailable",
                          "Offline initial state or command was available")
@@ -665,7 +668,7 @@ async def _exercise(
                         "query_count": len(peer.queries),
                     })
                 _require(identities == {
-                    row.unique_id: (row.id, row.entity_id)
+                    (row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
                     for row in er.async_entries_for_config_entry(registry, entry.entry_id)
                 }, "Offline recovery changed entity identities")
                 result["offline_startup"]["identities_preserved"] = True

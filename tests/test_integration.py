@@ -624,7 +624,7 @@ async def test_offline_startup_loads_entities_and_recovers_without_reload(
         start.assert_not_awaited()
         control.assert_not_awaited()
         identities = {
-            row.unique_id: (row.id, row.entity_id)
+            (row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
             for row in er.async_entries_for_config_entry(registry, entry.entry_id)
         }
         for connected in (True, False, True):
@@ -639,7 +639,7 @@ async def test_offline_startup_loads_entities_and_recovers_without_reload(
                 "standby" if connected else STATE_UNAVAILABLE
             )
         assert identities == {
-            row.unique_id: (row.id, row.entity_id)
+            (row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
             for row in er.async_entries_for_config_entry(registry, entry.entry_id)
         }
         assert await hass.config_entries.async_reload(entry.entry_id)
