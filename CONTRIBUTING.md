@@ -92,6 +92,46 @@ administrators. Additional independent approval can become required when another
 maintainer is available. Automated review is advisory, not a replacement for
 review or evidence.
 
+#### Pull request labels
+
+[Classify pull requests](.github/workflows/pr-labels.yml) fills missing `type:*`
+and `area:*` groups on open, edit, push, reopen, readiness and manual label
+changes, including draft PRs. It uses only labels declared in
+[the catalogue](.github/labels.json) and already present in the repository;
+[Synchronize labels](.github/workflows/labels.yml) owns catalogue provisioning.
+
+Exactly one native closing issue in this repository supplies its existing
+classification. With no such unambiguous source, a Conventional Commit title
+provides the type: `fix` → bug, `feat` → feature, `docs` → docs, `test` → test,
+`refactor`/`perf` → refactor, and `build`/`ci`/`chore`/`style`/`revert` → chore.
+Changed paths supply areas. Accompanying tests/Markdown do not inflate the areas
+of implementation changes; test-only changes use testing. Rename paths count
+on both sides. More than two inferred areas, conflicting labels within the source
+issue, unknown paths/types and incomplete file data require manual classification;
+the workflow logs what it cannot infer rather than picking an arbitrary label.
+
+Existing label groups win. The action only adds labels: it never removes or
+replaces manual labels, infers priority or adds lifecycle/special labels.
+This deliberately does not continuously synchronize an already labeled PR
+after its scope or issue labels change. To correct it, apply the intended
+labels manually or clear the affected group and rerun **Classify pull requests**
+from `master` with its open PR number. Inspect the result before merge.
+
+The privileged job uses `pull_request_target` so fork PRs can be labeled, but
+executes only the trusted base-commit module/catalogue. No PR-head code,
+dependency install, cache, artifact, PAT or repository secret is consumed.
+PR text is API data, never interpolated into shell/JavaScript. The token has
+only contents/issue read and PR write permissions; API failures remain failed
+runs. Runs serialize per PR and re-read metadata before adding labels. This
+reduces stale decisions but is not an atomic lock against simultaneous human
+edits. Fork execution and required CI protections are not relaxed.
+
+Where GitHub's Actions event policy restricts `pull_request_target`, permit only
+this workflow's target/dispatch events, not the event repository-wide. See
+[GitHub's security guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
+Run `npm run test:labels` with Node.js 22+; CI exercises Windows and Linux.
+CodeRabbit labeling remains disabled and is not a dependency of this process.
+
 #### CodeRabbit review
 
 [`.coderabbit.yaml`](.coderabbit.yaml) owns the repository review configuration.
