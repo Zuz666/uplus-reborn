@@ -107,7 +107,8 @@ class UplusRebornSelect(UplusRebornEntity, SelectEntity):
             return []
         if self._setting in _ALLOWED:
             values = getattr(intent_capabilities(draft), _ALLOWED[self._setting])
-            return [str(value) for value in values]
+            # The source picker disables fixed scalar lists, including Tub Clean.
+            return [str(value) for value in values] if len(values) > 1 else []
         if self._setting == "drying":
             return [mode.name for mode in program_drying_modes(draft.program)]
         if self._setting == "delay":
