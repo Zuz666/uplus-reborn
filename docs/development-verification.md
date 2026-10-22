@@ -218,6 +218,13 @@ and the finite minimum/current Core matrix. Required jobs have no path filters
 that can leave protection permanently pending. The release workflow reuses this
 same gate rather than maintaining a weaker parallel acceptance path.
 
+Each minimum/current Core job uploads its exact committed release candidate
+alongside the synthetic receipts. A separate same-run artifact job downloads
+both candidates into independent directories and verifies their safe bundles,
+ZIP members, checksums, notes and provenance against the checked-out commit.
+This exercises the real GitHub Artifacts backend without publishing a release,
+executing downloaded code or consuming another run's privileged artifacts.
+
 The HACS job requires GitHub's license endpoint to identify the exact checked
 commit as MIT. HACS's own license check reads default-branch repository metadata
 instead, so only that duplicate check is excluded; it cannot validate a license
