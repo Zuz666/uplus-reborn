@@ -118,6 +118,12 @@ for minimum supported Core 2026.2.3 on Python 3.13). Each image is built at most
 once per recipe/lockfile hash and reused without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
 
+Docker Desktop Windows bind mounts can expose Git `100644` files as mode `0777`.
+For Ruff's permission-sensitive checks, use the Linux CI checkout or a
+Git-mode-preserving snapshot on the container's Linux filesystem. Do not add
+shebangs to integration modules or suppress executable-file rules to compensate
+for synthetic bind-mount permissions.
+
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/ha-smoke-result.json --scenario execution
 uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/ha-smoke-min-result.json --scenario standby

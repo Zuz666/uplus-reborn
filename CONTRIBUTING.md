@@ -179,6 +179,15 @@ research and test groups. Major updates and changes to Core/pytest compatibility
 baselines require separate review, not automatic grouping with routine tooling.
 No dependency PR is automatically merged.
 
+The test group's DHCP, network and frontend pins belong to the minimum Core's
+component requirements. Update them with the Core/pytest baseline, not as an
+unrelated tooling upgrade. Newer versions in the separate research resolution
+do not change these frozen minimum-environment requirements.
+
+Ruff upgrades must not silently reduce lint coverage. The datetime checks
+removed from upstream defaults in 0.17 remain explicitly enabled in the
+project configuration.
+
 External Actions and required container bases are pinned by immutable SHA/digest.
 Review upstream changes and the effective runtime, not only the version comment.
 Required minimum/current Core baselines change through an explicit PR; moving
