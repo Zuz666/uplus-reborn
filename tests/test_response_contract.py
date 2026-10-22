@@ -219,6 +219,233 @@ class ResponseContractTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(requests[-1], (3, _inner_frame(0x01, b"\x4d\x01")))
                 self.assertEqual(sum(packet[9] == 0x60 for _, packet in requests), 1)
 
+    async def test_tub_clean_start_rechecks_state_after_pending_query(self) -> None:
+        """A pending correlated status must not stop one-shot Start confirmation."""
+        requests: list[tuple[int, bytes]] = []
+        finished = asyncio.Event()
+        pending = _cycle_words("lower", program=13, phase=0)
+        pending[28] = 0
+        pending[31], pending[33], pending[34] = 1, 0x5A4B, 0x0040
+        running = pending.copy()
+        running[26], running[28] = 0x05A3, 90 << 8
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                requests.append(await _read_request(reader))
+                writer.write(_state_response(_standby_words(), frame_type=0x02))
+                await writer.drain()
+                requests.append(await _accept_control_initialization(reader, writer))
+                control = await _read_request(reader)
+                requests.append(control)
+                writer.write(_frame_response(0x05, b"", sequence=control[0]))
+                await writer.drain()
+                first_query = await _read_request(reader)
+                requests.append(first_query)
+                writer.write(
+                    _state_response(pending, sequence=first_query[0], frame_type=0x02)
+                    + _state_response(pending, sequence=first_query[0])
+                    + _state_response(pending)
+                )
+                await writer.drain()
+                # No later unsolicited report: only a fresh query can prove Start.
+                second_query = await _read_request(reader)
+                requests.append(second_query)
+                writer.write(
+                    _state_response(running, sequence=second_query[0], frame_type=0x02)
+                )
+                await writer.drain()
+            except asyncio.IncompleteReadError:
+                # The broken client closes here when confirmation stalls.
+                pass
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                finished.set()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        async with server:
+            client = UwtClient(
+                "127.0.0.1",
+                "TESTDEVICE",
+                port=server.sockets[0].getsockname()[1],
+                control_timeout=0.3,
+            )
+            with patch(
+                "custom_components.uplus_reborn.protocol._protocol._CONFIRMATION_QUERY_DELAY",
+                0.01,
+            ):
+                try:
+                    result = await client.start_program(
+                        update_intent(
+                            default_intent("lower", "drum_clean"),
+                            enabled_functions=("night",),
+                        ),
+                        allow_live=True,
+                    )
+                finally:
+                    await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(result.after.lower.phase, "washing")
+        self.assertEqual(result.after.lower.remaining_minutes, 90)
+        self.assertEqual(
+            [(sequence, packet) for sequence, packet in requests if packet[9] == 1],
+            [
+                (0, _inner_frame(0x01, b"\x4d\x01")),
+                (3, _inner_frame(0x01, b"\x4d\x01")),
+                (4, _inner_frame(0x01, b"\x4d\x01")),
+            ],
+        )
+        self.assertEqual(sum(packet[9] == 0x60 for _, packet in requests), 1)
+
+    async def test_pending_queries_keep_deadline_and_reject_unsolicited_proof(
+        self,
+    ) -> None:
+        """Repeated reads cannot turn pending state or an uncorrelated report into ACK."""
+        requests: list[tuple[int, bytes]] = []
+        trailing: list[bytes] = []
+        finished = asyncio.Event()
+        pending = _cycle_words("lower", program=13, phase=0)
+        pending[28] = 0
+        pending[31], pending[33], pending[34] = 1, 0x5A4B, 0x0040
+        running = pending.copy()
+        running[26], running[28] = 0x05A3, 90 << 8
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                requests.append(await _read_request(reader))
+                writer.write(_state_response(_standby_words(), frame_type=0x02))
+                await writer.drain()
+                requests.append(await _accept_control_initialization(reader, writer))
+                control = await _read_request(reader)
+                requests.append(control)
+                writer.write(_frame_response(0x05, b"", sequence=control[0]))
+                await writer.drain()
+                for _ in range(2):
+                    query = await _read_request(reader)
+                    requests.append(query)
+                    writer.write(
+                        _state_response(pending, sequence=query[0], frame_type=0x02)
+                        + _state_response(running)
+                    )
+                    await writer.drain()
+                # A third query receives no answer: the original deadline applies.
+                requests.append(await _read_request(reader))
+                trailing.append(await reader.read())
+            except asyncio.IncompleteReadError:
+                pass
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                finished.set()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        async with server:
+            client = UwtClient(
+                "127.0.0.1",
+                "TESTDEVICE",
+                port=server.sockets[0].getsockname()[1],
+                control_timeout=0.3,
+            )
+            with (
+                patch(
+                    "custom_components.uplus_reborn.protocol._protocol._CONFIRMATION_QUERY_DELAY",
+                    0.01,
+                ),
+                self.assertRaises(OutcomeUnknown),
+            ):
+                await asyncio.wait_for(
+                    client.start_program(
+                        update_intent(
+                            default_intent("lower", "drum_clean"),
+                            enabled_functions=("night",),
+                        ),
+                        allow_live=True,
+                    ),
+                    1,
+                )
+            await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(trailing, [b""])
+        self.assertEqual(
+            [sequence for sequence, packet in requests if packet[9] == 1],
+            [0, 3, 4, 5],
+        )
+        self.assertEqual(sum(packet[9] == 0x60 for _, packet in requests), 1)
+
+    async def test_control_proof_is_processed_during_followup_query(self) -> None:
+        """A delayed control ACK and independent report need no query reply."""
+        requests: list[tuple[int, bytes]] = []
+        finished = asyncio.Event()
+        pending = _cycle_words("lower", program=13, phase=0)
+        pending[28] = 0
+        pending[31], pending[33], pending[34] = 1, 0x5A4B, 0x0040
+        running = pending.copy()
+        running[26], running[28] = 0x05A3, 90 << 8
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                requests.append(await _read_request(reader))
+                writer.write(_state_response(_standby_words(), frame_type=0x02))
+                await writer.drain()
+                requests.append(await _accept_control_initialization(reader, writer))
+                control = await _read_request(reader)
+                requests.append(control)
+                writer.write(_frame_response(0x05, b"", sequence=control[0]))
+                await writer.drain()
+                query = await _read_request(reader)
+                requests.append(query)
+                writer.write(
+                    _state_response(pending, sequence=query[0], frame_type=0x02)
+                )
+                await writer.drain()
+                requests.append(await _read_request(reader))
+                # Query has no reply; the normal control proof arrives instead.
+                writer.write(
+                    _frame_response(0x03, b"", sequence=control[0])
+                    + _state_response(running)
+                )
+                await writer.drain()
+                await reader.read()
+            except asyncio.IncompleteReadError:
+                pass
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                finished.set()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        async with server:
+            client = UwtClient(
+                "127.0.0.1",
+                "TESTDEVICE",
+                port=server.sockets[0].getsockname()[1],
+                control_timeout=0.3,
+            )
+            with patch(
+                "custom_components.uplus_reborn.protocol._protocol._CONFIRMATION_QUERY_DELAY",
+                0.01,
+            ):
+                try:
+                    result = await client.start_program(
+                        update_intent(
+                            default_intent("lower", "drum_clean"),
+                            enabled_functions=("night",),
+                        ),
+                        allow_live=True,
+                    )
+                finally:
+                    await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(result.after.lower.phase, "washing")
+        self.assertEqual(
+            [sequence for sequence, packet in requests if packet[9] == 1],
+            [0, 3, 4],
+        )
+        self.assertEqual(sum(packet[9] == 0x60 for _, packet in requests), 1)
+
     async def test_power_off_disconnect_is_not_success_or_a_wake_retry(self) -> None:
         requests: list[tuple[int, bytes]] = []
         finished = asyncio.Event()
