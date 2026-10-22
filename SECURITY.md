@@ -6,7 +6,7 @@ Security fixes target the current minor release line. Install its latest patch.
 
 | Version | Security support |
 | --- | --- |
-| 1.0.x | Supported once released |
+| 1.0.x | Supported |
 | Unreleased development snapshots | Reports welcome; no separate support commitment |
 
 Older release lines receive no routine security backports. The table does not
