@@ -189,7 +189,7 @@ def _phase(root: Path, output: Path, previous_path: Path | None) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] == "_phase":
+    if len(sys.argv) > 1 and sys.argv[1] == "phase":
         return _phase(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) > 4 else None)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-bundle", type=Path, required=True)
@@ -229,7 +229,7 @@ def main() -> int:
                             (root / smoke.PACKAGE).rename(directory / "old-component")
                             (incoming / smoke.PACKAGE).rename(root / smoke.PACKAGE)
                         phase_output = directory / f"{phase}.json"
-                        command = [sys.executable, str(Path(__file__).resolve()), "_phase", str(root), str(phase_output)]
+                        command = [sys.executable, str(Path(__file__).resolve()), "phase", str(root), str(phase_output)]
                         if phase == "after":
                             command.append(str(directory / "before.json"))
                         completed = subprocess.run(command, capture_output=True, text=True, timeout=330, check=False)
