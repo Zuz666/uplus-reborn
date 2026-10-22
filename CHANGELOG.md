@@ -5,6 +5,45 @@ are listed in
 [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases).
 Unpublished development versions are not historical public releases.
 
+## [1.0.1] - 2026-10-22
+
+### Fixed
+
+- Disable scalar programme selectors when the programme offers no choice.
+  Tub Clean no longer allows edits to its fixed settings; Night wash remains
+  its only additional function. Fixed temperatures in upper Allergy Care and
+  lower Hygiene are also disabled. Adjustable settings become editable again
+  when an ordinary programme is selected ([#1](https://github.com/Zuz666/uplus-reborn/issues/1)).
+- Continue read-only state queries while a dispatched control awaits confirmation,
+  without blocking independently matching appliance reports. This fixes the
+  confirmation stall identified in the lower-drum Tub Clean Start logs. The
+  original deadline, strict postconditions and single control write remain;
+  missing authoritative evidence still produces an unknown outcome
+  ([#2](https://github.com/Zuz666/uplus-reborn/issues/2)).
+- Declare the official laundry integration category, resolving the HACS metadata
+  warning ([#25](https://github.com/Zuz666/uplus-reborn/issues/25)).
+- Fix the README logo URL used by HACS. The previously published 1.0.0 tag and
+  assets remain unchanged ([#16](https://github.com/Zuz666/uplus-reborn/issues/16)).
+
+### Maintenance
+
+- Update the current isolated Core verification baseline to **2026.10.2**, Ruff
+  to 0.17.1 and pinned release/CI actions. Verify named artifact handoffs and
+  committed-byte integrity; retain the minimum Core dependency pins.
+
+### Compatibility and known limitations
+
+- Minimum Home Assistant Core remains **2026.2.3**. Restart Home Assistant after
+  upgrading; do not remove the config entry or re-pair the appliance. Existing
+  entity/statistic identities, preferences and saved profiles are preserved.
+- Controls remain opt-in. An unknown outcome never authorizes repeating Start.
+  The control fixes are verified with isolated Core and synthetic TCP peers;
+  this release does not claim a new physical Tub Clean run or a live deployment.
+- Authoritative selected spin speed, numeric end delay, original wash duration
+  and exact Smart fabric/stain identities remain unavailable where the appliance
+  does not report them. Drafts are not substituted for missing readback; a
+  retained ordinary-stain code does not prove active treatment.
+
 ## [1.0.0] - 2026-10-22
 
 ### Added
