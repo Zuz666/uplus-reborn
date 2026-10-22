@@ -497,6 +497,11 @@ Open **Configure** on the integration entry:
   selectors, option switches and lifecycle buttons, plus shared controls.
   Power remains disabled in the entity registry until explicitly enabled.
   Program-specific source constraints determine which settings are available.
+  Fixed wash-time, temperature, rinse and spin values are not editable selectors.
+  Tub Clean offers only **Night wash** as an additional option on either drum;
+  its fixed settings still participate in the complete draft and Start encoding.
+  Read-only reported cycle settings remain separate and are not hidden by this
+  editability rule.
 
 Saving options never sends an appliance command. Changing control opt-in
 reloads a loaded entry and discards both drafts. Disabling revokes permission

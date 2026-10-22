@@ -54,6 +54,7 @@ from custom_components.uplus_reborn.protocol import (
     fabric_intent,
     update_intent,
 )
+from custom_components.uplus_reborn.select import UplusRebornSelect
 from custom_components.uplus_reborn.system_health import system_health_info
 
 from .conftest import DEVICE_ID, HOST, PORT
@@ -358,6 +359,83 @@ async def test_draft_settings_are_local_atomic_and_program_specific(
         start.assert_not_awaited()
         control.assert_not_awaited()
         appliance.assert_not_awaited()
+
+
+@pytest.mark.parametrize("drum", ["upper", "lower"])
+async def test_tub_clean_fixed_settings_are_not_editable(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot, drum: str
+) -> None:
+    """Tub Clean offers Night wash, not editable fixed wash parameters."""
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with patch.object(
+        UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+    ) as read_state:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        registry = er.async_get(hass)
+        coordinator = entry.runtime_data
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: _entity_id(
+                    registry, "select", f"{drum}_program_selection"
+                ),
+                "option": "drum_clean",
+            },
+            blocking=True,
+        )
+        draft = coordinator.draft(drum)
+        for setting in (
+            "wash_minutes",
+            "temperature",
+            "rinses",
+            "spin_speed",
+            "delay",
+            "stain",
+        ):
+            assert (
+                _state(hass, _entity_id(registry, "select", f"{drum}_{setting}"))
+                == STATE_UNAVAILABLE
+            )
+        for setting, option in (("temperature", "90"), ("spin_speed", "600")):
+            selector = UplusRebornSelect(coordinator, drum, setting)
+            with pytest.raises(ServiceValidationError):
+                await selector.async_select_option(option)
+        assert coordinator.draft(drum) is draft
+        for function in ("high_water", "eco", "easy_iron", "soak", "intensive"):
+            assert (
+                _state(hass, _entity_id(registry, "switch", f"{drum}_{function}"))
+                == STATE_UNAVAILABLE
+            )
+        night_id = _entity_id(registry, "switch", f"{drum}_night")
+        await hass.services.async_call(
+            "switch", "turn_on", {ATTR_ENTITY_ID: night_id}, blocking=True
+        )
+        assert coordinator.draft(drum) == update_intent(
+            draft, enabled_functions=("night",)
+        )
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: _entity_id(
+                    registry, "select", f"{drum}_program_selection"
+                ),
+                "option": "baby_care" if drum == "upper" else "cotton",
+            },
+            blocking=True,
+        )
+        temperature_id = _entity_id(registry, "select", f"{drum}_temperature")
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {ATTR_ENTITY_ID: temperature_id, "option": "40"},
+            blocking=True,
+        )
+        assert _state(hass, temperature_id) == "40"
+        read_state.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize(
