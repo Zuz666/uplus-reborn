@@ -77,11 +77,16 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: Download the minimum-Core candidate by name
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: core-*-${{ github.sha }}
-          path: build/downloaded
-          merge-multiple: false
+          name: core-test-${{ github.sha }}
+          path: build/downloaded/test
+      - name: Download the current-Core candidate by name
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: core-core-current-${{ github.sha }}
+          path: build/downloaded/core-current
       - name: Verify transferred candidates against the committed source
         env:
           PYTHONPATH: tools
@@ -95,7 +100,7 @@ jobs:
           repo = Path.cwd()
           metadata = release_metadata(repo, os.environ["GITHUB_SHA"])
           for target in ("test", "core-current"):
-              candidate = Path("build/downloaded") / f"core-{target}-{metadata['commit']}" / "release"
+              candidate = Path("build/downloaded") / target / "release"
               verified = verify_candidate(repo, candidate, metadata)
               print(f"{target}: verified {verified['asset']} {verified['sha256']}")
           PY
