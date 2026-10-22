@@ -478,6 +478,9 @@ without depending on another unsolicited report. A candidate report alone is
 not proof: a query reply must match its allocated sequence and independently
 satisfy the postcondition. This neither resends the control nor accepts an
 unrelated queued report as a query reply.
+Only one state query is outstanding at a time. A matching control acknowledgement
+and independent postcondition report can still resolve the control while that
+query awaits its reply.
 
 If confirmation is absent, or TCP fails after dispatch, the outcome is unknown,
 not necessarily a failed write. A later ordinary poll may restore availability

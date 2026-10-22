@@ -968,7 +968,8 @@ class _LocalSession:
         self.writer.write(request)
         await self.writer.drain()
 
-    async def query_state(self) -> _StateResult:
+    async def _send_state_query(self) -> int:
+        """Dispatch one query; its caller owns all incoming proof channels."""
         sequence = self._allocate_sequence()
         self.begin_request("state_query", sequence)
         await self._send(
@@ -976,6 +977,10 @@ class _LocalSession:
             frame_type=_FRAME_CONTROL,
             payload=_QUERY_STATE.to_bytes(2, "big"),
         )
+        return sequence
+
+    async def query_state(self) -> _StateResult:
+        sequence = await self._send_state_query()
         while True:
             envelope, frame = await self.receive_inner()
             if result := _state_result(envelope, frame):
@@ -1061,32 +1066,42 @@ class _LocalSession:
         accepted = False
         observed: DeviceSnapshot | None = None
         query_due = asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
+        query_sequence: int | None = None
         while True:
-            try:
-                async with asyncio.timeout_at(query_due):
-                    envelope, frame = await self.receive_inner()
-            except TimeoutError:
-                fresh = (await self.query_state()).snapshot
-                if predicate(fresh):
+            if query_sequence is None:
+                try:
+                    async with asyncio.timeout_at(query_due):
+                        envelope, frame = await self.receive_inner()
+                except TimeoutError:
+                    query_sequence = await self._send_state_query()
+                    continue
+            else:
+                envelope, frame = await self.receive_inner()
+            result = _state_result(envelope, frame)
+            if (
+                query_sequence is not None
+                and envelope.sequence == query_sequence
+                and result is not None
+            ):
+                self.log_event("correlated", response_kind=_response_kind(frame))
+                if predicate(result.snapshot):
                     self.log_event("postcondition_observed", proof="independent_query")
-                    return fresh
+                    return result.snapshot
                 self.log_event(
                     "postcondition_pending",
                     control=self.control_name,
-                    power=fresh.power,
-                    buzzer_enabled=fresh.buzzer_enabled,
-                    child_lock=fresh.child_lock,
-                    upper=fresh.upper,
-                    lower=fresh.lower,
+                    power=result.snapshot.power,
+                    buzzer_enabled=result.snapshot.buzzer_enabled,
+                    child_lock=result.snapshot.child_lock,
+                    upper=result.snapshot.upper,
+                    lower=result.snapshot.lower,
                 )
-                # Pending state is not success. Check again without requiring
-                # an unsolicited report or resending the one-shot control.
                 observed = None
+                query_sequence = None
                 query_due = (
                     asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
                 )
                 continue
-            result = _state_result(envelope, frame)
             if envelope.sequence == sequence and (
                 frame.frame_type == _FRAME_ACK
                 or (frame.frame_type == _FRAME_STATUS and result is not None)
