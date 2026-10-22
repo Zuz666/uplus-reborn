@@ -75,6 +75,11 @@ generated Python caches are excluded, not obsolete source files.
 These checks prove packaging/integrity, not a trusted signature or appliance
 behavior. Review the selected commit and its provenance separately.
 
+CI's [single-candidate matrix handoff](release-workflow.md#ci-candidate-and-matrix-handoff)
+transfers one exact package to both Core targets and binds their receipts back
+to committed source and Actions backend identities. Local check-cache receipts
+are not a substitute for that hosted release evidence.
+
 ## Explicit-input check receipts
 
 `check` runs a shell-free command once and records its exit status, output,

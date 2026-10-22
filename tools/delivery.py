@@ -241,12 +241,11 @@ def _git(repo: Path, *args: str) -> bytes:
     return result.stdout
 
 
-def build_artifact(repo: Path, commit: str, output: Path) -> dict:
-    """Archive one resolved commit, rejecting attribute-driven omissions/substitution."""
-    resolved = _git(repo, "rev-parse", "--verify", "--end-of-options", commit + "^{commit}").decode().strip()
-    if not COMMIT.fullmatch(resolved):
-        raise ValueError("Expected a SHA-1 Git commit")
-    entries = _git(repo, "ls-tree", "-rz", resolved, "--", PACKAGE)
+def committed_package_files(repo: Path, commit: str) -> dict[str, str]:
+    """Read validated committed blobs without building another candidate/archive."""
+    if not COMMIT.fullmatch(commit):
+        raise ValueError("Expected a resolved SHA-1 Git commit")
+    entries = _git(repo, "ls-tree", "-rz", commit, "--", PACKAGE)
     expected = {}
     for entry in entries.split(b"\0"):
         if not entry:
@@ -260,6 +259,13 @@ def build_artifact(repo: Path, commit: str, output: Path) -> dict:
         expected[name] = hashlib.sha256(_git(repo, "cat-file", "blob", object_id.decode())).hexdigest()
     if not expected:
         raise ValueError("Commit contains no package files")
+    return dict(sorted(expected.items()))
+
+
+def build_artifact(repo: Path, commit: str, output: Path) -> dict:
+    """Archive one resolved commit, rejecting attribute-driven omissions/substitution."""
+    resolved = _git(repo, "rev-parse", "--verify", "--end-of-options", commit + "^{commit}").decode().strip()
+    expected = committed_package_files(repo, resolved)
     output = Path(output).absolute()
     _no_links(output)
     output.mkdir(parents=True, exist_ok=False)

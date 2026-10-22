@@ -62,6 +62,30 @@ Only the ZIP, checksum and sanitized provenance are release assets. Hashes prove
 byte integrity, not a signature, security audit or hardware compatibility. Never
 package a dirty checkout or use an unavailable private commit in public provenance.
 
+## CI candidate and matrix handoff
+
+Each CI run produces one committed candidate, then both isolated Core targets
+download that same immutable Actions artifact ID. The candidate is not rebuilt
+in each matrix job. Source verification reads actual committed blob hashes
+without generating another package. Transfer digest validation remains enabled.
+
+`producer.json` binds the candidate to the repository identity, tested commit,
+source tree, workflow source, run/attempt and explicit policy/input hashes.
+For pull requests the API head and tested synthetic merge SHA are distinct:
+neither is silently substituted for the other.
+
+Each Core target retains only its environment and five scenario receipts.
+The handoff collector requires standby, execution, profiles with persistence
+restart, discovery and discovery-identification on both pinned Core versions.
+It rejects missing/failed scenarios, wrong source or Core versions, changed
+installed members, incomplete shutdown and missing temporary-config cleanup.
+
+The `matrix-evidence-SHA-ATTEMPT` artifact records that candidate's backend
+ID/digest, per-target receipt hashes, image identities and backend receipt
+artifact metadata. Names include the attempt to avoid mixing reruns. These
+records describe runtime evidence, not a self-issued publication authorization:
+the aggregate CI and deliberate publication gates still apply.
+
 ## Publish deliberately
 
 Run the manual **Release** workflow from `master` for the accepted version and
