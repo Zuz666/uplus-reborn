@@ -15,7 +15,7 @@ research = [
 ]
 test = [
     "pytest-homeassistant-custom-component==0.13.316",
-    "ruff==0.16.0",
+    "ruff==0.17.1",
     "aiodhcpwatcher==1.2.1",
     "aiodiscover==2.7.1",
     "cached-ipaddress==1.0.1",
@@ -36,3 +36,15 @@ default-groups = ["research"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Preserve the datetime checks removed from Ruff's defaults in 0.17.
+extend-select = [
+    "DTZ001",
+    "DTZ005",
+    "DTZ006",
+    "DTZ007",
+    "DTZ011",
+    "DTZ012",
+    "DTZ901",
+]
