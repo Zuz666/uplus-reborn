@@ -33,7 +33,7 @@ assert not missing, f'Locked smoke prerequisites do not match Core: {missing}'" 
     && rm -rf /tmp/build /root/.cache
 WORKDIR /workspace
 
-FROM ghcr.io/home-assistant/home-assistant:2026.10.1@sha256:130241f28d01fa80dfa3b44f7d89781c188d8642ecab9024f079f19f9f82baa0 AS core-current
+FROM ghcr.io/home-assistant/home-assistant:2026.10.2@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 AS core-current
 COPY --from=test /usr/local/bin/node /usr/local/bin/node
 ENTRYPOINT []
 WORKDIR /workspace
