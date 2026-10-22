@@ -1055,42 +1055,37 @@ class _LocalSession:
 
         Normal proof is a matching accepted 02/03 plus an independent report.
         A post-dispatch query can instead establish requested state without that
-        response. If it precedes the transition, a later candidate report schedules
-        another query within the same deadline. The control write is never resent.
+        response. Pending snapshots schedule further serialized state queries
+        within the same deadline. The control write is never resent.
         """
         accepted = False
         observed: DeviceSnapshot | None = None
-        query_due: float | None = (
-            asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
-        )
+        query_due = asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
         while True:
-            if query_due is None:
-                envelope, frame = await self.receive_inner()
-            else:
-                try:
-                    async with asyncio.timeout_at(query_due):
-                        envelope, frame = await self.receive_inner()
-                except TimeoutError:
-                    query_due = None
-                    fresh = (await self.query_state()).snapshot
-                    if predicate(fresh):
-                        self.log_event(
-                            "postcondition_observed", proof="independent_query"
-                        )
-                        return fresh
-                    self.log_event(
-                        "postcondition_pending",
-                        control=self.control_name,
-                        power=fresh.power,
-                        buzzer_enabled=fresh.buzzer_enabled,
-                        child_lock=fresh.child_lock,
-                        upper=fresh.upper,
-                        lower=fresh.lower,
-                    )
-                    # A false result is not an ACK. Wait for a later candidate
-                    # report before scheduling another independent query.
-                    observed = None
-                    continue
+            try:
+                async with asyncio.timeout_at(query_due):
+                    envelope, frame = await self.receive_inner()
+            except TimeoutError:
+                fresh = (await self.query_state()).snapshot
+                if predicate(fresh):
+                    self.log_event("postcondition_observed", proof="independent_query")
+                    return fresh
+                self.log_event(
+                    "postcondition_pending",
+                    control=self.control_name,
+                    power=fresh.power,
+                    buzzer_enabled=fresh.buzzer_enabled,
+                    child_lock=fresh.child_lock,
+                    upper=fresh.upper,
+                    lower=fresh.lower,
+                )
+                # Pending state is not success. Check again without requiring
+                # an unsolicited report or resending the one-shot control.
+                observed = None
+                query_due = (
+                    asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
+                )
+                continue
             result = _state_result(envelope, frame)
             if envelope.sequence == sequence and (
                 frame.frame_type == _FRAME_ACK
@@ -1108,10 +1103,6 @@ class _LocalSession:
             if accepted and observed is not None:
                 self.log_event("postcondition_observed", proof="accepted_and_report")
                 return observed
-            if query_due is None and observed is not None:
-                query_due = (
-                    asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
-                )
 
     async def _send_heartbeat(self) -> None:
         sequence = self._allocate_sequence()

@@ -472,10 +472,12 @@ Controls are serialized and dispatched exactly once. A matching type `02` or
 `03` response is followed by an independent fresh postcondition report.
 Unclassified raw `05` is never relabelled an ACK: a separate `4d01`, using a
 fresh allocated sequence, may instead establish the requested state. If an
-early query precedes the transition, a later candidate report schedules another
-query within the original command deadline. The candidate alone is not proof:
-the new query must independently satisfy the postcondition. This neither
-resends the control nor accepts an unrelated queued report as a query reply.
+early query precedes the transition, further serialized state queries continue
+at the existing confirmation interval within the original command deadline,
+without depending on another unsolicited report. A candidate report alone is
+not proof: a query reply must match its allocated sequence and independently
+satisfy the postcondition. This neither resends the control nor accepts an
+unrelated queued report as a query reply.
 
 If confirmation is absent, or TCP fails after dispatch, the outcome is unknown,
 not necessarily a failed write. A later ordinary poll may restore availability
