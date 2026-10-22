@@ -130,13 +130,14 @@ class LauncherFailureTests(unittest.TestCase):
             output = Path(temporary) / "attempt"
             completed = subprocess.run(
                 [sys.executable, str(Path(__file__).with_name("hacs_acceptance.py")),
-                 "--tag", "v1.0.1", "--baseline", "v1.0.0", "--output", str(output)],
-                env={**os.environ, "PATH": ""}, capture_output=True, text=True,
+                 "--tag", "v1.0.1", "--baseline", "v1.0.0", "--output", str(output),
+                 "--docker-bin", str(Path(temporary) / "missing Docker client")],
+                capture_output=True, text=True,
                 timeout=30, check=False,
             )
             receipt = json.loads((output / "acceptance.json").read_text(encoding="utf-8"))
             self.assertNotEqual(completed.returncode, 0)
-            self.assertEqual(receipt["status"], "blocked")
+            self.assertEqual(receipt["status"], "blocked", receipt)
             self.assertFalse(receipt["success"])
             self.assertIn("DOCKER_UNAVAILABLE", receipt["error"])
             self.assertFalse((output / "inputs").exists())

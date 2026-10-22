@@ -261,6 +261,11 @@ Current public tool inventory:
   run `uv run --no-project --with pillow==12.0.0 python tools/generate_brand_icon.py`.
   The standalone command pins Pillow for reproducible rendering without
   installing Home Assistant or research dependencies.
+- `tools/hacs_acceptance.py` runs explicit real published HACS installation and
+  persistent-data upgrade acceptance from a clean Windows/Linux checkout with
+  Docker. Its pinned fixture and shared Core phase require no private workspace.
+  See [the release runbook](docs/release-workflow.md#repeatable-published-hacs-acceptance);
+  this networked scenario is separate from ordinary offline tests.
 - `npm run test:docs` runs `tools/check-docs.mjs`: Markdown lint plus strict
   Mermaid validation over one sorted, public-only file selection. Both checks
   run regardless of the first result and never mutate documents.

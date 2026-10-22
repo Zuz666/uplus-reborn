@@ -12,10 +12,24 @@ import zipfile
 from pathlib import Path
 
 from publish_release import verify_candidate
-from release import release_metadata
+from release import previous_stable, release_metadata
 
 TOOL = Path(__file__).with_name("release.py")
 PACKAGE = "custom_components/uplus_reborn"
+
+
+class StableBaselineTests(unittest.TestCase):
+    def test_latest_older_stable_uses_numeric_order_and_ignores_unpublished_versions(self):
+        releases = [
+            {"tag_name": "v1.0.9"}, {"tag_name": "v1.0.10"},
+            {"tag_name": "v1.1.0"}, {"tag_name": "v2.0.0"},
+            {"tag_name": "v1.0.12", "prerelease": True},
+            {"tag_name": "v1.0.11", "draft": True},
+        ]
+        self.assertEqual(previous_stable(releases, "1.1.0"), "v1.0.10")
+
+    def test_first_release_has_no_fabricated_upgrade_baseline(self):
+        self.assertIsNone(previous_stable([{"tag_name": "v1.0.0"}], "1.0.0"))
 
 
 class ReleaseTests(unittest.TestCase):

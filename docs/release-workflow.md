@@ -123,6 +123,10 @@ changes tags or touches live HA. Historical target tags need not equal current
 `master` or latest; add `--expect-latest` only for a new release's acceptance.
 For the first-ever release, explicitly replace `--baseline` with `--first-release`;
 that mode proves fresh installation/restart, not an unavailable prior upgrade.
+Select a non-default client with `--docker-bin` or `UPLUS_DOCKER_BIN`, matching
+the delivery tool's portable executable-path convention. Client lookup failure
+is recorded before any GitHub download; an empty `PATH` is not a portable test
+of executable absence on Windows.
 
 The runner pins official HACS bytes in `tools/hacs-fixture.json` and uses the
 digest-pinned `core-current` Docker target. Downloaded release members must match
@@ -138,6 +142,22 @@ failures and cleanup. Docker/network/rate-limit failures are not acceptance.
 Only ephemeral repository-scoped Actions tokens may enter the container; local
 installer workers use anonymous public access and need no personal token.
 The ordinary offline tooling tests never download HACS or contact GitHub.
+
+### Hosted acceptance and release outcome
+
+Use **Published HACS acceptance** in Actions for a repeatable read-only run:
+provide the existing target/baseline tags, or explicitly choose first-release
+mode. Do not rerun the publisher merely to repeat acceptance. Historical runs
+leave the latest assertion disabled. Per-attempt sanitized receipts are retained
+as `hacs-acceptance-RUN_ID-ATTEMPT` artifacts.
+
+The Release workflow freezes the greatest older published stable baseline before
+publication and calls the same read-only workflow afterward, with latest
+selection required. The acceptance job has no release write permission. A failed
+post-publication check means **published, acceptance failed or blocked**; assets
+remain immutable and the release work item stays open. The workflow summary
+distinguishes that state from accepted, read-only preparation and an uncertain
+publication. Preserve receipts and inspect actual state before any further write.
 
 Licensed under [CC BY 4.0](LICENSE). Attribution: U+ Reborn contributors,
 [U+ Reborn repository](https://github.com/Zuz666/uplus-reborn).

@@ -22,6 +22,23 @@ VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
 ASSET = "uplus_reborn.zip"
 
 
+def previous_stable(releases: list[dict], version: str) -> str | None:
+    """Freeze the greatest published stable version below the new target."""
+    if not VERSION.fullmatch(version):
+        raise ValueError("Expected a stable release version")
+    target = tuple(map(int, version.split(".")))
+    chosen = None
+    chosen_version = (-1, -1, -1)
+    for released in releases:
+        tag = released.get("tag_name", "")
+        if released.get("draft") or released.get("prerelease") or not tag.startswith("v") or not VERSION.fullmatch(tag[1:]):
+            continue
+        candidate = tuple(map(int, tag[1:].split(".")))
+        if chosen_version < candidate < target:
+            chosen, chosen_version = tag, candidate
+    return chosen
+
+
 def git(repo: Path, *args: str) -> bytes:
     """Read committed release metadata without depending on checkout state."""
     result = subprocess.run(

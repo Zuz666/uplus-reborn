@@ -288,6 +288,16 @@ Recorder initialization precedes entity listeners. All appliance traffic remains
 synthetic loopback; this verifies package loading and data preservation, not a
 HACS download or hardware behavior. Real HACS acceptance is still separate.
 
+For actual published downloads, use the maintained
+[`hacs_acceptance.py` command](release-workflow.md#repeatable-published-hacs-acceptance).
+It verifies immutable tag/source/asset identity, then uses real HACS and the same
+fresh-process user-data invariants. The
+[read-only workflow](../.github/workflows/hacs-acceptance.yml) can repeat an
+existing release's acceptance independently of publication, including historical
+tags that are no longer latest. Its ephemeral GitHub read token is available to
+installer workers only, never Core workers. A failure is explicit and does not
+authorize republishing or changing immutable assets.
+
 ## Completion, not endless rechecking
 
 A change is ready when its declared behavior is exercised, affected contracts are
