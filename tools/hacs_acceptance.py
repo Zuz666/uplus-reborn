@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline.add_argument("--baseline")
     baseline.add_argument("--first-release", action="store_true", help="Explicit fresh-install-only bootstrap")
     parser.add_argument("--core-target", choices=("core-current",), default="core-current")
+    parser.add_argument("--docker-bin", default=os.environ.get("UPLUS_DOCKER_BIN", "docker"))
     parser.add_argument("--expect-latest", action="store_true")
     parser.add_argument("--output", type=Path, required=True, help="New, unoccupied output directory")
     args = parser.parse_args(argv)
@@ -131,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         output.mkdir(parents=True)
         owns_output = True
         _write_json(output / "acceptance.json", result)
-        require_docker()
+        require_docker(args.docker_bin)
         inputs, receipts = output / "inputs", output / "receipts"
         inputs.mkdir()
         receipts.mkdir()
@@ -146,9 +147,9 @@ def main(argv: list[str] | None = None) -> int:
             result["previous"] = fetch_release(args.repository, args.baseline, inputs / "baseline")
         if args.expect_latest and api(f"repos/{args.repository}/releases/latest")["tag_name"] != args.tag:
             raise ValueError("Target is not the latest stable release")
-        image = ensure_docker_image(TOOLS.parent, args.core_target)
+        image = ensure_docker_image(TOOLS.parent, args.core_target, docker_bin=args.docker_bin)
         result["environment"] = image
-        command = ["docker", "run", "--rm", "--init", "--name", name, "--network", "bridge",
+        command = [args.docker_bin, "run", "--rm", "--init", "--name", name, "--network", "bridge",
                    "--mount", f"type=bind,src={TOOLS.parent},dst=/workspace,readonly",
                    "--mount", f"type=bind,src={inputs},dst=/inputs,readonly",
                    "--mount", f"type=bind,src={receipts},dst=/evidence", "--workdir", "/tmp"]
@@ -174,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                       error=f"{type(error).__name__}: {error}".split("?", 1)[0][:1000])
         if isinstance(error, subprocess.TimeoutExpired):
             try:
-                cleanup = subprocess.run(["docker", "rm", "--force", name], capture_output=True, check=False, timeout=45)
+                cleanup = subprocess.run([args.docker_bin, "rm", "--force", name], capture_output=True, check=False, timeout=45)
                 result["timeout_container_removed"] = cleanup.returncode == 0
             except (OSError, subprocess.TimeoutExpired):
                 result["timeout_container_removed"] = False

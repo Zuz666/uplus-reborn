@@ -123,6 +123,10 @@ changes tags or touches live HA. Historical target tags need not equal current
 `master` or latest; add `--expect-latest` only for a new release's acceptance.
 For the first-ever release, explicitly replace `--baseline` with `--first-release`;
 that mode proves fresh installation/restart, not an unavailable prior upgrade.
+Select a non-default client with `--docker-bin` or `UPLUS_DOCKER_BIN`, matching
+the delivery tool's portable executable-path convention. Client lookup failure
+is recorded before any GitHub download; an empty `PATH` is not a portable test
+of executable absence on Windows.
 
 The runner pins official HACS bytes in `tools/hacs-fixture.json` and uses the
 digest-pinned `core-current` Docker target. Downloaded release members must match
