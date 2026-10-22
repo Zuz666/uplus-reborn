@@ -231,6 +231,10 @@ ZIP members, checksums, notes and provenance against the checked-out commit.
 This exercises the real GitHub Artifacts backend without publishing a release,
 executing downloaded code or consuming another run's privileged artifacts.
 
+Uploads retain archived format and explicit artifact names. Raw single-file
+upload mode changes name/layout semantics and is not used for release
+candidates or synthetic receipts.
+
 The HACS job requires GitHub's license endpoint to identify the exact checked
 commit as MIT. HACS's own license check reads default-branch repository metadata
 instead, so only that duplicate check is excluded; it cannot validate a license
