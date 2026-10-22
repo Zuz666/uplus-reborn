@@ -16,7 +16,13 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
-from delivery import PACKAGE, build_artifact, extract_artifact
+from delivery import (
+    PACKAGE,
+    build_artifact,
+    committed_package_files,
+    extract_artifact,
+    load_artifact,
+)
 
 VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
 ASSET = "uplus_reborn.zip"
@@ -93,6 +99,34 @@ def release_metadata(repo: Path, commit: str, expected: str | None = None) -> di
         "schema": 1, "commit": resolved, "version": version,
         "tag": f"v{version}", "date": heading.group(2), "notes": notes + "\n",
     }
+
+
+def verify_candidate(repo: Path, directory: Path, metadata: dict) -> dict:
+    """Bind uploaded bytes to the validated committed package and release notes."""
+    artifact = load_artifact(directory / "bundle")
+    if artifact["files"] != committed_package_files(repo, metadata["commit"]):
+        raise ValueError("Candidate package differs from the actual committed source")
+    provenance = json.loads((directory / "release.json").read_text(encoding="utf-8"))
+    members = {name.removeprefix("custom_components/uplus_reborn/"): digest for name, digest in artifact["files"].items()}
+    digest = hashlib.sha256((directory / ASSET).read_bytes()).hexdigest()
+    expected = {
+        "schema": 1, "commit": metadata["commit"], "version": metadata["version"],
+        "asset": ASSET, "sha256": digest, "files": dict(sorted(members.items())),
+    }
+    if artifact["commit"] != metadata["commit"] or provenance != expected:
+        raise ValueError("Candidate provenance does not match the selected commit/package")
+    if (directory / "SHA256SUMS").read_text(encoding="utf-8") != f"{digest}  {ASSET}\n":
+        raise ValueError("Candidate checksum file differs")
+    if (directory / "release-notes.md").read_text(encoding="utf-8") != metadata["notes"]:
+        raise ValueError("Candidate release notes differ from the committed changelog")
+    with zipfile.ZipFile(directory / ASSET) as archive:
+        names = archive.namelist()
+        if len(names) != len(members) or set(names) != set(members):
+            raise ValueError("ZIP has duplicate, unexpected or missing members")
+        for name, expected_digest in members.items():
+            if hashlib.sha256(archive.read(name)).hexdigest() != expected_digest:
+                raise ValueError(f"ZIP member differs from the committed package: {name}")
+    return provenance
 
 
 def build_release(repo: Path, commit: str, output: Path, expected: str | None = None) -> dict:

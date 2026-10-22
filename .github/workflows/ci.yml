@@ -20,6 +20,9 @@ jobs:
   documentation:
     uses: ./.github/workflows/docs.yml
   delivery:
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/delivery.yml
   security:
     permissions:

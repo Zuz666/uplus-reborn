@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from delivery import build_artifact, load_artifact
+import release as release_tools
 from release import ASSET, VERSION, release_metadata
 
 ASSETS = (ASSET, "SHA256SUMS", "release.json")
@@ -70,36 +70,6 @@ def validate_remote_state(metadata: dict, branch: dict, tags: list, releases: li
                 raise ValueError("Release version must be newer than every existing version tag/release")
 
 
-def verify_candidate(repo: Path, directory: Path, metadata: dict) -> dict:
-    """Bind uploaded bytes to the validated committed package and release notes."""
-    artifact = load_artifact(directory / "bundle")
-    with tempfile.TemporaryDirectory(prefix="uplus-release-source-") as temporary:
-        committed = build_artifact(repo, metadata["commit"], Path(temporary) / "bundle")
-    if artifact["files"] != committed["files"]:
-        raise ValueError("Candidate package differs from the actual committed source")
-    provenance = json.loads((directory / "release.json").read_text(encoding="utf-8"))
-    members = {name.removeprefix("custom_components/uplus_reborn/"): digest for name, digest in artifact["files"].items()}
-    digest = hashlib.sha256((directory / ASSET).read_bytes()).hexdigest()
-    expected = {
-        "schema": 1, "commit": metadata["commit"], "version": metadata["version"],
-        "asset": ASSET, "sha256": digest, "files": dict(sorted(members.items())),
-    }
-    if artifact["commit"] != metadata["commit"] or provenance != expected:
-        raise ValueError("Candidate provenance does not match the selected commit/package")
-    if (directory / "SHA256SUMS").read_text(encoding="utf-8") != f"{digest}  {ASSET}\n":
-        raise ValueError("Candidate checksum file differs")
-    if (directory / "release-notes.md").read_text(encoding="utf-8") != metadata["notes"]:
-        raise ValueError("Candidate release notes differ from the committed changelog")
-    with zipfile.ZipFile(directory / ASSET) as archive:
-        names = archive.namelist()
-        if len(names) != len(members) or set(names) != set(members):
-            raise ValueError("ZIP has duplicate, unexpected or missing members")
-        for name, expected_digest in members.items():
-            if hashlib.sha256(archive.read(name)).hexdigest() != expected_digest:
-                raise ValueError(f"ZIP member differs from the committed package: {name}")
-    return provenance
-
-
 def tag_commit(repository: str, tag: str) -> str:
     target = api(f"repos/{repository}/git/ref/tags/{tag}")["object"]
     seen = set()
@@ -116,7 +86,7 @@ def tag_commit(repository: str, tag: str) -> str:
 def publish(repo: Path, repository: str, metadata: dict, directory: Path, *, approve: bool) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Expected owner/repository")
-    provenance = verify_candidate(repo, directory, metadata)
+    provenance = release_tools.verify_candidate(repo, directory, metadata)
     repository_info = api(f"repos/{repository}")
     if repository_info.get("default_branch") != "master" or repository_info.get("private"):
         raise ValueError("HACS publication requires a public repository with default master")

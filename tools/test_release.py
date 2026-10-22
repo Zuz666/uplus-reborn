@@ -11,8 +11,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from publish_release import verify_candidate
-from release import previous_stable, release_metadata
+from release import previous_stable, release_metadata, verify_candidate
 
 TOOL = Path(__file__).with_name("release.py")
 PACKAGE = "custom_components/uplus_reborn"
