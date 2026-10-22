@@ -334,7 +334,7 @@ For development and isolated testing, copy `custom_components/uplus_reborn`
 into the Home Assistant configuration directory as
 `custom_components/uplus_reborn`, then restart Home Assistant.
 This bypasses HACS repository validation and packaging; it is not proof of a
-HACS installation. Supported user distribution is through HACS once published.
+HACS installation. Supported user distribution is through HACS.
 
 ## Configuration
 

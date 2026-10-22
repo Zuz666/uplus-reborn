@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-GB
+tone_instructions: >-
+  Be concise and evidence-first. Prioritize correctness, security and consumer-visible
+  regressions. Cite the affected path and failure scenario; label uncertainty.
+  Avoid style nits already enforced by CI and speculative scope expansion.
+early_access: false
+inheritance: false
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_info: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: true
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+  poem: false
+  # Keep manifests AND lockfiles visible for dependency/supply-chain review.
+  # These exact patterns override CodeRabbit's built-in lockfile exclusions.
+  path_filters:
+    - "**/*.lock"
+    - "**/package-lock.json"
+    - "!**/.local/**"
+    - "!build/**"
+  path_instructions:
+    - path: "custom_components/uplus_reborn/protocol/**"
+      instructions: >-
+        Check stream framing, strict lengths/checksums, escaping, sequence and
+        independent postcondition correlation. Raw 05 is not ACK. Unknown write
+        outcomes must not become optimistic success or automatic retries. Require
+        exact-model evidence for encodings; other Haier models are not proof.
+    - path: "custom_components/uplus_reborn/**"
+      instructions: >-
+        Keep frames out of HA entities and preserve async serialized access,
+        immutable snapshots and typed intents. Preserve registry/statistic identity,
+        units, preferences and profiles. Missing readback is unavailable/unknown,
+        never filled from drafts. Inspect control opt-in, in-lock preconditions,
+        cancellation and uncertain outcomes. Credentials are onboarding-only;
+        diagnostics must redact secrets and identifiers. Do not request live commands.
+    - path: "custom_components/uplus_reborn/translations/*.json"
+      instructions: >-
+        Use the selected model terminology and bilingual name register under
+        docs/terminology, as required by CONTRIBUTING.md. Preserve key/placeholder
+        parity, exact runtime option values and deliberate grouping spaces.
+        en.json is canonical; do not introduce strings.json or a generator.
+    - path: "tests/**"
+      instructions: >-
+        Prefer isolated deterministic consumer-visible behavior, boundaries and
+        state transitions. Reject source-text assertions, copied tables, mock echoes
+        and wording-only tests. Normal tests must not contact hardware. Unchanged
+        byte-bound evidence may be reused; do not demand unrelated suites or live proof.
+    - path: "{.github/**,tools/**,pyproject.toml,uv.lock,package.json,package-lock.json,hacs.json}"
+      instructions: >-
+        Check least-privilege tokens, untrusted PR input, immutable Action/container
+        pins and manifest/lock consistency. Keep master-based protected PRs and
+        exact-commit immutable releases; no ordinary version bump, tag move or asset
+        replacement. Public tools must work without private files on Windows/Linux;
+        HA pytest/Ruff/Core verification uses reproducible Docker, not WSL or .venv.
+    - path: "{README.md,CONTRIBUTING.md,SECURITY.md,docs/**}"
+      instructions: >-
+        Separate source claims, inference, offline/runtime proof and physical evidence.
+        docs/protocol.md covers appliance wire semantics, not HA entities or drafts.
+        Keep terminology model-specific; do not copy manuals or expose private
+        artifacts. docs/ is CC BY 4.0 with project attribution; other material is MIT.
+        Check changed public contracts and stale release/installation statements.
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 2
+    # Empty extends no branches: the repository default (master) is always reviewed.
+    base_branches: []
+    ignore_usernames: []
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+chat:
+  art: false
+  auto_reply: false
+  integrations:
+    jira:
+      usage: disabled
+    linear:
+      usage: disabled
+knowledge_base:
+  automatic_linking_mode: disabled
+  linked_repositories: []
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - CONTRIBUTING.md
+      - SECURITY.md
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+  jira:
+    usage: disabled
+  linear:
+    usage: disabled
+  mcp:
+    usage: disabled
+issue_enrichment:
+  auto_enrich:
+    enabled: false
+  planning:
+    enabled: false
+    auto_planning:
+      enabled: false
+  labeling:
+    auto_apply_labels: false
