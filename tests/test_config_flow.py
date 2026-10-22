@@ -475,6 +475,7 @@ async def test_options_flow_requires_explicit_control_opt_in(
         ("stale", False, "unknown"),
         ("never", False, "unknown"),
         ("never", True, "offline"),
+        ("never", True, "offline_polling_disabled"),
     ],
 )
 async def test_options_show_cached_connection_without_probing(
@@ -487,6 +488,8 @@ async def test_options_show_cached_connection_without_probing(
     """Opening options distinguishes fresh contact, failure and unknown state."""
     entry = _entry()
     entry.add_to_hass(hass)
+    if status == "offline_polling_disabled":
+        hass.config_entries.async_update_entry(entry, pref_disable_polling=True)
     client = UwtClient(host=HOST, port=PORT, device_id=DEVICE_ID)
     coordinator = UplusRebornCoordinator(hass, entry, client)
     entry.runtime_data = coordinator

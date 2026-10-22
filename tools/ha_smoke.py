@@ -573,6 +573,9 @@ async def _exercise(
             # Add after Core startup: the DHCP dependency's startup-only network
             # discovery is outside this manually routed fixture's scope. Its real
             # setup still runs; no production read, entity or coordinator is mocked.
+            if scenario == "offline":
+                # Keep the known endpoint but refuse the very first connection.
+                await peer.close()
             if scenario == "profiles_restart":
                 entry = hass.config_entries.async_get_entry(result["profile_entry_id"])
                 _require(entry is not None, "Core restart lost the persisted config entry")
@@ -586,7 +589,7 @@ async def _exercise(
                     version=1, minor_version=1, domain=DOMAIN,
                     title="Uplus isolated smoke", source="user", unique_id=DEVICE_ID,
                     data={"host": "127.0.0.1", "port": peer.port, "device_id": DEVICE_ID},
-                    options={"enable_verified_controls": scenario.startswith("profiles"), "poll_interval": 15},
+                    options={"enable_verified_controls": scenario.startswith("profiles") or scenario == "offline", "poll_interval": 15},
                     discovery_keys=MappingProxyType({}), subentries_data=(),
                 )
                 await hass.config_entries.async_add(entry)
@@ -594,7 +597,8 @@ async def _exercise(
             result["entry_state"] = entry.state.value
             _require(entry.state is ConfigEntryState.LOADED, "Synthetic entry did not load")
             coordinator = entry.runtime_data
-            _require(coordinator.last_update_success, "Initial authoritative read failed")
+            if scenario != "offline":
+                _require(coordinator.last_update_success, "Initial authoritative read failed")
             imported = sys.modules[f"custom_components.{DOMAIN}"]
             imported_path = Path(imported.__file__).resolve()
             _require(imported_path == (root / PACKAGE / "__init__.py").resolve(),
@@ -607,6 +611,67 @@ async def _exercise(
                 row.unique_id.removeprefix(f"{DEVICE_ID}_"): row.entity_id
                 for row in registered if row.domain == "sensor" and row.platform == DOMAIN
             }
+
+            if scenario == "offline":
+                _require(coordinator.data is None and not coordinator.last_update_success,
+                         "Offline startup fabricated an authoritative snapshot")
+                _require(not peer.queries, "Offline startup unexpectedly reached a peer")
+                identities = {(row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
+                              for row in registered}
+                power_id = next(row.entity_id for row in registered
+                                if row.domain == "binary_sensor"
+                                and row.unique_id == f"{DEVICE_ID}_power")
+                start_id = next(row.entity_id for row in registered
+                                if row.domain == "button"
+                                and row.unique_id == f"{DEVICE_ID}_upper_start")
+                _require(hass.states.get(power_id).state == "unavailable"
+                         and hass.states.get(start_id).state == "unavailable",
+                         "Offline initial state or command was available")
+                result["offline_startup"] = {
+                    "entry_state": entry.state.value,
+                    "snapshot_absent": coordinator.data is None,
+                    "power_state": hass.states.get(power_id).state,
+                    "start_state": hass.states.get(start_id).state,
+                    "transitions": [],
+                }
+                for online in (True, False, True):
+                    updated = asyncio.Event()
+
+                    def on_update(
+                        connected: bool = online, signal: asyncio.Event = updated,
+                    ) -> None:
+                        if coordinator.last_update_success is connected:
+                            signal.set()
+
+                    unsubscribe = coordinator.async_add_listener(on_update)
+                    started = time.monotonic()
+                    try:
+                        if online:
+                            await peer.start(port=peer.port)
+                        else:
+                            await peer.close()
+                        # No manual refresh: production interval polling owns recovery.
+                        async with asyncio.timeout(35):
+                            await updated.wait()
+                        await hass.async_block_till_done()
+                    finally:
+                        unsubscribe()
+                    _require(entry.state is ConfigEntryState.LOADED
+                             and entry.runtime_data is coordinator,
+                             "Connectivity change replaced or unloaded the entry")
+                    _require(hass.states.get(power_id).state ==
+                             ("on" if online else "unavailable"),
+                             "Connectivity change left the wrong entity availability")
+                    result["offline_startup"]["transitions"].append({
+                        "connected": online, "elapsed_seconds": time.monotonic() - started,
+                        "power_state": hass.states.get(power_id).state,
+                        "query_count": len(peer.queries),
+                    })
+                _require(identities == {
+                    (row.domain, row.platform, row.unique_id): (row.id, row.entity_id)
+                    for row in er.async_entries_for_config_entry(registry, entry.entry_id)
+                }, "Offline recovery changed entity identities")
+                result["offline_startup"]["identities_preserved"] = True
 
             async def observe(label: str, expected: str, *, refresh: bool) -> None:
                 before = len(peer.queries)
@@ -756,12 +821,17 @@ async def _exercise(
                             serve_info["commands"].append("stop")
                             break
                         _require(
-                            command in {"standby", "running", "paused"},
+                            command in {"standby", "running", "paused", "offline", "online"},
                             f"Unsupported --serve command: {command!r}",
                         )
                         serve_info["commands"].append(command)
                         stage_label = f"serve_{len(serve_info['commands'])}_{command}"
-                        await observe(stage_label, command, refresh=True)
+                        if command == "offline":
+                            await peer.close()
+                        elif command == "online":
+                            await peer.start(port=peer.port)
+                        else:
+                            await observe(stage_label, command, refresh=True)
                         print(
                             json.dumps({
                                 "event": "stage",
@@ -829,7 +899,7 @@ def main() -> int:
                         help="New JSON result file (existing files are never overwritten)")
     parser.add_argument(
         "--scenario",
-        choices=("standby", "execution", "profiles", "discovery", "discovery-identification"),
+        choices=("standby", "execution", "profiles", "discovery", "discovery-identification", "offline"),
         default="standby",
     )
     parser.add_argument(

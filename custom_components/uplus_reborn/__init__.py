@@ -7,7 +7,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 
@@ -109,7 +109,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: UplusRebornConfigEntry) 
     except ValueError as error:
         raise ConfigEntryError(str(error)) from error
     # Listen before either setup await; Core removes this listener if setup fails.
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except ConfigEntryNotReady:
+        # A configured washer may normally be switched off. Register unavailable
+        # entities so their listeners keep ordinary coordinator polling active.
+        error = coordinator.health.last_error
+        if error is None or error.cause not in {
+            "connection_closed",
+            "connection_error",
+            "timeout",
+        }:
+            raise
     await async_update_entry(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     setup_complete = True

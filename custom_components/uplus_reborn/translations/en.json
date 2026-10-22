@@ -136,7 +136,8 @@
     "connection_status": {
       "options": {
         "connected": "Connected",
-        "offline": "Offline",
+        "offline": "Offline — the washing machine may be switched off or disconnected from the network. Reconnecting automatically.",
+        "offline_polling_disabled": "Offline — the washing machine may be switched off or disconnected from the network. Automatic polling is disabled in Home Assistant.",
         "unknown": "Not yet known"
       }
     },
