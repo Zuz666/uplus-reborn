@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -19,6 +20,7 @@ from homeassistant.const import CONF_EMAIL, CONF_HOST, CONF_PASSWORD, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.translation import async_get_translations
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.uplus_reborn.cloud import (
@@ -34,6 +36,7 @@ from custom_components.uplus_reborn.const import (
     MODEL,
     SUPPORTED_WIFI_TYPE,
 )
+from custom_components.uplus_reborn.coordinator import UplusRebornCoordinator
 from custom_components.uplus_reborn.discovery import DeviceNotFound
 from custom_components.uplus_reborn.protocol import (
     CannotConnect,
@@ -462,6 +465,47 @@ async def test_options_flow_requires_explicit_control_opt_in(
         CONF_ENABLE_VERIFIED_CONTROLS: True,
         CONF_POLL_INTERVAL: 15,
     }
+
+
+@pytest.mark.parametrize(
+    ("reading", "failed", "status"),
+    [
+        ("fresh", False, "connected"),
+        ("fresh", True, "offline"),
+        ("stale", False, "unknown"),
+        ("never", False, "unknown"),
+        ("never", True, "offline"),
+    ],
+)
+async def test_options_show_cached_connection_without_probing(
+    hass: HomeAssistant,
+    standby_snapshot: DeviceSnapshot,
+    reading: str,
+    failed: bool,
+    status: str,
+) -> None:
+    """Opening options distinguishes fresh contact, failure and unknown state."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    client = UwtClient(host=HOST, port=PORT, device_id=DEVICE_ID)
+    coordinator = UplusRebornCoordinator(hass, entry, client)
+    entry.runtime_data = coordinator
+    with patch.object(UwtClient, "read_state", AsyncMock()) as read_state:
+        if reading != "never":
+            read_state.return_value = standby_snapshot
+            await coordinator.async_refresh()
+            if reading == "stale":
+                coordinator._last_success = datetime.now(UTC) - timedelta(minutes=2)
+        if failed:
+            read_state.side_effect = CannotConnect("offline")
+            await coordinator.async_refresh()
+        read_state.reset_mock()
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        labels = await async_get_translations(hass, "en", "selector", {DOMAIN})
+        assert result["description_placeholders"]["connection_status"] == labels[
+            f"component.{DOMAIN}.selector.connection_status.options.{status}"
+        ]
+        read_state.assert_not_awaited()
 
 
 @pytest.mark.parametrize("interval", [15, 20, 30])

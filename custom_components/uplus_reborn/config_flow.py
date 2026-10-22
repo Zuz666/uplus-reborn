@@ -1006,8 +1006,24 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         coordinator.clear_drafts()
                 return self.async_create_entry(title="", data=options)
 
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        status = "unknown"
+        if coordinator is not None:
+            health = coordinator.health
+            if health.freshness == "fresh":
+                status = "connected"
+            elif health.last_error is not None and not health.available:
+                status = "offline"
+        labels = await async_get_translations(
+            self.hass, self.hass.config.language, "selector", {DOMAIN}
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(schema, user_input),
             errors=errors,
+            description_placeholders={
+                "connection_status": labels[
+                    f"component.{DOMAIN}.selector.connection_status.options.{status}"
+                ],
+            },
         )
