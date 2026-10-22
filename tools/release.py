@@ -16,8 +16,10 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+import github_api as github
 from delivery import (
     PACKAGE,
+    _no_links,
     build_artifact,
     committed_package_files,
     extract_artifact,
@@ -171,6 +173,38 @@ def build_release(repo: Path, commit: str, output: Path, expected: str | None = 
         raise
 
 
+def baseline_artifact(repo: Path, repository: str, tag: str, output: Path) -> dict:
+    """Fetch one actual public stable tag without moving a checkout/branch."""
+    if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+            or not tag.startswith("v") or not VERSION.fullmatch(tag[1:])):
+        raise ValueError("Expected public owner/repository and a stable vMAJOR.MINOR.PATCH baseline")
+    output = output.absolute()
+    _no_links(output)
+    if output.exists():
+        raise FileExistsError("Baseline output already exists; use a new directory")
+    info = github.api(f"repos/{repository}")
+    if info.get("private") is not False or info.get("full_name") != repository:
+        raise ValueError("Baseline must belong to the exact public repository")
+    commit = github.tag_commit(repository, tag)
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Baseline tag must resolve to a full Git commit")
+    with tempfile.TemporaryDirectory(prefix="uplus-release-baseline-") as temporary:
+        source = Path(temporary) / "repository"
+        git(repo, "init", "--bare", "--object-format=sha1", "--initial-branch=master", str(source))
+        fetched = subprocess.run(
+            ["git", "-C", str(source), "fetch", "--no-tags", "--depth=1", f"https://github.com/{repository}.git", commit],
+            capture_output=True, check=False, timeout=120,
+        )
+        if fetched.returncode:
+            raise ValueError(f"Cannot fetch public baseline {tag} at {commit}; inspect Git/network access")
+        release_metadata(source, commit, tag[1:])
+        if github.tag_commit(repository, tag) != commit:
+            raise ValueError("Baseline tag changed during fetch")
+        artifact = build_artifact(source, commit, output)
+    return {"schema": 1, "scenario": "baseline-artifact", "repository": repository,
+            "tag": tag, "commit": commit, "artifact": artifact, "temporary_repo_removed": not source.exists()}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
@@ -181,15 +215,22 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--version")
         if action == "build":
             command.add_argument("--output", type=Path, required=True)
+    baseline = commands.add_parser("baseline")
+    baseline.add_argument("--repo", type=Path, default=Path.cwd())
+    baseline.add_argument("--repository", required=True)
+    baseline.add_argument("--tag", required=True)
+    baseline.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.action == "build":
             result = build_release(args.repo, args.commit, args.output, args.version)
+        elif args.action == "baseline":
+            result = baseline_artifact(args.repo, args.repository, args.tag, args.output)
         else:
             result = release_metadata(args.repo, args.commit, args.version)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    except (ValueError, KeyError, TypeError, OSError) as error:
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, github.GitHubOperationError) as error:
         print(f"release: {error}", file=sys.stderr)
         return 1
 

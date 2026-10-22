@@ -261,10 +261,10 @@ Current public tool inventory:
   run `uv run --no-project --with pillow==12.0.0 python tools/generate_brand_icon.py`.
   The standalone command pins Pillow for reproducible rendering without
   installing Home Assistant or research dependencies.
-- `tools/release_evidence.py` produces and verifies source-bound CI candidate
-  and complete finite-matrix receipts. See
-  [the handoff contract](docs/release-workflow.md#ci-candidate-and-matrix-handoff);
-  a self-reported JSON success alone never authorizes publication.
+- `tools/release_evidence.py` produces CI candidate/matrix receipts and selects
+  or audits authenticated exact-master source evidence. See
+  [the handoff contract](docs/release-workflow.md#trusted-master-consumption);
+  local JSON success and PR artifacts never authorize publication.
 - `tools/hacs_acceptance.py` runs explicit real published HACS installation and
   persistent-data upgrade acceptance from a clean Windows/Linux checkout with
   Docker. Its pinned fixture and shared Core phase require no private workspace.

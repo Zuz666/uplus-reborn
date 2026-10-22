@@ -25,10 +25,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  candidate:
+  inspect:
+    name: Inspect accepted master evidence
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     outputs:
       commit: ${{ steps.guard.outputs.commit }}
+      run_id: ${{ steps.source.outputs.run_id }}
+      run_attempt: ${{ steps.source.outputs.run_attempt }}
+      candidate_id: ${{ steps.source.outputs.candidate_id }}
+      matrix_id: ${{ steps.source.outputs.matrix_id }}
+      inspection_id: ${{ steps.upload.outputs.artifact-id }}
       baseline: ${{ steps.baseline.outputs.tag }}
       first_release: ${{ steps.baseline.outputs.first_release }}
     steps:
@@ -50,6 +61,38 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
+      - name: Select the exact trusted master CI run and attempt
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-project --python 3.13 python tools/release_evidence.py select \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" \
+            --output build/selection.json --github-output "$GITHUB_OUTPUT"
+      - name: Download the original source-run candidate by immutable ID
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.run_id }}
+          artifact-ids: ${{ steps.source.outputs.candidate_id }}
+          path: build/release
+      - name: Download the original source-run matrix by immutable ID
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.run_id }}
+          artifact-ids: ${{ steps.source.outputs.matrix_id }}
+          path: build/source-evidence
+      - name: Verify authenticated source, complete matrix and exact bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-project --python 3.13 python tools/release_evidence.py audit \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" \
+            --candidate build/release --selection build/selection.json \
+            --matrix build/source-evidence/matrix-evidence.json --output build/evidence.json
       - name: Freeze the pre-publication stable baseline
         id: baseline
         env:
@@ -59,60 +102,44 @@ jobs:
         run: |
           uv run --no-project --python 3.13 python - <<'PY'
           import os
-          from publish_release import pages
+          from github_api import pages
           from release import previous_stable
           baseline = previous_stable(pages(f"repos/{os.environ['GITHUB_REPOSITORY']}/releases?per_page=100"), os.environ["VERSION"])
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"tag={baseline or ''}\nfirst_release={str(baseline is None).lower()}\n")
           PY
-      - name: Package the accepted version and commit
-        env:
-          VERSION: ${{ inputs.version }}
-        run: uv run --no-project --python 3.13 python tools/release.py build --commit "$GITHUB_SHA" --version "$VERSION" --output build/release
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          archive: true
-          name: release-candidate-${{ github.sha }}
-          path: build/release/
-          if-no-files-found: error
-          retention-days: 14
-  checks:
-    needs: candidate
-    permissions:
-      contents: read
-      actions: read
-      security-events: write
-    uses: ./.github/workflows/ci.yml
-  inspect:
-    needs: [candidate, checks]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: "0.13.4"
-          python-version: "3.13"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-candidate-${{ github.sha }}
-          path: build/release
-      - name: Inspect remote state without writes
+      - name: Preserve the independent candidate-ZIP upgrade guard
+        if: steps.baseline.outputs.first_release != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-        run: uv run --no-project --python 3.13 python tools/publish_release.py --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" --candidate build/release
+          BASELINE: ${{ steps.baseline.outputs.tag }}
+        run: |
+          uv run --no-project --python 3.13 python tools/release.py baseline \
+            --repository "$GITHUB_REPOSITORY" --tag "$BASELINE" --output build/baseline
+          uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- \
+            python3 tools/upgrade_smoke.py --from-bundle build/baseline --bundle build/release/bundle \
+            --release-zip build/release/uplus_reborn.zip --output build/candidate-upgrade.json
+      - id: upload
+        name: Retain read-only inspection and independent upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: release-inspection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/selection.json
+            build/evidence.json
+            build/candidate-upgrade.json
+          if-no-files-found: warn
+          retention-days: 14
   publish:
     if: inputs.publish
-    needs: [candidate, checks, inspect]
+    needs: inspect
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
+      actions: read
       checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -122,29 +149,48 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: Download the inspected source selection
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-candidate-${{ github.sha }}
+          artifact-ids: ${{ needs.inspect.outputs.inspection_id }}
+          path: build/inspection
+      - name: Download the original source candidate without rebuilding
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.inspect.outputs.run_id }}
+          artifact-ids: ${{ needs.inspect.outputs.candidate_id }}
           path: build/release
-      - name: Publish only after explicit owner approval
+      - name: Download the authenticated source matrix
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.inspect.outputs.run_id }}
+          artifact-ids: ${{ needs.inspect.outputs.matrix_id }}
+          path: build/source-evidence
+      - name: Publish only after explicit owner approval and fresh source checks
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: uv run --no-project --python 3.13 python tools/publish_release.py --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" --candidate build/release --approve
+        run: |
+          uv run --no-project --python 3.13 python tools/publish_release.py \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION" \
+            --candidate build/release --selection build/inspection/selection.json \
+            --matrix build/source-evidence/matrix-evidence.json --approve
   hacs:
     if: inputs.publish
-    needs: [candidate, publish]
+    needs: [inspect, publish]
     permissions:
       contents: read
     uses: ./.github/workflows/hacs-acceptance.yml
     with:
       tag: v${{ inputs.version }}
-      baseline: ${{ needs.candidate.outputs.baseline }}
-      first_release: ${{ needs.candidate.outputs.first_release == 'true' }}
+      baseline: ${{ needs.inspect.outputs.baseline }}
+      first_release: ${{ needs.inspect.outputs.first_release == 'true' }}
       expect_latest: true
   outcome:
     if: always()
-    needs: [candidate, publish, hacs]
+    needs: [inspect, publish, hacs]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,7 +204,7 @@ jobs:
           python3 - <<'PY'
           import os
           if os.environ["REQUESTED"] != "true":
-              status = "Read-only preparation; no publication requested. Inspect validation jobs for their actual result."
+              status = "Read-only evidence/upgrade audit; no publication requested or publication eligibility asserted. Inspect the audit job's actual result."
           elif os.environ["PUBLICATION"] != "success":
               status = "Publication not confirmed. Inspect actual tag/draft/assets before any mutation; never blindly rerun publication."
           elif os.environ["ACCEPTANCE"] != "success":
