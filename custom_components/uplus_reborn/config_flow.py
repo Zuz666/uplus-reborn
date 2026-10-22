@@ -1023,10 +1023,12 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = "invalid_options"
             else:
                 options.pop("connection_status", None)
-                if options[CONF_ENABLE_VERIFIED_CONTROLS] != enabled:
-                    # Discard intent before saving, even across rapid off/on saves.
-                    if coordinator is not None:
-                        coordinator.clear_drafts()
+                # Discard intent before saving, even across rapid off/on saves.
+                if (
+                    options[CONF_ENABLE_VERIFIED_CONTROLS] != enabled
+                    and coordinator is not None
+                ):
+                    coordinator.clear_drafts()
                 return self.async_create_entry(title="", data=options)
 
         return self.async_show_form(
