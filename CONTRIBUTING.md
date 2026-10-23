@@ -69,6 +69,22 @@ and verify the affected environment. Python uses `uv`; documentation tooling
 uses npm. Do not install APK-analysis or capture dependencies into integration
 runtime requirements.
 
+### Model-specific protocol documentation
+
+The [protocol index](docs/protocol.md) links specifications under
+`docs/protocol/<model>.md`; the verified target is
+[HWD120-B1558U](docs/protocol/hwd120-b1558u.md). Keep the model and applicable
+source/firmware scope explicit. For another model, add a separate reference and
+index entry with its own evidence; a document or shared port does not establish
+integration support. Extract a common protocol reference only when independent
+model evidence establishes that the contract is actually shared.
+
+Keep wire layouts, message/field semantics, source anchors, sanitized captured
+examples and unresolved meanings in these files. Exclude internal campaign
+labels/dates, deployment chronology and HA-specific behavior. Distinguish complete
+packets from excerpts/redactions and source-only formats; never invent captured
+examples. Update navigation and PR path classification when reorganizing them.
+
 ### Branches, issues and review
 
 `master` is the only persistent public branch. Use short-lived branches and pull
@@ -376,11 +392,11 @@ Immediately before a feature or bug-fix commit, synchronize every affected sourc
 - tests that define the changed observable contract;
 - affected user documentation (`README.md`) and contributor module/verification
   contracts (`CONTRIBUTING.md`);
-- `docs/protocol.md` **only** when appliance wire protocol, framing, state-word
-  coordinates, command encodings, or hardware/source protocol evidence changes
-  (never record Home Assistant entities, staged drafts, saved profiles,
-  translation keys, service handlers, Recorder internals, or coordinator classes
-  in `docs/protocol.md`); and
+- model-specific `docs/protocol/<model>.md` references **only** when appliance
+  wire protocol, framing, state-word coordinates, command encodings, or
+  hardware/source protocol evidence changes (never record Home Assistant
+  entities, staged drafts, saved profiles, translation keys, service handlers,
+  Recorder internals, or coordinator classes in protocol specifications); and
 - any related local research records or analyses.
 
 Update protected local research records when relevant, but keep them out of

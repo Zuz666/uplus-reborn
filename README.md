@@ -47,8 +47,8 @@ Implemented for one HWD120-B1558U:
 - Start, Pause, Resume, Cancel and completed-state Reset for both drums;
 - buzzer, child lock and an explicitly enabled power switch.
 
-See the canonical [supported-command matrix](docs/protocol.md#supported-command-matrix)
-for implementation support versus the narrower physical capture evidence.
+See the [protocol command-evidence matrix](docs/protocol/hwd120-b1558u.md#supported-command-matrix)
+for source encodings and the narrower physical capture evidence.
 
 Not implemented:
 
@@ -84,7 +84,7 @@ their readback. Owner-ended intermittent rotation does not prove autonomous
 completion. Unknown command outcomes are never retroactively rewritten as
 success or retried automatically.
 
-See the [protocol documentation](docs/protocol.md) for the maintained contracts
+See the [HWD120-B1558U protocol specification](docs/protocol/hwd120-b1558u.md) for the maintained contracts
 and coverage boundaries. Installation/restart chronology is not a development
 checklist; use the commands below for independent development.
 
@@ -696,7 +696,7 @@ still apply.
 
 These shared commands are implemented from the exact-model source; implementation
 support is not a claim of physical verification. See the
-[command evidence matrix](docs/protocol.md#supported-command-matrix).
+[command evidence matrix](docs/protocol/hwd120-b1558u.md#supported-command-matrix).
 
 ### Categories and existing history
 
@@ -839,7 +839,7 @@ entity IDs, statistic IDs, and `total_increasing` semantics. This audit does not
 rescale values, relabel energy as Wh, synthesize resets, duplicate counters per
 drum, or rewrite statistical history. Category/presentation changes are
 separate from this numerical contract. See the
-[protocol accounting contract](docs/protocol.md#consumption-accounting-contract)
+[protocol accounting contract](docs/protocol/hwd120-b1558u.md#consumption-accounting-contract)
 for raw-word layouts and wire evidence boundaries.
 
 ## Diagnostics and issue reports
@@ -878,7 +878,11 @@ integration diagnostics for a more detailed redacted troubleshooting snapshot.
 
 ## Protocol documentation
 
-[`docs/protocol.md`](docs/protocol.md) specifies the UWT wire protocol, state words, command encodings and hardware/source evidence for this target. It separates captured bytes, hardware observations, source-derived capabilities and unresolved meanings, and includes packet/state-machine diagrams.
+The [protocol index](docs/protocol.md) links model-specific references.
+[HWD120-B1558U](docs/protocol/hwd120-b1558u.md) describes this target's UDP discovery,
+TCP/UWT framing, EPP state words and commands with captured packet examples.
+It separates wire observations, source-defined fields and unresolved meanings;
+it is not a generic specification for every Haier appliance.
 
 The implementation is deliberately embedded under `custom_components/uplus_reborn/protocol`. It models one verified UWT appliance profile rather than claiming a generic Haier API.
 
