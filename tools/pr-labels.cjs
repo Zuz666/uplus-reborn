@@ -11,7 +11,8 @@ function pathAreas(files) {
   const implementation = nonTests.filter((path) => !path.endsWith('.md'));
   const areas = new Set();
   for (const path of implementation.length ? implementation : nonTests) {
-    if (path.startsWith('custom_components/uplus_reborn/protocol/') || path === 'docs/protocol.md') {
+    if (path.startsWith('custom_components/uplus_reborn/protocol/')
+      || path === 'docs/protocol.md' || path.startsWith('docs/protocol/')) {
       areas.add('area:protocol');
     } else if (path.startsWith('custom_components/uplus_reborn/translations/') || path.startsWith('docs/terminology/')) {
       areas.add('area:localization');

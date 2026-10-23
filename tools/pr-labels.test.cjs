@@ -23,6 +23,14 @@ test('fallback classifies the change, not accompanying tests or documentation', 
   }).add, ['type:bug', 'area:protocol']);
 });
 
+test('model-specific protocol documentation receives a protocol area without a linked issue', () => {
+  assert.deepEqual(planLabels({
+    repository,
+    title: 'docs(protocol): clarify captured packets',
+    files: ['docs/protocol/hwd120-b1558u.md', 'README.md'],
+  }), { add: ['type:docs', 'area:protocol'], notices: [] });
+});
+
 test('manual classification wins and repeated runs do not accumulate labels', () => {
   const current = ['type:feature', 'area:localization', 'priority:P0', 'breaking-change'];
   const input = {
