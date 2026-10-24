@@ -29,7 +29,8 @@ imports, entity domains, or logger names from either.
 - reported-setting applicability: `reported_settings.py`; status platforms:
   `sensor.py`, `binary_sensor.py`; cached health: `system_health.py`
 - native controls: `select.py`, `switch.py`, `button.py`, `text.py`; atomic action: `services.py`
-- saved profiles: `profiles.py`; persistence/selection/automation behavior:
+- saved-profile operation policy/completion: `coordinator.py`; durable store:
+  `profiles.py`; native action choices: `profile_choices.py`; consumer contracts:
   `tests/test_profiles.py`
 - canonical English UI strings: `custom_components/uplus_reborn/translations/en.json`
 - tests: `tests/`
@@ -339,6 +340,11 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
 - Saved profiles persist complete typed intents in entry-bound versioned HA
   storage (`profiles.py`). Per-drum `text.py` name inputs and Save buttons create
   profiles on the native device page; selectors restore drafts locally.
+  Coordinator operations own applicable draft snapshots and post-commit listener/
+  native-choice updates; button/action callers do not arrange that sequence.
+  `profile_choices.py` owns labels and cross-entry action descriptions, also
+  refreshed on entry setup/unload. A failed commit publishes no mutation;
+  presentation failure after commit does not roll back or replay storage.
   Name inputs and drafts are transient, while saved records survive reload.
   `start_profile` supplies one immutable revision to the existing atomic Start
   path. Exercise `tests/test_profiles.py` and isolated `--scenario profiles`,

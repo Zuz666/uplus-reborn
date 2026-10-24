@@ -251,17 +251,29 @@ async def test_device_page_missing_draft_and_duplicate_are_explicit_and_non_dest
     assert c.profile_name("lower") == ""
 
 
-async def test_device_page_storage_failure_keeps_input_draft_and_existing_records(
-    hass, profile_entry
+@pytest.mark.parametrize(
+    "operation",
+    ["button", "save_profile", "update_profile", "rename_profile", "delete_profile"],
+)
+async def test_failed_profile_commit_keeps_records_and_native_state(
+    hass, profile_entry, operation
 ):
-    entry, _ = profile_entry
+    entry, device = profile_entry
     c = entry.runtime_data
     c.stage_program("upper", "spin")
     await _set_name(hass, "upper", "Existing")
     await _save_button(hass, "upper")
+    await _action(
+        hass, device, "apply_profile", profile_id=c.profiles.profiles("upper")[0].id
+    )
     existing = c.profiles.profiles()
     await _set_name(hass, "upper", "Daily")
     draft = c.draft("upper")
+    selected = c.selected_profile("upper")
+    descriptions = await async_get_all_descriptions(hass)
+    selector_id = _entity_id(er.async_get(hass), "select", "upper_profile")
+    await hass.async_block_till_done()
+    state = hass.states.get(selector_id)
     with (
         patch.object(
             c.profiles._store,
@@ -270,16 +282,66 @@ async def test_device_page_storage_failure_keeps_input_draft_and_existing_record
         ),
         pytest.raises(HomeAssistantError, match="Storage unavailable"),
     ):
-        await _save_button(hass, "upper")
+        if operation == "button":
+            await _save_button(hass, "upper")
+        elif operation == "save_profile":
+            await _action(hass, device, operation, name="Daily")
+        else:
+            data = {"profile_id": existing[0].id}
+            if operation == "rename_profile":
+                data["name"] = "Daily"
+            await _action(hass, device, operation, **data)
     assert c.profiles.profiles() == existing
     assert c.draft("upper") is draft
     assert c.profile_name("upper") == "Daily"
+    assert c.selected_profile("upper") == selected
+    await hass.async_block_till_done()
+    assert hass.states.get(selector_id) == state
+    assert await async_get_all_descriptions(hass) == descriptions
 
 
-async def test_device_page_save_snapshots_name_and_draft_without_losing_concurrent_edits(
-    hass, profile_entry
+@pytest.mark.parametrize("caller", ["button", "action"])
+async def test_refresh_error_after_save_retains_durable_profile(
+    hass, profile_entry, caller
 ):
-    entry, _ = profile_entry
+    entry, device = profile_entry
+    c = entry.runtime_data
+    c.stage_program("upper", "spin")
+    draft = c.draft("upper")
+    await _set_name(hass, "upper", "Committed")
+
+    with (
+        patch(
+            "custom_components.uplus_reborn.profile_choices.async_get_all_descriptions",
+            side_effect=HomeAssistantError("Choices unavailable"),
+        ),
+        pytest.raises(HomeAssistantError, match="Choices unavailable"),
+    ):
+        if caller == "button":
+            await _save_button(hass, "upper")
+        else:
+            await _action(hass, device, "save_profile", name="Committed")
+
+    fresh = ProfileStore(hass, entry.entry_id, DEVICE_ID)
+    await fresh.async_load()
+    (saved,) = fresh.profiles("upper")
+    assert saved.name == "Committed"
+    assert saved.revision == 1
+    assert saved.intent == draft
+    assert c.profiles.profiles("upper") == (saved,)
+    assert c.draft("upper") is draft
+    assert c.selected_profile("upper") is None
+    assert c.profile_name("upper") == "Committed"
+    await hass.async_block_till_done()
+    selector = hass.states.get(_entity_id(er.async_get(hass), "select", "upper_profile"))
+    assert selector.attributes["profiles"]["Committed"] == saved.id
+
+
+@pytest.mark.parametrize("caller", ["button", "action"])
+async def test_save_snapshots_name_and_draft_without_losing_concurrent_edits(
+    hass, profile_entry, caller
+):
+    entry, device = profile_entry
     c = entry.runtime_data
     c.stage_program("upper", "spin")
     c.stage_settings("upper", spin_rpm=400)
@@ -294,7 +356,11 @@ async def test_device_page_save_snapshots_name_and_draft_without_losing_concurre
         await persist(data)
 
     with patch.object(c.profiles._store, "async_save", side_effect=delayed_persist):
-        saving = asyncio.create_task(_save_button(hass, "upper"))
+        saving = asyncio.create_task(
+            _save_button(hass, "upper")
+            if caller == "button"
+            else _action(hass, device, "save_profile", name="Original")
+        )
         await entered.wait()
         await _set_name(hass, "upper", "Next profile")
         c.stage_settings("upper", spin_rpm=600)
@@ -328,6 +394,30 @@ async def test_device_page_opt_out_revokes_local_edits_without_losing_profiles(
     assert fresh.profiles() == (saved,)
     assert entry.runtime_data.profile_name("upper") == ""
     assert entry.runtime_data.draft("upper") is None
+
+
+async def test_save_operation_publishes_profile_to_native_consumers(hass, profile_entry):
+    entry, _ = profile_entry
+    c = entry.runtime_data
+    c.stage_program("upper", "spin")
+    draft = c.draft("upper")
+
+    saved = await c.async_save_profile("upper", "Operation save")
+    await hass.async_block_till_done()
+
+    selector = hass.states.get(_entity_id(er.async_get(hass), "select", "upper_profile"))
+    assert selector.state == "none"
+    assert selector.attributes["profiles"]["Operation save"] == saved.id
+    descriptions = await async_get_all_descriptions(hass)
+    choices = descriptions[DOMAIN]["start_profile"]["fields"]["profile_id"]["selector"][
+        "select"
+    ]["options"]
+    assert any(
+        row["value"] == saved.id and row["label"].endswith("/ Operation save")
+        for row in choices
+    )
+    assert c.draft("upper") is draft
+    assert c.selected_profile("upper") is None
 
 
 async def test_management_keeps_ids_explicit_updates_and_independent_drafts(
@@ -566,6 +656,91 @@ async def test_storage_binding_and_removal_do_not_cross_entries(hass):
     fresh_second = ProfileStore(hass, "second", DEVICE_ID)
     await fresh_second.async_load()
     assert fresh_second.profiles()[0].name == "Second"
+
+
+async def test_opted_out_actions_manage_incompatible_profiles_without_defaulting(
+    hass, standby_snapshot
+):
+    entry = _entry()
+    entry.add_to_hass(hass)
+    intent = {"program": "future_program", "future_field": ["retained"]}
+    storage = Store(hass, 1, f"{DOMAIN}.profiles.{entry.entry_id}")
+    await storage.async_save(
+        {
+            "device_id": DEVICE_ID,
+            "profiles": {
+                "stable-id": {
+                    "name": "Old",
+                    "drum": "upper",
+                    "revision": 7,
+                    "intent_version": 2,
+                    "intent": intent,
+                }
+            },
+        }
+    )
+    with patch.object(UwtClient, "read_state", return_value=standby_snapshot):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, DEVICE_ID)})
+        renamed = await _action(
+            hass, device.id, "rename_profile", profile_id="stable-id", name="Retained"
+        )
+        assert renamed == {
+            "profile_id": "stable-id",
+            "name": "Retained",
+            "drum": "upper",
+            "revision": 8,
+        }
+        persisted = await storage.async_load()
+        assert persisted["profiles"]["stable-id"]["intent"] == intent
+        for operation, data in (
+            ("save_profile", {"name": "Blocked"}),
+            ("update_profile", {"profile_id": "stable-id"}),
+        ):
+            with pytest.raises(ServiceValidationError, match="Remote controls are disabled"):
+                await _action(hass, device.id, operation, **data)
+        await _action(hass, device.id, "delete_profile", profile_id="stable-id")
+        assert entry.runtime_data.profiles.profiles() == ()
+        fresh = ProfileStore(hass, entry.entry_id, DEVICE_ID)
+        await fresh.async_load()
+        assert fresh.profiles() == ()
+
+
+async def test_profile_choices_preserve_other_entries_across_mutation_and_unload(
+    hass, profile_entry, standby_snapshot
+):
+    first, device = profile_entry
+    first.runtime_data.stage_program("upper", "spin")
+    one = await _action(hass, device, "save_profile", name="First")
+    second = _entry(controls=True, device_id="SECONDDEVICE")
+    second.add_to_hass(hass)
+
+    async def choices():
+        descriptions = await async_get_all_descriptions(hass)
+        return {
+            row["value"]: row["label"]
+            for row in descriptions[DOMAIN]["start_profile"]["fields"]["profile_id"][
+                "selector"
+            ]["select"]["options"]
+        }
+
+    with patch.object(UwtClient, "read_state", return_value=standby_snapshot):
+        assert await hass.config_entries.async_setup(second.entry_id)
+        second.runtime_data.stage_program("lower", "spin")
+        two = await second.runtime_data.async_save_profile("lower", "Second")
+        assert set(await choices()) == {one["profile_id"], two.id}
+        await _action(
+            hass, device, "rename_profile", profile_id=one["profile_id"], name="Renamed"
+        )
+        labels = await choices()
+        assert labels[one["profile_id"]].endswith("/ Renamed")
+        assert labels[two.id].endswith("/ Second")
+        await _action(hass, device, "delete_profile", profile_id=one["profile_id"])
+        assert set(await choices()) == {two.id}
+        assert await hass.config_entries.async_unload(second.entry_id)
+        assert await choices() == {}
+        assert await hass.config_entries.async_setup(second.entry_id)
+        assert set(await choices()) == {two.id}
 
 
 @pytest.mark.parametrize("major,minor", [(2, 1), (1, 2)])

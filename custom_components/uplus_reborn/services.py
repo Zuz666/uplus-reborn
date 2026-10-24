@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -17,10 +14,6 @@ from homeassistant.core import (
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.service import (
-    async_get_all_descriptions,
-    async_set_service_schema,
-)
 
 from .const import DOMAIN
 from .coordinator import UplusRebornCoordinator
@@ -71,13 +64,6 @@ _SAVE_PROFILE_SCHEMA = vol.Schema(
     }
 )
 _RENAME_PROFILE_SCHEMA = _PROFILE_SCHEMA.extend({vol.Required("name"): cv.string})
-_PROFILE_ACTIONS = (
-    "update_profile",
-    "rename_profile",
-    "delete_profile",
-    "apply_profile",
-    "start_profile",
-)
 
 
 def _coordinator(hass: HomeAssistant, device_id: str) -> UplusRebornCoordinator:
@@ -97,33 +83,6 @@ def _coordinator(hass: HomeAssistant, device_id: str) -> UplusRebornCoordinator:
     if len(entries) != 1:
         raise ServiceValidationError("Select a device with one loaded U+ Reborn entry")
     return entries[0].runtime_data
-
-
-async def async_refresh_profile_actions(hass: HomeAssistant) -> None:
-    """Populate native action dropdowns with stable IDs and editable labels."""
-    descriptions = await async_get_all_descriptions(hass)
-    options = [
-        {
-            "value": profile.id,
-            "label": f"{entry.title} / {profile.drum} / {profile.name}"
-            + (" (incompatible)" if profile.intent is None else ""),
-        }
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if entry.state in (ConfigEntryState.LOADED, ConfigEntryState.SETUP_IN_PROGRESS)
-        and hasattr(entry, "runtime_data")
-        for profile in entry.runtime_data.profiles.profiles()
-    ]
-    for action in _PROFILE_ACTIONS:
-        if action not in descriptions.get(DOMAIN, {}):
-            continue
-        description = deepcopy(descriptions[DOMAIN][action])
-        description["fields"]["profile_id"]["selector"] = {
-            "select": {"options": options, "custom_value": True, "mode": "dropdown"}
-        }
-        async_set_service_schema(hass, DOMAIN, action, description)
-        hass.bus.async_fire(
-            EVENT_SERVICE_REGISTERED, {"domain": DOMAIN, "service": action}
-        )
 
 
 @callback
@@ -173,22 +132,13 @@ def async_register_actions(hass: HomeAssistant) -> None:
             if call.service == "save_profile":
                 profile = await coordinator.async_save_profile(drum, call.data["name"])
             elif call.service == "update_profile":
-                if not coordinator.controls_enabled:
-                    raise ValueError("Remote controls are disabled")
-                intent = coordinator.draft(drum)
-                if intent is None:
-                    raise ValueError(
-                        "Select a complete program or smart fabric draft first"
-                    )
-                profile = await coordinator.profiles.async_update(
-                    profile_id, drum, intent
-                )
+                profile = await coordinator.async_update_profile(drum, profile_id)
             elif call.service == "rename_profile":
-                profile = await coordinator.profiles.async_rename(
-                    profile_id, drum, call.data["name"]
+                profile = await coordinator.async_rename_profile(
+                    drum, profile_id, call.data["name"]
                 )
             elif call.service == "delete_profile":
-                await coordinator.profiles.async_delete(profile_id, drum)
+                await coordinator.async_delete_profile(drum, profile_id)
             elif call.service == "apply_profile":
                 coordinator.apply_profile(drum, profile_id)
             elif call.service == "start_profile":
@@ -197,9 +147,6 @@ def async_register_actions(hass: HomeAssistant) -> None:
                 )
         except ValueError as error:
             raise ServiceValidationError(str(error)) from error
-        if call.service not in ("apply_profile", "start_profile"):
-            coordinator.async_update_listeners()
-            await async_refresh_profile_actions(hass)
         if call.return_response and profile is not None:
             return {
                 "profile_id": profile.id,

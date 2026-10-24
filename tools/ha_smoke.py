@@ -335,7 +335,7 @@ def _require(condition: bool, message: str) -> None:
 
 
 async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: dict[str, Any], *, restart: bool) -> None:
-    """Exercise real registered actions and storage; no production mocks."""
+    """Exercise real actions/storage, including narrowly scoped adapter failures."""
     from homeassistant.core import Context
     from homeassistant.exceptions import ServiceValidationError
     from homeassistant.helpers import device_registry as dr
@@ -411,6 +411,222 @@ async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: 
     options = descriptions[DOMAIN]["start_profile"]["fields"]["profile_id"]["selector"]["select"]["options"]
     _require(any(row["value"] == upper["profile_id"] and "Saved spin 400" in row["label"] for row in options),
              "Action editor lacks stable profile choices")
+
+    async def profile_choices() -> dict[str, tuple[tuple[str, str], ...]]:
+        descriptions = await async_get_all_descriptions(hass)
+        return {
+            action: tuple(
+                (row["value"], row["label"])
+                for row in descriptions[DOMAIN][action]["fields"]["profile_id"]
+                ["selector"]["select"]["options"]
+            )
+            for action in (
+                "update_profile", "rename_profile", "delete_profile",
+                "apply_profile", "start_profile",
+            )
+        }
+
+    async def require_choice(profile_id: str, name: str | None) -> None:
+        for action, choices in (await profile_choices()).items():
+            matching = [label for value, label in choices if value == profile_id]
+            _require(
+                matching == [] if name is None else len(matching) == 1 and name in matching[0],
+                f"{action}: stale native profile choices",
+            )
+
+    async def manage_profiles() -> None:
+        from custom_components.uplus_reborn import profile_choices as presentation
+        from custom_components.uplus_reborn.profiles import ProfileStore
+
+        storage = c.profiles._store
+        storage_path = Path(storage.path)
+        _require(storage_path == Path(hass.config.path(
+            ".storage", f"{DOMAIN}.profiles.{entry.entry_id}",
+        )), "Failure fixture is not the entry's actual local HA Store")
+
+        async def disk_bytes() -> bytes:
+            return await hass.async_add_executor_job(storage_path.read_bytes)
+
+        async def require_disk_reload() -> None:
+            reloaded = ProfileStore(hass, entry.entry_id, DEVICE_ID)
+            await reloaded.async_load()
+            _require(reloaded.profiles() == c.profiles.profiles(),
+                     "A fresh actual HA Store load disagrees with published records")
+
+        initial_records = c.profiles.profiles()
+        initial_local = {
+            drum: (c.draft(drum), c.selected_profile(drum), c.profile_name(drum))
+            for drum in ("upper", "lower")
+        }
+        response = await call("save_profile", name="Temporary managed spin")
+        managed_id = response["profile_id"]
+        managed = c.profiles.resolve(managed_id, "upper")
+        _require(response == {
+            "profile_id": managed_id, "name": "Temporary managed spin",
+            "drum": "upper", "revision": 1,
+        } and managed.intent == initial_local["upper"][0],
+                 "Native Save action did not create the complete revision")
+        _require(managed_id not in result["saved_profiles"].values()
+                 and all(
+                     (c.draft(drum), c.selected_profile(drum), c.profile_name(drum)) == before
+                     for drum, before in initial_local.items()
+                 ), "Native Save action overwrote, applied or changed local input")
+        await hass.async_block_till_done()
+        selector_id = entity_id("select", "upper_profile")
+        _require(hass.states.get(selector_id).attributes["profiles"].get(managed.name)
+                 == managed_id, "Native Save action did not refresh the selector")
+        await require_choice(managed_id, managed.name)
+
+        await call("apply_profile", profile_id=managed_id)
+        await hass.services.async_call("select", "select_option", {
+            "entity_id": entity_id("select", "upper_spin_speed"), "option": "600",
+        }, blocking=True)
+        updated_intent = c.draft("upper")
+        _require(c.selected_profile("upper") is None
+                 and updated_intent != managed.intent,
+                 "Native manual edit did not detach selected profile identity")
+        updated = await call("update_profile", profile_id=managed_id)
+        managed = c.profiles.resolve(managed_id, "upper")
+        _require(updated == {
+            "profile_id": managed_id, "name": managed.name,
+            "drum": "upper", "revision": 2,
+        } and managed.intent == updated_intent
+                 and c.draft("upper") == updated_intent
+                 and c.selected_profile("upper") is None,
+                 "Native Update changed identity, revision or draft/selection semantics")
+        await require_choice(managed_id, managed.name)
+        await call("apply_profile", profile_id=managed_id)
+        await hass.async_block_till_done()
+
+        # Fail only the native schema adapter, after the real storage commit and
+        # listener delivery. The mutation must surface failure, not be replayed.
+        class PresentationFailure(RuntimeError):
+            """An isolated native action-schema failure after durable mutation."""
+
+        def fail_schema(*_args: Any, **_kwargs: Any) -> None:
+            raise PresentationFailure("Isolated native profile presentation failure")
+
+        choices_before = await profile_choices()
+        original_schema = presentation.async_set_service_schema
+        presentation.async_set_service_schema = fail_schema
+        try:
+            try:
+                await call("rename_profile", profile_id=managed_id, name="Managed renamed")
+            except PresentationFailure:
+                pass
+            else:
+                raise RuntimeError("Post-commit presentation failure was hidden")
+        finally:
+            presentation.async_set_service_schema = original_schema
+        await hass.async_block_till_done()
+        managed = c.profiles.resolve(managed_id, "upper")
+        _require(managed.revision == 3 and managed.name == "Managed renamed"
+                 and managed.intent == updated_intent
+                 and c.selected_profile("upper") == managed_id
+                 and c.draft("upper") == updated_intent,
+                 "Post-commit presentation failure rolled back or replayed a mutation")
+        selector = hass.states.get(selector_id)
+        _require(selector.state == managed.name
+                 and selector.attributes["profile_id"] == managed_id
+                 and "Temporary managed spin" not in selector.attributes["profiles"],
+                 "Committed Rename was not delivered to native selector listeners")
+        _require(await profile_choices() == choices_before,
+                 "Injected schema failure unexpectedly published action choices")
+        durable_after_presentation_failure = await disk_bytes()
+        await require_disk_reload()
+        # Explicitly repair only presentation, never replay the failed action.
+        await presentation.async_refresh_profile_actions(hass)
+        await require_choice(managed_id, managed.name)
+        _require(await disk_bytes() == durable_after_presentation_failure
+                 and c.profiles.resolve(managed_id, "upper") == managed,
+                 "Presentation recovery performed another durable mutation")
+
+        records_before_failure = c.profiles.profiles()
+        local_before_failure = {
+            drum: (c.draft(drum), c.selected_profile(drum), c.profile_name(drum))
+            for drum in ("upper", "lower")
+        }
+        choices_before_failure = await profile_choices()
+        selector_before_failure = hass.states.get(selector_id).as_dict()
+        actual_path = storage.path
+        # Core creates dirname(Store.path) before its WriteError-catching file
+        # adapter. A real existing storage file cannot also be that directory,
+        # so this yields an actual propagated filesystem commit failure even
+        # when the container runs as root. No persistence method is replaced.
+        storage.path = str(storage_path / "impossible-commit")
+        try:
+            try:
+                await call("rename_profile", profile_id=managed_id, name="Must not commit")
+            except OSError:
+                pass
+            else:
+                raise RuntimeError("Impossible actual HA storage target did not fail")
+        finally:
+            storage.path = actual_path
+        await hass.async_block_till_done()
+        _require(c.profiles.profiles() == records_before_failure
+                 and all(
+                     (c.draft(drum), c.selected_profile(drum), c.profile_name(drum)) == before
+                     for drum, before in local_before_failure.items()
+                 ), "Failed durable mutation published a record or changed local state")
+        _require(hass.states.get(selector_id).as_dict() == selector_before_failure
+                 and await profile_choices() == choices_before_failure,
+                 "Failed durable mutation changed native selection or choices")
+        _require(await disk_bytes() == durable_after_presentation_failure,
+                 "Failed durable mutation changed the actual storage file")
+        await require_disk_reload()
+
+        await call("delete_profile", profile_id=managed_id)
+        await hass.async_block_till_done()
+        selector = hass.states.get(selector_id)
+        _require(c.draft("upper") == updated_intent
+                 and c.selected_profile("upper") is None
+                 and selector.state == "none"
+                 and selector.attributes["profile_id"] is None
+                 and managed.name not in selector.attributes["profiles"],
+                 "Native Delete cleared the restored draft or retained selected identity")
+        await require_choice(managed_id, None)
+        _require(c.profiles.profiles() == initial_records
+                 and (c.draft("lower"), c.selected_profile("lower"), c.profile_name("lower"))
+                 == initial_local["lower"],
+                 "Temporary management changed a retained profile or the other drum")
+        await require_disk_reload()
+        disk_records = json.loads(await disk_bytes())["data"]["profiles"]
+        _require(set(disk_records) == set(result["saved_profiles"].values()),
+                 "Temporary management left unexpected durable profile IDs")
+        result["profile_management"] = {
+            "native_action_save": True,
+            "updated_stable_id_revision": 2,
+            "post_commit_failure_durable_revision": 3,
+            "post_commit_failure_propagated": True,
+            "presentation_recovered_without_mutation_replay": True,
+            "filesystem_commit_failure_preserved_all_state": True,
+            "real_store_reload_after_success_and_failure": True,
+            "delete_preserved_draft_and_cleared_selection": True,
+            "native_selector_and_all_action_choices_current": True,
+            "temporary_profile_removed": managed_id,
+        }
+
+    # Cancel the scheduled poll through public coordinator APIs before measuring
+    # local operations, then restore its interval. Polling is not mutation traffic.
+    poll_interval = c.update_interval
+    c.update_interval = None
+    c.async_set_updated_data(c.data)
+    try:
+        await hass.async_block_till_done()
+        management_queries = len(peer.queries)
+        authoritative_before_management = c.data
+        await manage_profiles()
+        _require(len(peer.queries) == management_queries
+                 and not peer.profile_controls and peer.profile_initializations == 0,
+                 "Local profile management dispatched a peer read or control")
+        _require(c.data == authoritative_before_management,
+                 "Local profile management changed authoritative appliance state")
+        result["profile_management"]["operation_peer_queries"] = 0
+        result["profile_management"]["scheduled_polling_excluded"] = True
+    finally:
+        c.update_interval = poll_interval
+        c.async_set_updated_data(c.data)
     for drum, profile_id in (("upper", "missing"), ("lower", upper["profile_id"])):
         try:
             await call("start_profile", drum, profile_id=profile_id)
@@ -460,6 +676,7 @@ async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: 
         "transient_names_cleared": True,
         "stable_action_choices": True, "start_exact_spin_400_once": True,
         "drafts_independent": True, "reload_persistence": True,
+        "native_action_management_and_failures": True,
     }
 
 

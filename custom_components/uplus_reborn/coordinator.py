@@ -20,6 +20,7 @@ from .const import (
     DOMAIN,
     configured_poll_interval,
 )
+from .profile_choices import async_refresh_profile_actions
 from .profiles import ProfileStore, SavedProfile
 from .protocol import (
     CannotConnect,
@@ -300,8 +301,37 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
         if intent is None:
             raise ValueError("Select a complete program or smart fabric draft first")
         profile = await self.profiles.async_save(name, intent)
-        self.async_update_listeners()
+        await self._async_profiles_changed()
         return profile
+
+    async def async_update_profile(self, drum: Drum, profile_id: str) -> SavedProfile:
+        """Replace one saved intent with the draft captured before waiting."""
+        if not self.controls_enabled:
+            raise ValueError("Remote controls are disabled")
+        intent = self.draft(drum)
+        if intent is None:
+            raise ValueError("Select a complete program or smart fabric draft first")
+        profile = await self.profiles.async_update(profile_id, drum, intent)
+        await self._async_profiles_changed()
+        return profile
+
+    async def async_rename_profile(
+        self, drum: Drum, profile_id: str, name: str
+    ) -> SavedProfile:
+        """Rename without changing identity, draft or management access."""
+        profile = await self.profiles.async_rename(profile_id, drum, name)
+        await self._async_profiles_changed()
+        return profile
+
+    async def async_delete_profile(self, drum: Drum, profile_id: str) -> None:
+        """Remove a saved record, retaining the independently restored draft."""
+        await self.profiles.async_delete(profile_id, drum)
+        await self._async_profiles_changed()
+
+    async def _async_profiles_changed(self) -> None:
+        """Publish only committed records; presentation failure cannot undo them."""
+        self.async_update_listeners()
+        await async_refresh_profile_actions(self.hass)
 
     async def async_start_profile(self, drum: Drum, profile_id: str) -> ControlResult:
         """Resolve one revision before queuing; UI/store edits cannot change it."""
