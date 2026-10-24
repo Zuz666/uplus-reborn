@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Callable
 from typing import Any, override
 
 import voluptuous as vol
@@ -15,7 +13,6 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_PORT,
-    EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -45,13 +42,9 @@ from .const import (
 )
 from .discovery import DeviceNotFound, async_find_device_host, device_id_from_mac
 from .discovery_catalog import CATALOG_DATE, CATALOG_SOURCE, identify_type
-from .discovery_preview import DISCOVERY_FLOWS, async_setup_discovery_preview
-from .local_discovery import (
-    DiscoveryRecord,
-    ScanActivity,
-    ScanResult,
-    async_get_collector,
-)
+from .discovery_interval import DiscoveryInterval
+from .discovery_preview import DISCOVERY_INTERVALS, async_setup_discovery_preview
+from .local_discovery import DiscoveryRecord, ScanResult
 from .protocol import CannotConnect, InvalidFrame, ProtocolError, UwtClient
 
 _NON_EMPTY_STRING = vol.All(str, vol.Strip, vol.Length(min=1))
@@ -166,17 +159,10 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Keep observations private to this dialog."""
         self._catalog: dict[str, DiscoveryRecord] = {}
         self._latest: set[str] = set()
-        self._scan_task: asyncio.Task[ScanResult] | None = None
         self._scan_issues: tuple[str, ...] = ()
         self._selected: str | None = None
-        self._activity: ScanActivity | None = None
-        self._preview_task: asyncio.Task[None] | None = None
-        self._preview_owners: dict[object, Callable[[dict[str, Any]], None]] = {}
-        self._preview_user_id: str | None = None
+        self._interval: DiscoveryInterval | None = None
         self._local_form = False
-        self._search_open = False
-        self._removed = False
-        self._shutdown_unsubscribe: Callable[[], None] | None = None
 
     @staticmethod
     @override
@@ -187,138 +173,17 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @override
     @callback
     def async_remove(self) -> None:
-        """Stop only this dialog's collection and preview tasks."""
-        self._removed = True
-        self._search_open = False
-        self._preview_owners.clear()
-        self.hass.data.get(DISCOVERY_FLOWS, {}).pop(self.flow_id, None)
-        if self._shutdown_unsubscribe is not None:
-            self._shutdown_unsubscribe()
-            self._shutdown_unsubscribe = None
-        if self._activity is not None:
-            self._activity.stop.set()
-            self._activity.finish("closed")
-        for task in (self._scan_task, self._preview_task):
-            if task is not None and not task.done():
-                task.cancel()
+        """Close only this dialog's current interval."""
+        if self._interval is not None:
+            self._interval.close()
+        self.hass.data.get(DISCOVERY_INTERVALS, {}).pop(self.flow_id, None)
         super().async_remove()
-
-    async def async_subscribe_preview(
-        self, user_id: str, send: Callable[[dict[str, Any]], None]
-    ) -> Callable[[], None]:
-        """Acquire one authorized UI owner; a stopped interval cannot restart."""
-        if (
-            self._removed
-            or not self._local_form
-            or not self._search_open
-            or user_id != self._preview_user_id
-        ):
-            raise ValueError("This discovery form is not active for this user")
-        owner = object()
-        activity = self._activity
-        assert activity is not None
-        self._preview_owners[owner] = send
-        if self._scan_task is None:
-            @callback
-            def shutdown(_event: Any) -> None:
-                self._shutdown_unsubscribe = None
-                self._search_open = False
-                activity.stop.set()
-                activity.finish("shutdown")
-
-            self._shutdown_unsubscribe = self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STOP, shutdown
-            )
-            self._scan_task = self.hass.async_create_background_task(
-                async_get_collector(self.hass).scan(activity=activity),
-                f"{DOMAIN} discovery collection",
-                eager_start=False,
-            )
-            self._scan_task.add_done_callback(self._scan_finished)
-            self._preview_task = self.hass.async_create_background_task(
-                self._publish_preview(), f"{DOMAIN} discovery preview",
-                eager_start=False,
-            )
-
-        @callback
-        def unsubscribe() -> None:
-            if owner not in self._preview_owners:
-                return
-            self._preview_owners.pop(owner)
-            if not self._preview_owners and self._activity is activity:
-                self._search_open = False
-                activity.stop.set()
-                activity.finish("disconnected")
-
-        return unsubscribe
-
-    @callback
-    def _scan_finished(self, task: asyncio.Task[ScanResult]) -> None:
-        if self._removed or task.cancelled() or self._scan_task is not task:
-            return
-        self._finish_scan()
-        if self._shutdown_unsubscribe is not None:
-            self._shutdown_unsubscribe()
-            self._shutdown_unsubscribe = None
-        self._search_open = False
-        # Wake the publisher immediately, including fatal setup/socket failures.
-        if self._preview_task is not None:
-            self._preview_task.cancel()
-        self._preview_task = self.hass.async_create_background_task(
-            self._publish_preview(), f"{DOMAIN} discovery terminal preview"
-        )
-
-    async def _publish_preview(self) -> None:
-        """Update only the mounted stock preview, never reconfigure the form."""
-        labels = await async_get_translations(
-            self.hass, self.hass.config.language, "selector", {DOMAIN}
-        )
-        while not self._removed:
-            assert self._activity is not None
-            state = self._activity.snapshot()
-            prefix = f"component.{DOMAIN}.selector."
-            event = state.events[-1].kind if state.events else "listening"
-            template = labels.get(
-                prefix + "discovery_status.options.summary",
-                "{sent} / {replies} / {devices} / {message}",
-            )
-            event_label = labels.get(
-                prefix + f"discovery_event.options.{event}", event
-            )
-            if state.issues:
-                event_label += " · " + labels.get(
-                    prefix + "discovery_status.options.partial", "Limited coverage"
-                )
-            summary = template.format(
-                sent=state.sent, replies=state.replies,
-                devices=state.devices, message=event_label,
-            )
-            attributes: dict[str, Any] = {
-                "friendly_name": labels.get(
-                    prefix + "discovery_status.options.columns",
-                    "Sent / Replies / Found / Msg",
-                )
-            }
-            if state.outcome == "searching":
-                attributes["entity_picture"] = "/uplus_reborn_static/discovery.svg"
-            else:
-                attributes["icon"] = "mdi:lan-disconnect"
-            payload = {
-                "entity_id": "sensor.___flow_preview___",
-                "state": summary,
-                "attributes": attributes,
-            }
-            for send in tuple(self._preview_owners.values()):
-                send(payload)
-            if not self._search_open:
-                return
-            await asyncio.sleep(1)
 
     async def _activity_placeholders(self) -> dict[str, str]:
         """Localize bounded events and preserve exact cumulative counters."""
-        if self._activity is None:
+        if self._interval is None:
             return {"activity": ""}
-        state = self._activity.snapshot()
+        state = self._interval.progress
         labels = await async_get_translations(
             self.hass, self.hass.config.language, "selector", {DOMAIN}
         )
@@ -353,16 +218,8 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "journal": "\n".join(rows),
         }
 
-    def _finish_scan(self) -> None:
-        """Merge final observations exactly once; preserve the last activity."""
-        assert self._scan_task is not None
-        try:
-            result = self._scan_task.result()
-        except (OSError, RuntimeError, ValueError):
-            result = ScanResult((), ("scan_failed",))
-            if self._activity is not None:
-                self._activity.issues.append("scan_failed")
-                self._activity.finish("failed")
+    def _merge_scan(self, result: ScanResult) -> None:
+        """Merge this interval's final observations into the dialog catalog."""
         self._latest = {record.device_id for record in result.records}
         issues = list(result.issues)
         for record in result.records:
@@ -371,45 +228,31 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             elif "catalog_limit" not in issues:
                 issues.append("catalog_limit")
         self._scan_issues = tuple(issues)
-        self._scan_task = None
 
     async def async_step_local(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Keep one native form mounted until explicit results or Close."""
         if not self._local_form:
-            self._local_form = self._search_open = True
-            self._activity = ScanActivity()
+            self._local_form = True
             self._latest = set()
             self._scan_issues = ()
-            self.hass.data.setdefault(DISCOVERY_FLOWS, {})[self.flow_id] = self
             request = current_request.get()
-            self._preview_user_id = (
+            user_id = (
                 request[KEY_HASS_USER].id if request is not None
                 else self.context.get("user_id")
             )
+            self._interval = DiscoveryInterval(self.hass, user_id)
+            self.hass.data.setdefault(DISCOVERY_INTERVALS, {})[self.flow_id] = self._interval
         if user_input is not None:
-            self._search_open = False
-            assert self._activity is not None
-            self._activity.stop.set()
-            self._activity.finish("stopped")
-            if self._scan_task is not None:
-                await asyncio.shield(
-                    asyncio.gather(self._scan_task, return_exceptions=True)
-                )
-                if self._scan_task is not None:
-                    self._finish_scan()
+            assert self._interval is not None
+            self._merge_scan(await self._interval.async_stop())
             self._local_form = False
-            self._preview_owners.clear()
-            if self._preview_task is not None:
-                self._preview_task.cancel()
-                self._preview_task = None
+            self.hass.data.get(DISCOVERY_INTERVALS, {}).pop(self.flow_id, None)
             return await self.async_step_local_catalog()
         return self.async_show_form(
             step_id="local", data_schema=vol.Schema({}), preview=DOMAIN,
         )
-
-
 
     def _configured(self, device_id: str) -> bool:
         return any(

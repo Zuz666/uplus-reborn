@@ -197,24 +197,32 @@ class _Receiver(asyncio.DatagramProtocol):
         self.owner.issue("receive_failed")
 
 
+@dataclass(eq=False, slots=True)
+class _Search:
+    """Keep one collector registration's observations and activity together."""
+
+    records: dict[str, DiscoveryRecord]
+    activity: ScanActivity
+
+
 class DiscoveryCollector:
     """Share receive sockets; each owned search has its own broadcast cadence."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._lock = asyncio.Lock()
-        self._users: list[dict[str, DiscoveryRecord]] = []
+        self._searches: list[_Search] = []
         self._issues: list[str] = []
         self._networks: tuple[IPv4Network, ...] = ()
         self._senders: list[tuple[asyncio.DatagramTransport, str]] = []
         self._transports: list[asyncio.DatagramTransport] = []
-        self._activities: dict[int, ScanActivity] = {}
 
     def issue(self, issue: str) -> None:
         """Retain bounded coverage diagnostics without remote identifiers."""
         if issue not in self._issues:
             self._issues.append(issue)
-        for activity in self._activities.values():
+        for search in self._searches:
+            activity = search.activity
             if not activity.stop.is_set() and issue not in activity.issues:
                 activity.issues.append(issue)
                 activity.event("issue", issue)
@@ -224,16 +232,15 @@ class DiscoveryCollector:
         record = decode_record(data, source, self._networks)
         if record is None:
             return
-        for records in self._users:
-            activity = self._activities.get(id(records))
-            if activity is not None and activity.stop.is_set():
+        for search in self._searches:
+            records, activity = search.records, search.activity
+            if activity.stop.is_set():
                 continue
-            if activity is not None:
-                activity.replies += 1
-                if record.device_id not in records:
-                    activity.event("found", record=record)
-                else:
-                    activity.event("replies", "1")
+            activity.replies += 1
+            if record.device_id not in records:
+                activity.event("found", record=record)
+            else:
+                activity.event("replies", "1")
             previous = records.get(record.device_id)
             if previous and (
                 previous.conflict
@@ -271,8 +278,7 @@ class DiscoveryCollector:
                     )
             if len(records) < 256 or record.device_id in records:
                 records[record.device_id] = record_for_scan
-                if activity is not None:
-                    activity.devices = len(records)
+                activity.devices = len(records)
             else:
                 self.issue("catalog_limit")
 
@@ -333,14 +339,14 @@ class DiscoveryCollector:
         records: dict[str, DiscoveryRecord] = {}
         activity.event("listening")
         async with self._lock:
-            if not self._users:
+            if not self._searches:
                 try:
                     await self._open()
                 except BaseException:
                     self._close()
                     raise
-            self._users.append(records)
-            self._activities[id(records)] = activity
+            search = _Search(records, activity)
+            self._searches.append(search)
             for issue in self._issues:
                 activity.issues.append(issue)
                 activity.event("issue", issue)
@@ -372,9 +378,8 @@ class DiscoveryCollector:
             return ScanResult(tuple(records.values()), tuple(activity.issues))
         finally:
             async with self._lock:
-                self._activities.pop(id(records), None)
-                self._users[:] = [user for user in self._users if user is not records]
-                if not self._users:
+                self._searches.remove(search)
+                if not self._searches:
                     self._close()
 
 

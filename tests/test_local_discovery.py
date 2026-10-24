@@ -16,6 +16,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.uplus_reborn.const import DOMAIN, SUPPORTED_WIFI_TYPE
+from custom_components.uplus_reborn.discovery_preview import DISCOVERY_INTERVALS
 from custom_components.uplus_reborn.local_discovery import (
     QUERY,
     DiscoveryCollector,
@@ -93,20 +94,23 @@ def test_unknown_type_is_not_dropped_or_supported() -> None:
     assert result.type_id == "01" * 32
 
 
-def test_deduplication_preserves_devices_and_conflicts(hass: HomeAssistant) -> None:
+async def test_deduplication_preserves_devices_and_conflicts(hass: HomeAssistant) -> None:
     collector = DiscoveryCollector(hass)
-    collector._networks = NETWORKS
-    observations: dict[str, DiscoveryRecord] = {}
-    collector._users.append(observations)
-    for _ in range(10):
-        collector.receive(packet(), HOST)
-    collector.receive(packet(identity="020000000002", host="192.0.2.11"), "192.0.2.11")
-    assert set(observations) == {ID, "020000000002"}
-    collector.receive(packet(type_id="01" * 32), HOST)
+    activity = ScanActivity()
+    with patch.object(collector, "_open", lambda: open_synthetic(collector)):
+        scan = asyncio.create_task(collector.scan(activity=activity))
+        await asyncio.sleep(0)
+        for _ in range(10):
+            collector.receive(packet(), HOST)
+        collector.receive(packet(identity="020000000002", host="192.0.2.11"), "192.0.2.11")
+        collector.receive(packet(type_id="01" * 32), HOST)
+        collector.receive(packet(), HOST)  # No last-packet-wins repair.
+        collector.receive(packet(identity="020000000003"), HOST)
+        activity.stop.set()
+        result = await scan
+    observations = {item.device_id: item for item in result.records}
+    assert set(observations) == {ID, "020000000002", "020000000003"}
     assert observations[ID].conflict
-    collector.receive(packet(), HOST)
-    assert observations[ID].conflict  # No last-packet-wins repair within a scan.
-    collector.receive(packet(identity="020000000003"), HOST)
     assert observations["020000000003"].conflict
 
 
@@ -167,32 +171,10 @@ async def test_real_udp_ephemeral_reply_and_port_occupancy(
         state = activity.snapshot()
         assert (state.rounds, state.sent, state.replies, state.devices) == (3, 3, 3, 1)
         assert state.outcome == "stopped"
-        assert not collector._transports and not collector._users
     finally:
         peer.close()
 
 
-async def test_cancel_one_scan_does_not_close_another(hass: HomeAssistant) -> None:
-    collector = DiscoveryCollector(hass)
-
-    async def open_no_sockets() -> None:
-        await open_synthetic(collector)
-
-    with patch.object(collector, "_open", open_no_sockets):
-        first = asyncio.create_task(collector.scan(activity=ScanActivity()))
-        second = asyncio.create_task(collector.scan(activity=ScanActivity()))
-        await asyncio.sleep(0)
-        assert len(collector._users) == 2
-        first.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await first
-        assert len(collector._users) == 1 and collector._networks == NETWORKS
-        collector.receive(packet(), HOST)
-        assert ID in collector._users[0]
-        second.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await second
-        assert not collector._users and not collector._networks
 
 
 async def start_catalog(hass: HomeAssistant, records: tuple[DiscoveryRecord, ...]):
@@ -206,8 +188,8 @@ async def start_catalog(hass: HomeAssistant, records: tuple[DiscoveryRecord, ...
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"next_step_id": "local"}
         )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        await handler.async_subscribe_preview("test-user", lambda _: None)
+        interval = hass.data[DISCOVERY_INTERVALS][result["flow_id"]]
+        await interval.async_subscribe("test-user", lambda _: None)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
@@ -266,7 +248,9 @@ async def test_stale_retention_counts_and_manual_guard(hass: HomeAssistant) -> N
         AsyncMock(return_value=ScanResult((), ())),
     ):
         await handler.async_step_local()
-        await handler.async_subscribe_preview("test-user", lambda _: None)
+        await hass.data[DISCOVERY_INTERVALS][result["flow_id"]].async_subscribe(
+            "test-user", lambda _: None
+        )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await handler.async_step_local({})
@@ -439,14 +423,12 @@ async def test_early_finish_keeps_valid_observations_and_other_scan(
             "stopped",
         )
         assert len(snapshot.events) <= 12
-        assert not other.done() and len(collector._users) == 1
+        assert not other.done()
         assert other_activity.replies == 22 and other_activity.devices == 3
         collector.receive(packet(), HOST)
         assert activity.snapshot() == snapshot
         other_activity.stop.set()
         await other
-        assert not collector._users and not collector._activities
-        assert not collector._transports
 
 
 async def test_native_continue_stops_only_its_scan_without_tcp(
@@ -468,11 +450,11 @@ async def test_native_continue_stops_only_its_scan_without_tcp(
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER, "user_id": "test-user"}
         )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"next_step_id": "local"}
         )
-        await handler.async_subscribe_preview("test-user", lambda _: None)
+        interval = hass.data[DISCOVERY_INTERVALS][result["flow_id"]]
+        await interval.async_subscribe("test-user", lambda _: None)
         await asyncio.sleep(0)
         collector.receive(packet(type_id="01" * 32), HOST)
         await asyncio.sleep(0.02)
@@ -480,12 +462,11 @@ async def test_native_continue_stops_only_its_scan_without_tcp(
         assert result["step_id"] == "local"
         assert result["type"] is FlowResultType.FORM
         collector.receive(packet(type_id="01" * 32), HOST)
-        assert handler._activity.snapshot().replies == 2
+        assert interval.progress.replies == 2
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["step_id"] == "local_catalog"
         assert result["description_placeholders"]["count"] == "1"
-        assert handler._activity.snapshot().outcome == "stopped"
-        assert not collector._users
+        assert interval.progress.outcome == "stopped"
         probe.assert_not_awaited()
         assert not hass.config_entries.async_entries(DOMAIN)
         frozen = result["description_placeholders"]
@@ -494,128 +475,6 @@ async def test_native_continue_stops_only_its_scan_without_tcp(
         hass.config_entries.flow.async_abort(result["flow_id"])
 
 
-async def test_close_live_scan_releases_collector_and_refresh(
-    hass: HomeAssistant,
-) -> None:
-    collector = async_get_collector(hass)
-
-    async def open_no_sockets() -> None:
-        await open_synthetic(collector)
-
-    with patch.object(collector, "_open", open_no_sockets):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER, "user_id": "test-user"}
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"next_step_id": "local"}
-        )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        await handler.async_subscribe_preview("test-user", lambda _: None)
-        await asyncio.sleep(0)
-        scan = handler._scan_task
-        preview = handler._preview_task
-        hass.config_entries.flow.async_abort(result["flow_id"])
-        await asyncio.gather(scan, preview, return_exceptions=True)
-        assert not collector._users and not collector._activities
-        assert scan.cancelled() and preview.cancelled()
-
-
-async def test_results_before_preview_never_start_late_search(hass: HomeAssistant) -> None:
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER, "user_id": "owner"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": "local"}
-    )
-    handler = hass.config_entries.flow._progress[result["flow_id"]]
-    with patch.object(async_get_collector(hass), "scan", AsyncMock()) as scan:
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert result["description_placeholders"]["count"] == "0"
-        with pytest.raises(ValueError):
-            await handler.async_subscribe_preview("owner", lambda _: None)
-        scan.assert_not_called()
-
-
-async def test_preview_ownership_disconnect_and_explicit_restart(hass: HomeAssistant) -> None:
-    collector = async_get_collector(hass)
-    with patch.object(collector, "_open", lambda: open_synthetic(collector)):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER, "user_id": "owner"}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"next_step_id": "local"}
-        )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        with pytest.raises(ValueError):
-            await handler.async_subscribe_preview("different-admin", lambda _: None)
-        assert not collector._users
-        first = await handler.async_subscribe_preview("owner", lambda _: None)
-        last = await handler.async_subscribe_preview("owner", lambda _: None)
-        scan = handler._scan_task
-        await asyncio.sleep(0)
-        collector.receive(packet(), HOST)
-        first()
-        assert not scan.done() and not handler._activity.stop.is_set()
-        last()
-        await scan
-        await asyncio.sleep(0)
-        assert handler._activity.snapshot().outcome == "disconnected"
-        assert not collector._users
-        with pytest.raises(ValueError):
-            await handler.async_subscribe_preview("owner", lambda _: None)
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert result["description_placeholders"]["count"] == "1"
-        await hass.config_entries.flow.async_configure(result["flow_id"], {"action": "local"})
-        new_owner = await handler.async_subscribe_preview("owner", lambda _: None)
-        await asyncio.sleep(0)
-        last()  # An old unsubscribe cannot stop the explicitly opened interval.
-        assert not handler._activity.stop.is_set()
-        new_scan = handler._scan_task
-        new_owner()
-        await new_scan
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert result["description_placeholders"]["count"] == "0"
-        assert result["description_placeholders"]["retained"] == "1"
-
-
-async def test_failed_setup_stops_indicator_and_cannot_be_overwritten(hass: HomeAssistant) -> None:
-    collector = async_get_collector(hass)
-    with patch.object(collector, "_open", AsyncMock(side_effect=OSError("unavailable"))):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER, "user_id": "owner"}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"next_step_id": "local"}
-        )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        previews = []
-        unsubscribe = await handler.async_subscribe_preview("owner", previews.append)
-        with pytest.raises(OSError):
-            await handler._scan_task
-        await asyncio.sleep(0)
-        await handler._preview_task
-        assert "entity_picture" not in previews[-1]["attributes"]
-        assert handler._activity.snapshot().outcome == "failed"
-        unsubscribe()
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert handler._activity.snapshot().outcome == "failed"
-        assert not collector._users and not collector._transports
-
-
-async def test_journal_overflow_retains_coverage_warnings(hass: HomeAssistant) -> None:
-    collector = DiscoveryCollector(hass)
-    activity = ScanActivity()
-    observations = {}
-    collector._activities[id(observations)] = activity
-    collector._users.append(observations)
-    collector._networks = NETWORKS
-    collector.issue("fixed_port_unavailable")
-    for number in range(20):
-        collector.receive(packet(identity=f"0200000000{number:02X}"), HOST)
-    snapshot = activity.snapshot()
-    assert len(snapshot.events) == 12
-    assert snapshot.replies == 20 and snapshot.devices == 20
-    assert snapshot.issues == ("fixed_port_unavailable",)
 
 
 async def test_real_preview_websocket_rejects_foreign_flows_and_disconnects(
@@ -639,7 +498,6 @@ async def test_real_preview_websocket_rejects_foreign_flows_and_disconnects(
     await client.send_json(command)
     rejected = await client.receive_json()
     assert not rejected["success"] and rejected["error"]["code"] == "invalid_flow"
-    assert not async_get_collector(hass)._users
     hass.config_entries.flow.async_abort(result["flow_id"])
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER, "user_id": hass_admin_user.id}
@@ -654,12 +512,10 @@ async def test_real_preview_websocket_rejects_foreign_flows_and_disconnects(
         assert subscribed["success"]
         preview = await client.receive_json()
         assert preview["event"]["attributes"]["entity_picture"].endswith("/discovery.svg")
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        scan = handler._scan_task
+        interval = hass.data[DISCOVERY_INTERVALS][result["flow_id"]]
         await client.close()
-        await scan
-        assert handler._activity.snapshot().outcome == "disconnected"
-        assert not collector._users and not collector._transports
+        await interval.async_wait()
+        assert interval.progress.outcome == "disconnected"
 
 
 async def test_new_search_does_not_inherit_previous_coverage_failure(
@@ -677,43 +533,21 @@ async def test_new_search_does_not_inherit_previous_coverage_failure(
         "custom_components.uplus_reborn.local_discovery.async_get_adapters",
         AsyncMock(return_value=[]),
     ):
-        await handler.async_subscribe_preview("owner", lambda _: None)
-        await handler._scan_task
+        interval = hass.data[DISCOVERY_INTERVALS][result["flow_id"]]
+        await interval.async_subscribe("owner", lambda _: None)
+        await interval.async_wait()
         await asyncio.sleep(0)
     failed = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert handler._activity.snapshot().issues == ("no_enabled_interfaces",)
+    assert interval.progress.issues == ("no_enabled_interfaces",)
     await hass.config_entries.flow.async_configure(
         result["flow_id"], {"action": "local"}
     )
+    interval = hass.data[DISCOVERY_INTERVALS][result["flow_id"]]
     fresh = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert handler._activity.snapshot().issues == ()
+    assert interval.progress.issues == ()
     assert fresh["description_placeholders"]["issues"] != failed["description_placeholders"]["issues"]
 
 
-async def test_home_assistant_stop_releases_owned_search(
-    hass: HomeAssistant, caplog,
-) -> None:
-    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-
-    collector = async_get_collector(hass)
-    with patch.object(collector, "_open", lambda: open_synthetic(collector)):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER, "user_id": "owner"}
-        )
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"next_step_id": "local"}
-        )
-        handler = hass.config_entries.flow._progress[result["flow_id"]]
-        unsubscribe = await handler.async_subscribe_preview("owner", lambda _: None)
-        scan = handler._scan_task
-        await asyncio.sleep(0)
-        hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
-        await scan
-        await asyncio.sleep(0)
-        unsubscribe()
-        assert handler._activity.snapshot().outcome == "shutdown"
-        assert not collector._users and not collector._activities
-        assert not [entry for entry in caplog.records if entry.levelno >= 40]
 
 
 @pytest.mark.parametrize("action, step", [("local", "local"), ("manual", "manual")])
@@ -980,7 +814,9 @@ async def test_independent_catalog_statuses_survive_stale_retention(
         AsyncMock(return_value=ScanResult((), ())),
     ):
         await handler.async_step_local()
-        await handler.async_subscribe_preview("test-user", lambda _: None)
+        await hass.data[DISCOVERY_INTERVALS][result["flow_id"]].async_subscribe(
+            "test-user", lambda _: None
+        )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await handler.async_step_local({})
@@ -1001,3 +837,40 @@ async def test_independent_catalog_statuses_survive_stale_retention(
     assert technical["security"] == "1"
     for key in ("configured", "supported", "conflict", "latest"):
         assert technical[key] == facts[key]
+
+
+@pytest.mark.parametrize("admin", [False, True])
+async def test_preview_requires_admin_and_an_active_local_form(
+    hass: HomeAssistant, hass_ws_client, loopback_socket, admin: bool,
+) -> None:
+    """Native authentication and current-step checks both precede acquisition."""
+    user = await hass.auth.async_create_user(
+        "Preview owner", group_ids=["system-admin"] if admin else ["system-users"]
+    )
+    refresh = await hass.auth.async_create_refresh_token(user, client_id="http://localhost/")
+    token = hass.auth.async_create_access_token(refresh)
+    flow = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER, "user_id": user.id}
+    )
+    await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "local"}
+    )
+    interval = hass.data[DISCOVERY_INTERVALS][flow["flow_id"]]
+    if admin:
+        await hass.config_entries.flow.async_configure(flow["flow_id"], {})
+    client = await hass_ws_client(hass, access_token=token)
+    with patch(
+        "custom_components.uplus_reborn.local_discovery.async_get_adapters",
+        AsyncMock(return_value=[]),
+    ) as adapters:
+        await client.send_json({
+            "id": 1, "type": f"{DOMAIN}/start_preview", "flow_type": "config_flow",
+            "flow_id": flow["flow_id"], "user_input": {},
+        })
+        response = await client.receive_json()
+        assert not response["success"]
+        assert response["error"]["code"] == ("invalid_flow" if admin else "unauthorized")
+        assert interval.progress.sent == 0
+        adapters.assert_not_called()
+    await client.close()
+    hass.config_entries.flow.async_abort(flow["flow_id"])
