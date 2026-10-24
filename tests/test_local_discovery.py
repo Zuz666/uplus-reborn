@@ -528,7 +528,6 @@ async def test_new_search_does_not_inherit_previous_coverage_failure(
     await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": "local"}
     )
-    handler = hass.config_entries.flow._progress[result["flow_id"]]
     with patch(
         "custom_components.uplus_reborn.local_discovery.async_get_adapters",
         AsyncMock(return_value=[]),
