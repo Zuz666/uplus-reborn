@@ -903,22 +903,48 @@ verification requirements, and release policy.
 
 ### Python tests and lint
 
-Run the Home Assistant test suite and linter in the reproducible Docker test
-container (built once per lockfile/recipe fingerprint; if Docker is unavailable,
-`delivery.py docker` stops immediately with exit code 2):
+For local Ruff feedback on Windows or Linux, use the native check:
+
+```sh
+python tools/delivery.py lint
+```
+
+The command defaults to the current repository directory; use
+`python tools/delivery.py lint --repo PATH` to select another checkout. It reads
+the exact Ruff version from that working tree's `uv.lock` and runs it through
+uv's isolated tool cache, without Docker, a mutable project `.venv`, or a global
+Ruff installation. It checks the current files under `custom_components`,
+`tests` and `tools` using the repository configuration and normal Ruff discovery
+and exclusions, including unstaged edits and new non-ignored files.
+
+This is check-only: source files and the Git index stay unchanged; ordinary uv
+and ignored Ruff caches are allowed. Arbitrary Ruff arguments, automatic fixes
+and formatting are not supported. A lockfile selection, acquisition or lint
+failure is reported rather than replaced with a global or latest Ruff.
+
+Native Windows success is platform-limited feedback: Ruff does not enforce
+EXE001/EXE002 there. **Canonical Linux CI/container lint is required before
+merge.** Windows Docker bind mounts can synthesize executable modes; ordinary
+local Ruff needs no source snapshot or permission rewriting. Keep the Linux
+container command for canonical lint:
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- ruff check custom_components tests tools
+```
+
+Run the Home Assistant test suite in the reproducible Docker test container:
 
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- ruff check custom_components tests
 ```
 
-These use the exact locked `test` dependency group from `pyproject.toml` and
-`uv.lock` (`--no-group research`) inside an immutable container `/opt/venv`.
+Container commands use the exact locked `test` dependency group from
+`pyproject.toml` and `uv.lock` (`--no-group research`) inside an immutable
+`/opt/venv`, built once per lockfile/recipe fingerprint. If Docker is unavailable,
+`delivery.py docker` stops immediately with exit code 2; it does not block the
+native Ruff command. HA pytest, POSIX checks and real Core remain Docker-only;
+do not substitute native execution, mutable local `.venv` or WSL trees.
 Normal tests use isolated fixtures and must never contact live hardware.
-
-`pytest-homeassistant-custom-component` follows Home Assistant's Linux runtime
-and is not supported natively on Windows. Use the repository Docker workflow or
-native Linux/CI for that suite; never rely on mutable local `.venv` or WSL trees.
 
 For a focused protocol change:
 

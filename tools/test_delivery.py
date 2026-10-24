@@ -44,6 +44,98 @@ class Workspace(unittest.TestCase):
             self.skipTest(f"Host does not permit symlinks: {error}")
 
 
+class NativeLintTests(Workspace):
+    def test_missing_locked_ruff_fails_without_a_global_fallback(self):
+        (self.root / "uv.lock").write_text("version = 1\npackage = []\n", encoding="utf-8")
+        result = self.cli("lint", "--repo", self.root, expected=1)
+        self.assertIn("locked Ruff", result.stderr)
+
+    def test_missing_lockfile_fails_instead_of_selecting_an_unlocked_ruff(self):
+        result = self.cli("lint", expected=1)
+        self.assertIn("uv.lock", result.stderr)
+        self.assertIn("locked Ruff", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_malformed_lockfile_fails_with_a_selection_error(self):
+        (self.root / "uv.lock").write_text("[[package]\n", encoding="utf-8")
+        result = self.cli("lint", "--repo", self.root, expected=1)
+        self.assertIn("uv.lock", result.stderr)
+        self.assertIn("locked Ruff", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_invalid_package_metadata_cannot_select_a_ruff(self):
+        for metadata in ("version = 1\n", "package = {}\n", 'package = ["ruff"]\n'):
+            with self.subTest(metadata=metadata):
+                (self.root / "uv.lock").write_text(metadata, encoding="utf-8")
+                result = self.cli("lint", "--repo", self.root, expected=1)
+                self.assertIn("locked Ruff", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_multiple_locked_ruff_packages_are_not_arbitrarily_selected(self):
+        for second_version in ("0.17.1", "0.17.2"):
+            with self.subTest(second_version=second_version):
+                (self.root / "uv.lock").write_text(
+                    '[[package]]\nname = "ruff"\nversion = "0.17.1"\n'
+                    f'[[package]]\nname = "ruff"\nversion = "{second_version}"\n',
+                    encoding="utf-8",
+                )
+                result = self.cli("lint", "--repo", self.root, expected=1)
+                self.assertIn("locked Ruff", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_unusable_versions_are_not_forwarded_as_package_requirements(self):
+        versions = (
+            None, 17, "", "*", "0.17.*", ">=0.17.1", "0.17.1 --fix",
+            "0.17.1,ruff==0.17.2", "0.17.1; python_version > '3'",
+            "0.17.1 @ https://example.invalid/ruff.whl", "0.17.1\n",
+        )
+        for version in versions:
+            with self.subTest(version=version):
+                metadata = '[[package]]\nname = "ruff"\n'
+                if version is not None:
+                    metadata += f"version = {json.dumps(version)}\n"
+                (self.root / "uv.lock").write_text(metadata, encoding="utf-8")
+                result = self.cli("lint", "--repo", self.root, expected=1)
+                self.assertIn("locked Ruff", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_mutating_and_arbitrary_ruff_arguments_are_rejected_without_edits(self):
+        (self.root / "uv.lock").write_text(
+            '[[package]]\nname = "ruff"\nversion = "0.17.1"\n', encoding="utf-8",
+        )
+        (self.root / "pyproject.toml").write_text(
+            '[tool.ruff]\nfix = true\n[tool.ruff.lint]\nselect = ["F"]\n',
+            encoding="utf-8",
+        )
+        source = self.root / "tools" / "unused.py"
+        source.parent.mkdir()
+        source.write_bytes(b"import os\n")
+        for arguments in (("init", "--quiet"), ("add", ".")):
+            result = subprocess.run(
+                ["git", "-C", str(self.root), *arguments],
+                capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        index = self.root / ".git" / "index"
+        original_index = index.read_bytes()
+        original_files = {
+            path: path.read_bytes()
+            for path in (source, self.root / "uv.lock", self.root / "pyproject.toml")
+        }
+        invocations = (
+            ("--fix",), ("--fix-only",), ("--unsafe-fixes",), ("format",),
+            ("--", "format"), ("--", "check", "--fix"),
+            ("--config", "fix=true"), ("--select", "F"),
+        )
+        for arguments in invocations:
+            with self.subTest(arguments=arguments):
+                result = self.cli("lint", "--repo", self.root, *arguments, expected=2)
+                self.assertIn("unrecognized arguments", result.stderr)
+                self.assertEqual(index.read_bytes(), original_index)
+                for path, original in original_files.items():
+                    self.assertEqual(path.read_bytes(), original)
+
+
 class ArtifactTests(Workspace):
     def git(self, *arguments):
         result = subprocess.run(

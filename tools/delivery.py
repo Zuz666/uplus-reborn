@@ -658,6 +658,47 @@ def run_docker(
     return completed.returncode if completed.returncode >= 0 else 128 - completed.returncode
 
 
+def _run_native_lint(repo: Path) -> int:
+    """Check working-tree sources with exactly the locked Ruff, without fixes."""
+    lock_path = repo / "uv.lock"
+    try:
+        with lock_path.open("rb") as stream:
+            lock = tomllib.load(stream)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot read locked Ruff selection from {lock_path}: {error}") from error
+    packages = lock.get("package")
+    if not isinstance(packages, list) or any(not isinstance(package, dict) for package in packages):
+        raise ValueError(f"Invalid locked Ruff package metadata in {lock_path}")
+    matches = [package for package in packages if package.get("name") == "ruff"]
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one locked Ruff package in {lock_path}; found {len(matches)}")
+    version = matches[0].get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version):
+        raise ValueError(f"Invalid exact locked Ruff version in {lock_path}: {version!r}")
+    print(
+        f"Native local Ruff {version} feedback; Linux CI/container lint remains canonical.",
+        file=sys.stderr, flush=True,
+    )
+    if sys.platform == "win32":
+        print(
+            "Native Windows does not execute Unix-only EXE001/EXE002 permission checks.",
+            file=sys.stderr, flush=True,
+        )
+    env = os.environ.copy()
+    for name in (
+        "RUFF_OUTPUT_FILE", "UV_ENV_FILE", "UV_OVERRIDE",
+        "UV_WORKING_DIR", "UV_WORKING_DIRECTORY",
+    ):
+        env.pop(name, None)
+    completed = subprocess.run(
+        ["uv", "--no-config", "--directory", str(repo.resolve()), "tool", "run",
+         "--no-env-file", "--from", f"ruff=={version}", "ruff", "check",
+         "--no-fix", "--no-fix-only", "custom_components", "tests", "tools"],
+        cwd=repo, env=env, check=False, shell=False,
+    )
+    return completed.returncode if completed.returncode >= 0 else 128 - completed.returncode
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
@@ -686,6 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     docker.add_argument("--input", type=Path, action="append", default=[])
     docker.add_argument("--context", action="append", default=[], metavar="KEY=VALUE")
     docker.add_argument("command", nargs=argparse.REMAINDER)
+    lint = commands.add_parser("lint", help="Read-only native local Ruff feedback; Linux CI lint remains canonical")
+    lint.add_argument("--repo", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:
         if args.action == "build":
@@ -702,6 +745,8 @@ def main(argv: list[str] | None = None) -> int:
             context = _parse_context(args.context)
             command = args.command[1:] if args.command and args.command[0] == "--" else args.command
             return run_check(args.record, args.input, context, command)
+        elif args.action == "lint":
+            return _run_native_lint(args.repo)
         else:
             context = _parse_context(args.context)
             command = args.command[1:] if args.command and args.command[0] == "--" else args.command

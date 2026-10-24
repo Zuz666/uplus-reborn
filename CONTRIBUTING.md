@@ -264,11 +264,30 @@ lockfiles, and CI workflows stay at their normal public locations. Public tools
 must not import, execute, or discover files from a private workspace or rely on
 root agent-instruction links.
 
-Support Windows and Linux for shared documentation tooling, with explicit
-paths and argument handling rather than shell-specific glob expansion. Keep
-the same commands and file-selection rules locally and in CI. The HA Python
-test suite runs in the reproducible Docker Linux container (`tools/Dockerfile`),
-not a reason to make other tools platform-specific.
+Support Windows and Linux for shared tooling, with explicit paths and argument
+handling rather than shell-specific glob expansion. Keep the same standard
+scope and repository configuration locally and in CI. Native local Ruff via
+`python tools/delivery.py lint` is the narrow exception to Docker-based Python
+verification: it checks working-tree files under `custom_components`, `tests`
+and `tools`, selecting the exact Ruff from `uv.lock` through uv's isolated tool
+cache rather than a mutable project `.venv` or a global installation.
+
+Native Windows Ruff does not enforce EXE001/EXE002; its success is local feedback,
+not executable-permission proof. Canonical Linux CI/container lint remains
+required before merge. The entrypoint is read-only for source files and the Git
+index, permits ordinary tool caches, and does not forward arbitrary Ruff
+arguments or provide fixing/formatting. See the
+[public verification contract](docs/development-verification.md#native-local-ruff-windows-and-linux)
+for version-selection failures and evidence limits.
+
+Run `python tools/delivery.py lint` before the standalone tooling suite to
+bootstrap the locked uv tool cache. Native CLI safety regressions then run
+offline against real Ruff, including hostile configuration/environment cases.
+
+HA pytest, POSIX checks and real Core still run in reproducible Docker Linux
+containers (`tools/Dockerfile`). If required Docker is unavailable, stop those
+checks; native Ruff remains usable. WSL and mutable project `.venv` environments
+are not alternative execution paths.
 
 Current public tool inventory:
 
