@@ -24,6 +24,8 @@ jobs:
         with:
           version: "0.13.4"
           python-version: "3.13"
+      - name: Locked native Ruff and tool-cache bootstrap
+        run: uv run --no-project --python 3.13 python tools/delivery.py lint
       - name: Standalone artifact and release behavior
         run: uv run --no-project --python 3.13 python -m unittest discover -s tools -p "test_*.py" -v
       - name: Validate committed release metadata

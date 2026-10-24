@@ -22,6 +22,55 @@ Recorder/statistics checks apply to identity/history, units or state-class chang
 Do not rerun them for unrelated prose or command-error wording. A new report or
 phase does not invalidate an unchanged successful result.
 
+## Native local Ruff (Windows and Linux)
+
+From a clean public checkout, use the Python and uv prerequisites in
+[README](../README.md#prerequisites-and-clean-checkout-setup); uv **0.13.4 or newer**
+is required. No private workspace, Docker, global Ruff or mutable project
+`.venv` is needed:
+
+```sh
+python tools/delivery.py lint
+python tools/delivery.py lint --repo PATH
+```
+
+The default repository is the current directory. The selected checkout's
+working-tree `uv.lock` is the sole Ruff version source. The command uses uv's
+isolated tool environment/cache with that exact version, not a Ruff found on
+PATH or an unpinned latest release. Missing, ambiguous or unusable locked
+selection, acquisition failures and Ruff diagnostics fail visibly; they are
+not successful verification or reasons to substitute another version.
+
+The fixed scope is `custom_components`, `tests` and `tools`, matching canonical
+lint. Ruff checks the selected repository's current files and configuration
+with its normal discovery/exclusion behavior: unstaged edits, new non-ignored
+files and deletions are reflected on disk, regardless of HEAD or index contents.
+No source archives, snapshots, Git file enumeration or mode reconstruction
+are needed for ordinary local Ruff.
+
+Verification preserves source bytes and the Git index. Ordinary uv/tool caches
+and the ignored Ruff cache are allowed. The CLI does not forward arbitrary Ruff
+arguments or support automatic fixes or formatting; it explicitly disables
+fixing even if repository configuration or the environment requests it.
+
+Native Windows success is **platform-limited local feedback**, not proof that
+Unix executable permissions passed. Ruff's
+[EXE001](https://docs.astral.sh/ruff/rules/shebang-not-executable/) and
+[EXE002](https://docs.astral.sh/ruff/rules/shebang-missing-executable-file/)
+are not enforced on Windows. Linux CI/container lint remains canonical and is
+required before merge, including genuine executable-file violations:
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- ruff check custom_components tests tools
+```
+
+Run canonical lint from a Linux checkout. Docker Desktop Windows bind mounts
+can expose Git `100644` files as mode `0777`; do not suppress executable-file
+rules, add shebangs or rewrite permissions to compensate for synthetic modes.
+The native-Ruff exception does not authorize native HA pytest, POSIX checks or
+real Core. Those checks remain Docker-based; missing required Docker stops
+them, while native Ruff remains available. WSL is not an alternative.
+
 ## Temporary Hassfest source build
 
 The Hassfest job builds the official Home Assistant Dockerfile from a fixed
@@ -152,11 +201,9 @@ for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
 stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
 
-Docker Desktop Windows bind mounts can expose Git `100644` files as mode `0777`.
-For Ruff's permission-sensitive checks, use the Linux CI checkout or a
-Git-mode-preserving snapshot on the container's Linux filesystem. Do not add
-shebangs to integration modules or suppress executable-file rules to compensate
-for synthetic bind-mount permissions.
+The native local Ruff exception and canonical Linux permission evidence are
+defined [above](#native-local-ruff-windows-and-linux); they do not change this
+Docker runtime requirement.
 
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/ha-smoke-result.json --scenario execution

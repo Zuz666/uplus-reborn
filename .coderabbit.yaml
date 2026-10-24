@@ -64,7 +64,9 @@ reviews:
         pins and manifest/lock consistency. Keep master-based protected PRs and
         exact-commit immutable releases; no ordinary version bump, tag move or asset
         replacement. Public tools must work without private files on Windows/Linux;
-        HA pytest/Ruff/Core verification uses reproducible Docker, not WSL or .venv.
+        Native local Ruff uses the lock-selected uv tool environment; Linux container
+        lint stays canonical. HA pytest/POSIX/Core checks require reproducible Docker,
+        not WSL or a mutable project .venv.
     - path: "{README.md,CONTRIBUTING.md,SECURITY.md,docs/**}"
       instructions: >-
         Separate source claims, inference, offline/runtime proof and physical evidence.
