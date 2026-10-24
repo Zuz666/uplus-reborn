@@ -19,10 +19,11 @@ imports, entity domains, or logger names from either.
   `custom_components/uplus_reborn/manifest.json`
 - coordinator: `custom_components/uplus_reborn/coordinator.py`
 - coordinator logger: `custom_components.uplus_reborn.coordinator`
-- onboarding-only native UDP collection: `local_discovery.py`; stock authenticated
-  form preview/static image: `discovery_preview.py`, `static/discovery.svg`;
-  immutable offline category/model-family facts and provenance: `discovery_catalog.py`; existing runtime
-  MAC/DHCP helpers: `discovery.py` (no new UDP recovery loop)
+- onboarding-only discovery lifetime: `discovery_interval.py`; shared native UDP
+  collection: `local_discovery.py`; authenticated stock preview presentation:
+  `discovery_preview.py`, `static/discovery.svg`; immutable offline category/model
+  facts and provenance: `discovery_catalog.py`; existing runtime MAC/DHCP helpers:
+  `discovery.py` (no new UDP recovery loop)
 - embedded protocol module: `custom_components/uplus_reborn/protocol/`
 - pure typed intent validation/encoding: `protocol/_commands.py` inside that package
 - reported-setting applicability: `reported_settings.py`; status platforms:
@@ -327,10 +328,19 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
 - Setup/options behavior belongs in `config_flow.py` and
   `tests/test_config_flow.py`; source-profile constraints have
   `tests/test_capabilities.py`.
-- Native LAN discovery/catalog behavior belongs in `local_discovery.py`,
-  `discovery_preview.py`, `discovery_catalog.py`, `config_flow.py` and
-  `tests/test_local_discovery.py`. Collection belongs to the authenticated
-  flow-local preview subscription, not form polling or a real entity. The
+- Native LAN discovery/catalog behavior belongs in `discovery_interval.py`,
+  `local_discovery.py`, `discovery_preview.py`, `discovery_catalog.py` and
+  `config_flow.py`. Exercise interval ownership through its production interface
+  in `tests/test_discovery_interval.py`, with real loopback UDP; native flow and
+  presentation contracts remain in `tests/test_local_discovery.py`.
+  The interval owns tasks, owner subscriptions, frozen observations and cleanup;
+  the flow owns catalog history/navigation, and the preview renders observations.
+  Collection belongs to the authenticated flow-local preview subscription, not
+  form polling or a real entity. The collector keeps each active search's
+  observations and activity in one registration; it still shares sockets, not
+  send cadence, across intervals. Sent/Rounds remain interval-local; Replies
+  includes every valid datagram seen during that interval, including responses
+  induced by another dialog. Devices remain deduplicated by identity. The
   real-Core `--scenario discovery` uses `tools/discovery_fixture.py` with loopback
   UDP/TCP peers, real adapter selection, both reply-port paths, indefinite search
   across the former 120-second boundary, explicit stop and local/manual creation.

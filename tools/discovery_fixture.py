@@ -127,8 +127,8 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         result = await self.hass.config_entries.flow.async_configure(
             flow_id, {"next_step_id": "local"}
         )
-        flow = self.hass.data[f"{DOMAIN}_discovery_flows"][flow_id]
-        await flow.async_subscribe_preview("fixture-user", lambda _: None)
+        interval = self.hass.data[f"{DOMAIN}_discovery_intervals"][flow_id]
+        await interval.async_subscribe("fixture-user", lambda _: None)
         await asyncio.sleep(2)
         result = await self._catalog(flow_id)
         assert result["description_placeholders"]["count"] == "10"
@@ -193,11 +193,11 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             flow_id, {"next_step_id": "local"}
         )
         assert result["type"] is FlowResultType.FORM
-        flow = self.hass.data[f"{DOMAIN}_discovery_flows"][flow_id]
-        await flow.async_subscribe_preview("fixture-user", lambda _: None)
+        interval = self.hass.data[f"{DOMAIN}_discovery_intervals"][flow_id]
+        await interval.async_subscribe("fixture-user", lambda _: None)
         # Cross both removed product deadlines using real production cadence.
         await asyncio.sleep(122)
-        assert flow._scan_task is not None and not flow._scan_task.done()
+        assert interval.progress.outcome == "searching"
         assert len(self.queries) == 7
         result = await self._catalog(flow_id)
         assert result["description_placeholders"]["count"] == "6"
@@ -214,9 +214,10 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             flow_id, {"action": "local"}
         )
         assert result["type"] is FlowResultType.FORM
-        await flow.async_subscribe_preview("fixture-user", lambda _: None)
+        interval = self.hass.data[f"{DOMAIN}_discovery_intervals"][flow_id]
+        await interval.async_subscribe("fixture-user", lambda _: None)
         await asyncio.sleep(2)
-        state = flow._activity.snapshot()
+        state = interval.progress
         assert state.devices == 6 and state.replies == 18
         assert not any(peer.queries for peer in self.peers)
         result = await self._catalog(flow_id)
