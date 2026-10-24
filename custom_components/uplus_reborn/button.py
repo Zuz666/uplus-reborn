@@ -13,7 +13,6 @@ from . import UplusRebornConfigEntry
 from .coordinator import UplusRebornCoordinator
 from .entity import UplusRebornEntity, async_execute_control
 from .protocol import Drum, UnsafeState, validate_drum_control, validate_program_start
-from .services import async_refresh_profile_actions
 
 _ACTION_ICONS = {
     "start": "mdi:play",
@@ -108,4 +107,3 @@ class UplusRebornSaveProfileButton(UplusRebornEntity, ButtonEntity):
             )
         except ValueError as error:
             raise ServiceValidationError(str(error)) from error
-        await async_refresh_profile_actions(self.hass)

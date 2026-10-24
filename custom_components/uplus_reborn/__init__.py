@@ -13,9 +13,10 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICE_ID, DOMAIN, PLATFORMS, configured_poll_interval
 from .coordinator import UplusRebornCoordinator
+from .profile_choices import async_refresh_profile_actions
 from .profiles import ProfileStore
 from .protocol import UwtClient
-from .services import async_refresh_profile_actions, async_register_actions
+from .services import async_register_actions
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
