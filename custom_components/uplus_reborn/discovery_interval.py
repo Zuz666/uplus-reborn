@@ -43,6 +43,7 @@ class DiscoveryInterval:
         if self._scan_task is None:
             @callback
             def shutdown(_event: Any) -> None:
+                self._shutdown_unsubscribe = None
                 self._finish("shutdown")
 
             self._shutdown_unsubscribe = self._hass.bus.async_listen_once(
@@ -81,9 +82,13 @@ class DiscoveryInterval:
     async def async_stop(self) -> ScanResult:
         """Freeze explicit results and wait for the collector to release ownership."""
         self._finish("stopped")
-        self._owners.clear()
         if self._publisher is not None:
-            self._publisher.cancel()
+            try:
+                await asyncio.shield(self._publisher)
+            except asyncio.CancelledError:
+                if not self._publisher.cancelled():
+                    raise
+        self._owners.clear()
         return await self.async_wait()
 
     @callback

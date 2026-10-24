@@ -931,6 +931,9 @@ async def _exercise(
                 result["profile_entry_id"] = entry.entry_id
                 await _exercise_profiles(hass, entry, peer, result, restart=scenario == "profiles_restart")
                 coordinator = entry.runtime_data
+            if serve or scenario == "discovery":
+                # Current Core does not allow removing the first, owner account.
+                await hass.auth.async_create_user("Fixture owner", local_only=True)
             if scenario in ("discovery", "discovery-identification"):
                 if __package__:
                     from .discovery_fixture import DiscoveryFixture
@@ -943,11 +946,11 @@ async def _exercise(
                     await discovery_fixture.exercise_identification()
                 else:
                     await discovery_fixture.exercise()
+                    await discovery_fixture.exercise_lifecycle(http_port)
             if after_scenario is not None:
                 await after_scenario(hass, entry, peer)
             _require(not peer.rejected, "Peer rejected a control or malformed request")
         if serve:
-            await hass.auth.async_create_user("Fixture owner", local_only=True)
             user = await hass.auth.async_create_user(
                 "Uplus isolated smoke admin",
                 group_ids=["system-admin"],
@@ -1069,7 +1072,12 @@ async def _exercise(
             try:
                 async with asyncio.timeout(SHUTDOWN_TIMEOUT):
                     if discovery_fixture is not None:
-                        await discovery_fixture.close()
+                        if "discovery_lifecycle" in result:
+                            # Arm only at the existing final teardown. Do not fake a
+                            # stop event or abort the active interval before Core stops.
+                            await discovery_fixture.prepare_shutdown()
+                        else:
+                            await discovery_fixture.close()
                     if refresh is not None:
                         hass.auth.async_remove_refresh_token(refresh)
                         if "serve" in result:
@@ -1083,10 +1091,19 @@ async def _exercise(
                             await hass.config_entries.async_unload(entry.entry_id)
                         )
             finally:
-                async with asyncio.timeout(SHUTDOWN_TIMEOUT):
-                    await hass.async_stop(force=True)
-                    result["shutdown"]["core_stopped"] = hass.state is CoreState.stopped
-                    result["shutdown"]["core_exit_code"] = hass.exit_code
+                try:
+                    async with asyncio.timeout(SHUTDOWN_TIMEOUT):
+                        await hass.async_stop(force=True)
+                        result["shutdown"]["core_stopped"] = hass.state is CoreState.stopped
+                        result["shutdown"]["core_exit_code"] = hass.exit_code
+                finally:
+                    if discovery_fixture is not None and "discovery_lifecycle" in result:
+                        try:
+                            await discovery_fixture.finish_shutdown(
+                                core_stopped=hass.state is CoreState.stopped
+                            )
+                        finally:
+                            await discovery_fixture.close()
         finally:
             await peer.close()
             result["transport"] = peer.evidence()
@@ -1099,6 +1116,8 @@ async def _exercise(
              "Core did not shut down cleanly")
     _require(result["transport"]["closed"], "Loopback peer did not close cleanly")
     _require(not peer.rejected, "Shutdown emitted a control or malformed request")
+    if discovery_fixture is not None:
+        discovery_fixture.require_lifecycle()
 
 
 def _json_default(value: Any) -> str:
