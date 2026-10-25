@@ -153,7 +153,11 @@ edits. Fork execution and required CI protections are not relaxed.
 Where GitHub's Actions event policy restricts `pull_request_target`, permit only
 this workflow's target/dispatch events, not the event repository-wide. See
 [GitHub's security guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
-Run `npm run test:labels` with Node.js 22+; CI exercises Windows and Linux.
+Run `npm run test:labels` with Node.js 22+. PR CI runs label rules on Linux;
+master/manual/unknown-context CI retains Linux and Windows. Documentation runner
+regressions and public tooling remain required on both platforms for every PR;
+only repository Markdown/Mermaid content validation is Linux-only on PRs.
+See the [CI platform policy](docs/development-verification.md#ci-platform-coverage).
 CodeRabbit labeling remains disabled and is not a dependency of this process.
 
 #### CodeRabbit review

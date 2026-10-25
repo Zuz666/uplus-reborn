@@ -46,6 +46,9 @@ jobs:
           python3 - <<'PY'
           import json, os
           results = json.loads(os.environ['RESULTS'])
+          required = {'validation', 'documentation', 'delivery', 'security'}
+          if set(results) != required:
+              raise SystemExit(f'Required validation layers missing or unexpected: {set(results) ^ required}')
           failed = {name: result['result'] for name, result in results.items() if result['result'] != 'success'}
           if failed:
               raise SystemExit(f'Required validation did not pass: {failed}')

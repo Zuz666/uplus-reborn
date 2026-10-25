@@ -406,6 +406,38 @@ and the finite minimum/current Core matrix. Required jobs have no path filters
 that can leave protection permanently pending. The release workflow reuses this
 same gate rather than maintaining a weaker parallel acceptance path.
 
+### CI platform coverage
+
+Coverage is fixed by the actual caller event, not changed paths, PR metadata or
+a reduced-coverage input. Reusable workflows inherit the caller's GitHub context.
+Only `pull_request` selects the smaller policy; master push, manual dispatch
+and unknown contexts retain full coverage.
+
+| Check | PR verification | Full verification |
+| --- | --- | --- |
+| Repository Markdown/Mermaid content (`npm run test:docs`) | Linux | Linux and Windows |
+| Documentation runner regressions (`npm run test:docs:tooling`) | Linux and Windows | Linux and Windows |
+| Public tooling: locked native Ruff, standalone tests, committed metadata | Linux and Windows | Linux and Windows |
+| PR-label classification and metadata safety (`npm run test:labels`) | Linux | Linux and Windows |
+
+PR CI has 17 actual jobs; full CI retains the existing 18 job names and meaningful
+commands. Windows documentation still installs tooling and executes runner
+regressions on PRs; its skipped repository-content step is explicitly reported
+as not applicable, not successful coverage. The Windows label row is absent
+from the PR matrix, not an empty successful job.
+
+Required failures, cancellations and unexpected skipped execution remain
+non-successful; the aggregate gate requires all four workflow layers to succeed.
+There are no changed-file filters: docs-only, integration, tooling, lock/config,
+rename/delete and unknown-path PRs all receive the same platform coverage.
+The [release-source policy](release-workflow.md#trusted-master-consumption) still
+requires the exact full master job set and source run/attempt. A reduced PR run
+or a manual task-branch run cannot authorize release.
+
+This removes repeated PR work, not supported-platform coverage. Job durations
+include preparation; omitting one content command does not save an entire
+Windows documentation job. No overall CI speedup or billing reduction is implied.
+
 Each minimum/current Core job uploads its exact committed release candidate
 alongside the synthetic receipts. A separate same-run artifact job downloads
 both candidates into independent directories and verifies their safe bundles,
