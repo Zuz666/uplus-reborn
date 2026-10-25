@@ -50,6 +50,9 @@ DEVICE_ID = "020000000001"
 PACKAGE = Path("custom_components") / DOMAIN
 HEADER = struct.Struct(">II32s32sII")
 BOOT_TIMEOUT = 180
+# Discovery adds six real, unshortened shared-sender/fault rounds to its existing
+# 122-second collection and issue #62 lifecycle campaign. Other budgets stay put.
+DISCOVERY_BOOT_TIMEOUT = BOOT_TIMEOUT + 120
 SHUTDOWN_TIMEOUT = 60
 CORE_COMPONENTS = (
     "homeassistant",
@@ -715,7 +718,9 @@ async def _exercise(
     discovery_fixture = None
     result["shutdown"] = {"entry_unloaded": False, "core_stopped": False}
     try:
-        async with asyncio.timeout(BOOT_TIMEOUT):
+        async with asyncio.timeout(
+            DISCOVERY_BOOT_TIMEOUT if scenario == "discovery" else BOOT_TIMEOUT
+        ):
             await peer.start()
             loader.async_setup(hass)
             hass.config.skip_pip = True
@@ -947,6 +952,7 @@ async def _exercise(
                 else:
                     await discovery_fixture.exercise()
                     await discovery_fixture.exercise_lifecycle(http_port)
+                    await discovery_fixture.exercise_shared_sender()
             if after_scenario is not None:
                 await after_scenario(hass, entry, peer)
             _require(not peer.rejected, "Peer rejected a control or malformed request")

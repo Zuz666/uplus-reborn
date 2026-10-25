@@ -36,13 +36,13 @@ class Responder(asyncio.DatagramProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         self.closed.set()
 
-    def reply(self, *, identity: str = "020000000001") -> None:
+    def reply(self, *, identity: str = "020000000001", query_index: int = 0) -> None:
         body = bytearray(288)
         body[:16] = identity.encode().ljust(16, b"\0")
         body[16:48] = bytes.fromhex(SUPPORTED_WIFI_TYPE)
         body[208:224] = b"127.0.0.2".ljust(16, b"\0")
         packet = b"Haier" + struct.pack(">IH6sI", 0x684D, 0, bytes(6), 288) + body
-        self.reply_transport.sendto(packet, self.queries[0])
+        self.reply_transport.sendto(packet, self.queries[query_index])
 
 
 @pytest.fixture
@@ -92,7 +92,7 @@ async def test_only_authorized_subscription_starts_an_interval(hass: HomeAssista
         assert await interval.async_stop() == result
 
 
-async def test_concurrent_intervals_keep_send_fanout_and_independent_stop(
+async def test_concurrent_intervals_share_sending_and_keep_independent_stop(
     hass: HomeAssistant, responder: Responder,
 ) -> None:
     first = DiscoveryInterval(hass, "first")
@@ -100,7 +100,11 @@ async def test_concurrent_intervals_keep_send_fanout_and_independent_stop(
     first_owner = await first.async_subscribe("first", lambda _: None)
     await second.async_subscribe("second", lambda _: None)
     try:
-        await wait_for(lambda: len(responder.queries) == 2)
+        await wait_for(
+            lambda: first.progress.sent == second.progress.sent == 1
+            and len(responder.queries) >= 1
+        )
+        assert len(responder.queries) == 1
         responder.reply()
         responder.reply()
         await wait_for(lambda: first.progress.replies == second.progress.replies == 2)
@@ -291,7 +295,9 @@ async def test_late_join_observes_only_its_own_window(
         responder.reply()
         await wait_for(lambda: first.progress.replies == 1)
         await second.async_subscribe("owner", lambda _: None)
-        await wait_for(lambda: len(responder.queries) == 2)
+        await hass.async_block_till_done()
+        assert len(responder.queries) == 1
+        assert (second.progress.rounds, second.progress.sent) == (0, 0)
         responder.reply()
         await wait_for(lambda: second.progress.replies == 1)
         assert (first.progress.replies, second.progress.replies) == (2, 1)
@@ -395,7 +401,9 @@ async def test_preview_disconnected_during_translation_cannot_start_collection(
         })
         assert (await client.receive_json())["success"]
         assert "entity_picture" in (await client.receive_json())["event"]["attributes"]
-        await wait_for(lambda: len(responder.queries) == 2)
+        await hass.async_block_till_done()
+        assert len(responder.queries) == 1
+        assert interval.progress.sent == 0
         await client.close()
         await interval.async_wait()
         assert interval.progress.outcome == "disconnected"
@@ -406,3 +414,150 @@ async def test_preview_disconnected_during_translation_cannot_start_collection(
         hass.config_entries.flow.async_abort(flow["flow_id"])
         await independent.async_stop()
         hass.auth.async_remove_refresh_token(refresh)
+
+
+async def test_three_intervals_share_next_round_without_join_queries(
+    hass: HomeAssistant, responder: Responder,
+) -> None:
+    intervals = [DiscoveryInterval(hass, "owner") for _ in range(3)]
+    actual_sleep = asyncio.sleep
+    rounds: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+
+    async def sleep(delay):
+        if delay != 20:
+            return await actual_sleep(delay)
+        release = asyncio.Event()
+        rounds.put_nowait(release)
+        await release.wait()
+
+    with patch("custom_components.uplus_reborn.local_discovery.asyncio.sleep", sleep):
+        try:
+            await intervals[0].async_subscribe("owner", lambda _: None)
+            next_round = await asyncio.wait_for(rounds.get(), 3)
+            await wait_for(lambda: len(responder.queries) == 1)
+            for interval in intervals[1:]:
+                await interval.async_subscribe("owner", lambda _: None)
+            await hass.async_block_till_done()
+            assert len(responder.queries) == 1
+            assert [interval.progress.sent for interval in intervals] == [1, 0, 0]
+            responder.reply()
+            await wait_for(lambda: all(item.progress.replies == 1 for item in intervals))
+            next_round.set()
+            await asyncio.wait_for(rounds.get(), 3)
+            await wait_for(lambda: len(responder.queries) == 2)
+            assert [interval.progress.rounds for interval in intervals] == [2, 1, 1]
+            assert [interval.progress.sent for interval in intervals] == [2, 1, 1]
+            await intervals[0].async_stop()
+            frozen = intervals[0].progress
+            responder.reply()
+            await wait_for(
+                lambda: all(item.progress.replies == 2 for item in intervals[1:])
+            )
+            assert intervals[0].progress == frozen
+        finally:
+            for interval in intervals:
+                await interval.async_stop()
+
+
+async def test_new_first_interval_waits_for_previous_sender_teardown(
+    hass: HomeAssistant, responder: Responder,
+) -> None:
+    old = DiscoveryInterval(hass, "owner")
+    new = DiscoveryInterval(hass, "owner")
+    sleeping, closing, release = (asyncio.Event() for _ in range(3))
+    actual_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        if delay != 20:
+            return await actual_sleep(delay)
+        sleeping.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            closing.set()
+            await release.wait()
+            raise
+
+    with patch("custom_components.uplus_reborn.local_discovery.asyncio.sleep", sleep):
+        try:
+            old_owner = await old.async_subscribe("owner", lambda _: None)
+            await asyncio.wait_for(sleeping.wait(), 3)
+            await wait_for(lambda: len(responder.queries) == 1)
+            stopping = asyncio.create_task(old.async_stop())
+            await asyncio.wait_for(closing.wait(), 3)
+            frozen = old.progress
+            await new.async_subscribe("owner", lambda _: None)
+            await hass.async_block_till_done()
+            assert new.progress.sent == 0
+            assert len(responder.queries) == 1
+            release.set()
+            await asyncio.wait_for(stopping, 3)
+            await wait_for(lambda: len(responder.queries) == 2)
+            old_owner()
+            old.close()
+            responder.reply(query_index=-1)
+            await wait_for(lambda: new.progress.devices == 1)
+            assert new.progress.sent == 1
+            assert new.progress.outcome == "searching"
+            assert old.progress == frozen
+        finally:
+            release.set()
+            await old.async_stop()
+            await new.async_stop()
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+async def test_cancelled_sender_at_creation_terminates_or_releases_its_run(
+    hass: HomeAssistant, responder: Responder, replacement: bool,
+) -> None:
+    first = DiscoveryInterval(hass, "owner")
+    new = DiscoveryInterval(hass, "owner")
+    opened, release = asyncio.Event(), asyncio.Event()
+    create = hass.async_create_background_task
+    injected = False
+
+    async def adapters(_hass):
+        if not opened.is_set():
+            opened.set()
+            await release.wait()
+        return [{"enabled": True, "ipv4": [{"address": "127.0.0.1", "network_prefix": 8}]}]
+
+    def cancel_sender(coro, name, *, eager_start=True):
+        nonlocal injected
+        task = create(coro, name, eager_start=eager_start)
+        if name.endswith("shared discovery sending") and not injected:
+            injected = True
+            task.cancel()
+            if replacement:
+                first_owner()
+        return task
+
+    with (
+        patch("custom_components.uplus_reborn.local_discovery.async_get_adapters", adapters),
+        patch.object(hass, "async_create_background_task", cancel_sender),
+    ):
+        try:
+            first_owner = await first.async_subscribe("owner", lambda _: None)
+            await asyncio.wait_for(opened.wait(), 3)
+            if replacement:
+                await new.async_subscribe("owner", lambda _: None)
+                await hass.async_block_till_done()
+            release.set()
+            if replacement:
+                await wait_for(lambda: len(responder.queries) == 1)
+                assert first.progress.outcome == "disconnected"
+                assert new.progress.issues == ()
+                responder.reply()
+                await wait_for(lambda: new.progress.devices == 1)
+                assert new.progress.sent == 1
+                assert new.progress.outcome == "searching"
+            else:
+                await wait_for(lambda: first.progress.outcome == "failed")
+                result = await first.async_wait()
+                assert result.records == ()
+                assert result.issues == ("scan_failed",)
+                assert responder.queries == []
+        finally:
+            release.set()
+            await first.async_stop()
+            await new.async_stop()

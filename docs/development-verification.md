@@ -277,6 +277,33 @@ version but no temporary token values. These socket/payload checks do not prove
 browser rendering: use current-Core `--serve` for the separate native frontend
 acceptance. Run the same scenario with `--target test` for minimum-Core evidence.
 
+The same runner's `discovery_shared_sender` receipt separately exercises
+[#63](https://github.com/Zuz666/uplus-reborn/issues/63). Two enabled synthetic
+loopback interfaces use distinct prefix-derived destinations and real UDP
+sockets. Staggered subscriptions must not send immediately, import historical
+records/counters or reset the shared timer. Three, then two, then one active
+interval observe one query per usable sender/destination pair per round, with
+actual packet timestamps spanning unchanged 20-second sleeps. Independent Stop
+freezes each interval's own result; exclusive rebinding proves last-owner socket
+release before a fresh immediate run. The receipt retains per-round packet
+counts, source/destination/port/timestamps, per-interval counters and outcomes.
+
+Controlled seams wrap only the collector's send transports: an all-pairs
+`OSError` round must remain nonterminal, restored transports must send again on
+the next real round, and an unexpected sender exception must fail every active
+interval while preserving its own partial records and coverage diagnostics.
+A stopped interval remains unchanged. A reserved loopback fixed port and a
+production UDP protocol error callback cover recoverable open/receive warnings;
+these are synthetic faults, not proof of physical network-error behavior.
+A new explicit search must clear the failed run's issues. During the actual
+final Core stop event, a new subscription attempt must admit no sender.
+Fault hooks and the temporary two-interface inventory are restored in `finally`.
+Only `discovery` extends the bounded boot/scenario budget from 180 to 300 seconds
+to accommodate six additional real 20-second waits; ordinary scenarios and
+native `--serve` behavior retain their existing limits. Run receipts are new
+evidence only when actually executed; this description does not re-prove or
+replace the earlier, separate issue #62 evidence.
+
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/discovery-smoke.json --scenario discovery
 ```

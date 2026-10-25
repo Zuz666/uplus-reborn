@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network
 
 from homeassistant.components.network import async_get_adapters
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.helpers.singleton import singleton
 
 from .const import DOMAIN, SUPPORTED_WIFI_TYPE
@@ -206,7 +206,7 @@ class _Search:
 
 
 class DiscoveryCollector:
-    """Share receive sockets; each owned search has its own broadcast cadence."""
+    """Share sending and sockets while retaining independent observation windows."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -216,6 +216,7 @@ class DiscoveryCollector:
         self._networks: tuple[IPv4Network, ...] = ()
         self._senders: list[tuple[asyncio.DatagramTransport, str]] = []
         self._transports: list[asyncio.DatagramTransport] = []
+        self._sender_task: asyncio.Task[None] | None = None
 
     def issue(self, issue: str) -> None:
         """Retain bounded coverage diagnostics without remote identifiers."""
@@ -334,53 +335,121 @@ class DiscoveryCollector:
         self._senders.clear()
         self._networks = ()
 
+    async def _stop_sender(self) -> None:
+        """Settle the previous run before another can open the shared sockets."""
+        releasing = self._sender_task is not None or bool(self._transports)
+        try:
+            if self._sender_task is not None:
+                self._sender_task.cancel()
+                await asyncio.gather(self._sender_task, return_exceptions=True)
+        finally:
+            self._sender_task = None
+            self._close()
+            if releasing:
+                # Transport.close queues UDP handle release; settle it before rebinding.
+                await asyncio.sleep(0)
+
+    async def _send_loop(self) -> None:
+        """Submit one shared round; joins never alter the next scheduled round."""
+        # Admit registrations already waiting on initial socket setup first.
+        await asyncio.sleep(0)
+        while True:
+            if self.hass.state in (
+                CoreState.stopping, CoreState.final_write, CoreState.stopped
+            ):
+                return
+            activities = [
+                search.activity for search in self._searches
+                if not search.activity.stop.is_set()
+            ]
+            if not activities:
+                return
+            for activity in activities:
+                activity.rounds += 1
+            for transport, broadcast in self._senders:
+                try:
+                    transport.sendto(QUERY, (broadcast, DISCOVERY_PORT))
+                except OSError:
+                    self.issue("send_failed")
+                else:
+                    for activity in activities:
+                        activity.sent += 1
+                        activity.event("sent", f"{broadcast}:{DISCOVERY_PORT}")
+            await asyncio.sleep(20)
+
+    @callback
+    def _sender_finished(self, task: asyncio.Task[None]) -> None:
+        """End participants even when cancellation prevented the first coroutine step."""
+        if task is not self._sender_task:
+            return
+        active = [
+            search.activity for search in self._searches
+            if not search.activity.stop.is_set()
+        ]
+        if active:
+            shutting_down = self.hass.state in (
+                CoreState.stopping, CoreState.final_write, CoreState.stopped
+            )
+            if not shutting_down:
+                self.issue("scan_failed")
+            for activity in active:
+                activity.finish("shutdown" if shutting_down else "failed")
+                activity.stop.set()
+        self._close()
+
     async def scan(self, *, activity: ScanActivity) -> ScanResult:
-        """Collect until the UI owner stops, releasing the final shared sockets."""
+        """Join shared sending until this interval ends, then return only its records."""
         records: dict[str, DiscoveryRecord] = {}
         activity.event("listening")
         async with self._lock:
-            if not self._searches:
+            if activity.stop.is_set():
+                activity.finish("stopped")
+                return ScanResult((), tuple(activity.issues))
+            if self.hass.state in (
+                CoreState.stopping, CoreState.final_write, CoreState.stopped
+            ):
+                activity.finish("shutdown")
+                activity.stop.set()
+                return ScanResult((), tuple(activity.issues))
+            if not any(not item.activity.stop.is_set() for item in self._searches):
+                await self._stop_sender()
                 try:
                     await self._open()
                 except BaseException:
                     self._close()
                     raise
+            # Opening adapters can suspend while the owning interval is stopped.
+            if activity.stop.is_set() or self.hass.state in (
+                CoreState.stopping, CoreState.final_write, CoreState.stopped
+            ):
+                if not activity.stop.is_set():
+                    activity.finish("shutdown")
+                    activity.stop.set()
+                if not any(not item.activity.stop.is_set() for item in self._searches):
+                    await self._stop_sender()
+                return ScanResult((), tuple(activity.issues))
             search = _Search(records, activity)
             self._searches.append(search)
             for issue in self._issues:
                 activity.issues.append(issue)
                 activity.event("issue", issue)
-        try:
             if not self._senders:
                 activity.finish("failed")
-                return ScanResult((), tuple(activity.issues))
-            while not activity.stop.is_set():
-                activity.rounds += 1
-                for transport, broadcast in self._senders:
-                    try:
-                        transport.sendto(QUERY, (broadcast, DISCOVERY_PORT))
-                    except OSError:
-                        self.issue("send_failed")
-                    else:
-                        activity.sent += 1
-                        activity.event("sent", f"{broadcast}:{DISCOVERY_PORT}")
-                delay = asyncio.create_task(asyncio.sleep(20))
-                stopped = asyncio.create_task(activity.stop.wait())
-                try:
-                    await asyncio.wait(
-                        (delay, stopped), return_when=asyncio.FIRST_COMPLETED
-                    )
-                finally:
-                    delay.cancel()
-                    stopped.cancel()
-                    await asyncio.gather(delay, stopped, return_exceptions=True)
+                activity.stop.set()
+            elif self._sender_task is None:
+                self._sender_task = self.hass.async_create_background_task(
+                    self._send_loop(), f"{DOMAIN} shared discovery sending", eager_start=False
+                )
+                self._sender_task.add_done_callback(self._sender_finished)
+        try:
+            await activity.stop.wait()
             activity.finish("stopped")
             return ScanResult(tuple(records.values()), tuple(activity.issues))
         finally:
+            self._searches.remove(search)
             async with self._lock:
-                self._searches.remove(search)
-                if not self._searches:
-                    self._close()
+                if not any(not item.activity.stop.is_set() for item in self._searches):
+                    await self._stop_sender()
 
 
 @singleton(f"{DOMAIN}_local_discovery")
