@@ -34,5 +34,11 @@ jobs:
         run: npm run test:docs:tooling
 
       - name: Check public Markdown and Mermaid
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || matrix.os != 'windows-latest') }}
         run: npm run test:docs
+
+      - name: Explain PR-only Windows content non-applicability
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          "Repository content validation is not applicable on Windows for PRs; Linux validates content. Windows documentation runner regressions remain required." >> $env:GITHUB_STEP_SUMMARY
