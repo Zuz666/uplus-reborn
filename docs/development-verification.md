@@ -246,8 +246,8 @@ uv run --no-project --python 3.13 python tools/delivery.py docker --target core-
 
 The `discovery` scenario exercises real UDP collection and native config-flow
 steps against loopback peers: enabled-adapter prefix calculation, continuous
-20-second queries beyond the former 120-second limit, repeated ephemeral/fixed
-port replies, exact counters and explicit stop without TCP enrichment,
+20-second queries beyond the former 120-second limit in default **full** mode,
+repeated ephemeral/fixed-port replies, exact counters and explicit stop without TCP enrichment,
 unsupported/unknown/configured inspection, supported addition and explicitly
 confirmed manual fallback with actual TCP validation. Collection starts only
 after preview ownership, never merely from preparing a form.
@@ -259,8 +259,9 @@ The same scenario also exercises the three discovery lifecycle findings from
 [#62](https://github.com/Zuz666/uplus-reborn/issues/62), without a second runner:
 it gates preview translations, waits for Core's real authenticated WebSocket
 disconnect cleanup, releases initialization, and checks that no search owner or
-UDP query survives while an unrelated interval crosses its normal 20-second
-cadence. Two connected native-preview consumers then receive Stop's terminal
+UDP query survives while an unrelated interval crosses its next round.
+Full mode uses the normal 20-second cadence. Two connected native-preview
+consumers then receive Stop's terminal
 payload without its searching animation; repeated cleanup and later real UDP
 replies must leave the old observations frozen and a new interval unaffected.
 Finally, an interval remains active through the runner's existing, actual
@@ -283,14 +284,14 @@ loopback interfaces use distinct prefix-derived destinations and real UDP
 sockets. Staggered subscriptions must not send immediately, import historical
 records/counters or reset the shared timer. Three, then two, then one active
 interval observe one query per usable sender/destination pair per round, with
-actual packet timestamps spanning unchanged 20-second sleeps. Independent Stop
+actual packet timestamps spanning unchanged 20-second sleeps in full mode. Independent Stop
 freezes each interval's own result; exclusive rebinding proves last-owner socket
 release before a fresh immediate run. The receipt retains per-round packet
 counts, source/destination/port/timestamps, per-interval counters and outcomes.
 
 Controlled seams wrap only the collector's send transports: an all-pairs
 `OSError` round must remain nonterminal, restored transports must send again on
-the next real round, and an unexpected sender exception must fail every active
+the next round, and an unexpected sender exception must fail every active
 interval while preserving its own partial records and coverage diagnostics.
 A stopped interval remains unchanged. A reserved loopback fixed port and a
 production UDP protocol error callback cover recoverable open/receive warnings;
@@ -307,6 +308,44 @@ replace the earlier, separate issue #62 evidence.
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/discovery-smoke.json --scenario discovery
 ```
+
+**Discovery timing modes and CI selection.**
+
+Existing commands remain full by default. For local functional feedback without
+the real 122-second dwell and 20-second inter-round waits, explicitly select fast:
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/discovery-fast.json --scenario discovery --discovery-timing fast
+```
+
+Fast mode retains real Core, UDP/TCP, authenticated preview connections, faults
+and actual shutdown. A fixture-private adapter holds only discovery's requested
+20-second waits and releases the next round after the required observations.
+It does not replace global asyncio timing, send artificial queries, fabricate
+responses or shorten production cadence. Hooks are restored before interactive
+`--serve` and after exceptions/cancellation. Unrelated Core timers are unchanged.
+
+The receipt's `discovery_timing` records mode/reason, measured phase durations
+and separate real-time coverage. Fast mode reports actual-cadence/continuous-dwell
+proof as `not_applicable`: several controlled rounds are not 122 real seconds
+of searching or actual 20-second packet spacing. Raw UDP timestamps remain real.
+An unexecuted phase is `not_run`; failures remain failures through teardown,
+with the initiating scenario error retained separately from a later cleanup error.
+
+PR CI selects fast only for a complete, revision-bound comparison positively
+classified as unrelated. Discovery/callers, shared dependencies, environment,
+verification inputs and unknown/incomplete/stale comparisons select full.
+Both sides of renames and deletions count; an unrelated final commit cannot hide
+an earlier relevant change. Non-PR/master/manual contexts remain full.
+The selector supports forcing full, not bypassing applicable full coverage.
+The runner validates that a CI selection belongs to its committed bundle.
+No job or Core target is skipped, and the release-source matrix is unchanged.
+
+Each Core job appends a receipt-based GitHub Job Summary for the existing five
+scenarios, including status, real elapsed duration, discovery mode/reason and
+phase timings. Missing evidence is unavailable, not zero or successful execution.
+Phase durations are diagnostic, not a second additive total or cached acceptance.
+No unmeasured total-CI, image-preparation or billing saving is implied.
 
 The narrower `discovery-identification` scenario covers offline model-family
 presentation and the two-level device view without replaying the full collection

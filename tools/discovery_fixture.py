@@ -8,7 +8,7 @@ import socket
 import struct
 from dataclasses import asdict
 from itertools import pairwise
-from typing import Any
+from typing import Any, Self
 
 from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
 from homeassistant.components.network.network import async_get_network
@@ -45,6 +45,55 @@ class _QueryReceiver(asyncio.DatagramProtocol):
         self.fixture._receive_query(data, addr, self.destination)
 
 
+class _DiscoveryTiming:
+    """Control only the collector module's waits, never asyncio's global clock."""
+
+    def __init__(self, mode: str) -> None:
+        self.fast = mode == "fast"
+        self.waiter: asyncio.Future | None = None
+        self.ready = asyncio.Event()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.original, name)
+
+    def __enter__(self) -> Self:
+        from custom_components.uplus_reborn import local_discovery
+
+        self.module = local_discovery
+        self.original = local_discovery.asyncio
+        if self.fast:
+            local_discovery.asyncio = self
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.module.asyncio = self.original
+
+    async def sleep(self, delay: float) -> None:
+        if delay == 0:
+            await self.original.sleep(0)
+            return
+        assert delay == 20, f"Discovery requested unexpected cadence: {delay}"
+        waiter = asyncio.get_running_loop().create_future()
+        assert self.waiter is None, "Overlapping discovery send loops"
+        self.waiter = waiter
+        self.ready.set()
+        try:
+            await waiter
+        finally:
+            if self.waiter is waiter:
+                self.waiter = None
+                self.ready.clear()
+
+    async def advance(self) -> None:
+        if not self.fast:
+            return
+        async with asyncio.timeout(5):
+            await self.ready.wait()
+            assert self.waiter is not None and not self.waiter.done()
+            self.waiter.set_result(None)
+            await asyncio.sleep(0)
+
+
 class DiscoveryFixture(asyncio.DatagramProtocol):
     """Use real production adapter selection, sockets, flow and TCP validation.
 
@@ -75,6 +124,52 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         self.shutdown_late_interval: Any = None
         self.shutdown_late_done = asyncio.Event()
         self.shutdown_late_unsubscribe: Any = None
+        self.timing: _DiscoveryTiming | None = None
+
+    async def exercise_acceptance(self, http_port: int, mode: str, reason: str) -> None:
+        receipt = {
+            "mode": mode, "reason": reason,
+            "real_time": {
+                "cadence": "not_applicable" if mode == "fast" else "not_run",
+                "continuous": "not_applicable" if mode == "fast" else "not_run",
+            },
+            "phases": {name: {"status": "not_run"} for name in (
+                "baseline", "lifecycle", "shared_sender",
+            )},
+        }
+        self.result["discovery_timing"] = receipt
+        with _DiscoveryTiming(mode) as timing:
+            self.timing = timing
+            try:
+                for name, exercise in (
+                    ("baseline", self.exercise),
+                    ("lifecycle", lambda: self.exercise_lifecycle(http_port)),
+                    ("shared_sender", self.exercise_shared_sender),
+                ):
+                    phase = receipt["phases"][name]
+                    started = self.hass.loop.time()
+                    try:
+                        await exercise()
+                    except BaseException:
+                        phase["status"] = "failed"
+                        raise
+                    else:
+                        group = self.result.get({
+                            "lifecycle": "discovery_lifecycle",
+                            "shared_sender": "discovery_shared_sender",
+                        }.get(name, ""), {})
+                        phase["status"] = "failed" if any(
+                            isinstance(value, dict) and value.get("status") == "failed"
+                            for value in group.values()
+                        ) else "passed"
+                    finally:
+                        phase["elapsed_seconds"] = round(self.hass.loop.time() - started, 3)
+            finally:
+                self.timing = None
+
+    async def _advance(self) -> None:
+        if self.timing is not None:
+            await self.timing.advance()
 
     async def start(self, *, identification: bool = False) -> None:
         self.network = await async_get_network(self.hass)
@@ -229,10 +324,20 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         assert result["type"] is FlowResultType.FORM
         interval = self.hass.data[f"{DOMAIN}_discovery_intervals"][flow_id]
         await interval.async_subscribe("fixture-user", lambda _: None)
-        # Cross both removed product deadlines using real production cadence.
-        await asyncio.sleep(122)
+        # Full mode crosses the removed deadline; fast mode proves ordered rounds.
+        if self.timing is not None and self.timing.fast:
+            for round_number in range(1, 8):
+                await self._queries_at_least(round_number)
+                await self._wait_replies(interval, round_number * 18)
+                if round_number < 7:
+                    await self._advance()
+        else:
+            self.result["discovery_timing"]["real_time"]["continuous"] = "failed"
+            await asyncio.sleep(122)
         assert interval.progress.outcome == "searching"
         assert len(self.queries) == 7
+        if self.timing is not None and not self.timing.fast:
+            self.result["discovery_timing"]["real_time"]["continuous"] = "passed"
         result = await self._catalog(flow_id)
         assert result["description_placeholders"]["count"] == "6"
         for number in (1, 3, 4, 5):
@@ -301,7 +406,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         self.result["discovery"] = {
             "queries": list(self.queries),
             "distinct_responders": 6,
-            "continuous_seconds": 122,
+            "continuous_seconds": None if self.timing and self.timing.fast else 122,
             "query_cadence_seconds": 20,
             "ephemeral_and_fixed_replies": True,
             "early_finish_seconds_below": 10,
@@ -437,6 +542,8 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         start = len(self.queries)
         intervals, unsubscribes = [], []
         frozen = []
+        if self.timing is not None and not self.timing.fast:
+            self.result["discovery_timing"]["real_time"]["cadence"] = "failed"
         try:
             _, first = await self._new_interval("fixture-shared")
             intervals.append(first)
@@ -447,6 +554,9 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             for _ in range(2):
                 await asyncio.sleep(3)
                 before = len(self.queries)
+                pending = self.timing.waiter if self.timing and self.timing.fast else None
+                if self.timing and self.timing.fast:
+                    assert pending is not None and not pending.done()
                 _, joined = await self._new_interval("fixture-shared")
                 intervals.append(joined)
                 unsubscribes.append(
@@ -457,9 +567,13 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
                 assert joined.progress.replies == joined.progress.devices == 0
                 await asyncio.sleep(1)
                 assert len(self.queries) == before, "Joining emitted an extra query"
+                if self.timing and self.timing.fast:
+                    assert self.timing.waiter is pending and not pending.done(), "Join reset the pending round"
+                    receipt["controlled_pending_round_preserved"] = True
             receipt["join_observations"] = [asdict(item.progress) for item in intervals]
             # The first subsequent round has three owners, then two, then one.
             for active, expected_round in ((3, 2), (2, 3), (1, 4)):
+                await self._advance()
                 await self._queries_at_least(start + expected_round * 2)
                 await self._wait_rounds(first, expected_round)
                 await self._wait_replies(first, expected_round * 36)
@@ -483,10 +597,13 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
                 ]
                 assert len(times) == 4
                 gaps = [later - earlier for earlier, later in pairwise(times)]
-                assert all(19.5 <= gap <= 24 for gap in gaps), gaps
+                if not (self.timing and self.timing.fast):
+                    assert all(19.5 <= gap <= 24 for gap in gaps), gaps
                 receipt.setdefault("cadence", []).append({
                     "destination": destination, "timestamps": times, "gaps_seconds": gaps,
                 })
+            if self.timing is not None and not self.timing.fast:
+                self.result["discovery_timing"]["real_time"]["cadence"] = "passed"
             assert [(item.rounds, item.sent) for _, item, _ in frozen] == [
                 (1, 2), (2, 4), (4, 8),
             ]
@@ -586,6 +703,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             stopped_state = stopped.progress
             cleanup["fault_hooks_restored"] = False
             collector._senders[:] = [(FaultSender(), target) for _, target in senders]
+            await self._advance()
             await self._wait_rounds(first, 2)
             # Both attempted pairs failed, yet neither active owner terminated.
             assert mode["attempts"] == 2
@@ -602,6 +720,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             # proving the restored real transports still submit both queries.
             self.silent = True
             collector._senders[:] = senders
+            await self._advance()
             await self._queries_at_least(start + 4)
             await self._wait_rounds(first, 3)
             self.silent = original_silent
@@ -613,6 +732,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             }
             mode["error"] = "fatal"
             collector._senders[:] = [(FaultSender(), target) for _, target in senders]
+            await self._advance()
             async with asyncio.timeout(25):
                 first_result, late_result = await asyncio.gather(
                     first.async_wait(), late.async_wait()
@@ -823,6 +943,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
                 assert pending.progress.outcome != "searching", "Orphan search survived"
                 receipt["closed_attempt_participation"] = pending.progress.outcome
             # Cross the unchanged production cadence while the unrelated owner lives.
+            await self._advance()
             await self._queries_at_least(before + 2)
             await self.hass.async_block_till_done()
             assert len(self.queries) == before + 2
@@ -834,7 +955,7 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
                 unrelated_sent=unrelated.progress.sent,
                 unrelated_observations=len(observations),
                 post_disconnect_queries_from_closed_attempt=0,
-                unchanged_cadence_seconds=20,
+                requested_cadence_seconds=20,
             )
         finally:
             release.set()

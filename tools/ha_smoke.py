@@ -950,9 +950,12 @@ async def _exercise(
                 if identification:
                     await discovery_fixture.exercise_identification()
                 else:
-                    await discovery_fixture.exercise()
-                    await discovery_fixture.exercise_lifecycle(http_port)
-                    await discovery_fixture.exercise_shared_sender()
+                    selection = result.get("discovery_selection", {
+                        "mode": "full", "reason": "local_default",
+                    })
+                    await discovery_fixture.exercise_acceptance(
+                        http_port, selection["mode"], selection["reason"],
+                    )
             if after_scenario is not None:
                 await after_scenario(hass, entry, peer)
             _require(not peer.rejected, "Peer rejected a control or malformed request")
@@ -1073,6 +1076,9 @@ async def _exercise(
                 if reader_active:
                     loop.remove_reader(fd)
             _require(not peer.rejected, "Peer rejected a control or malformed request")
+    except BaseException as err:
+        result["scenario_error"] = f"{type(err).__name__}: {err}"
+        raise
     finally:
         try:
             try:
@@ -1144,6 +1150,9 @@ def main() -> int:
         choices=("standby", "execution", "profiles", "discovery", "discovery-identification", "offline"),
         default="standby",
     )
+    parser.add_argument("--discovery-timing", choices=("full", "fast"), default="full")
+    parser.add_argument("--discovery-selection", type=Path,
+                        help="Revision-bound CI discovery selection receipt")
     parser.add_argument(
         "--language",
         default="en",
@@ -1171,12 +1180,25 @@ def main() -> int:
         parser.error("--bundle and --output are required for a smoke run")
     if args.serve_timeout <= 0:
         parser.error("--serve-timeout must be positive")
+    if (args.discovery_timing != "full" or args.discovery_selection is not None) and args.scenario != "discovery":
+        parser.error("Discovery timing selection requires --scenario discovery")
+    selection = {"mode": args.discovery_timing, "reason": "local_explicit" if args.discovery_timing == "fast" else "local_default"}
+    if args.discovery_selection is not None:
+        try:
+            selection = json.loads(args.discovery_selection.read_text(encoding="utf-8"))
+            if (selection.get("mode") != args.discovery_timing
+                    or not isinstance(selection.get("reason"), str)):
+                parser.error("Discovery selection does not match requested timing mode")
+        except (OSError, ValueError, AttributeError) as err:
+            parser.error(f"Invalid discovery selection: {type(err).__name__}")
     started = time.monotonic()
     result: dict[str, Any] = {
         "schema": 1, "scenario": args.scenario, "started_at": _utc_now(),
         "python_version": platform.python_version(), "platform": platform.platform(),
         "success": False, "observations": [], "temporary_config_removed": False,
     }
+    if args.scenario == "discovery":
+        result["discovery_selection"] = selection
     raw_serve_port = os.environ.get("UPLUS_SMOKE_CONTAINER_SERVE_PORT", "").strip()
     serve_port = int(raw_serve_port) if (args.serve and raw_serve_port) else None
     if serve_port is not None and not (1 <= serve_port <= 65535):
@@ -1189,6 +1211,11 @@ def main() -> int:
             try:
                 manifest = load_artifact(args.bundle)
                 result["artifact"] = manifest
+                if args.discovery_selection is not None:
+                    _require(selection.get("tested_commit") == manifest["commit"],
+                             "Discovery selection belongs to a different candidate")
+                    _require(selection["mode"] != "fast" or selection["reason"] == "unrelated_changes",
+                             "Fast CI discovery requires an unrelated complete comparison")
                 _require(sys.platform == "linux", "Real Home Assistant smoke requires the Linux Docker container")
                 sys.addaudithook(guard.audit)
                 with tempfile.TemporaryDirectory(prefix="uplus-ha-smoke-") as temporary:
@@ -1225,8 +1252,11 @@ def main() -> int:
                         result["installed_hashes_after"] = after
                         _require(after == manifest["files"], "Runtime artifact hashes changed")
                 result["success"] = True
-            except (Exception, KeyboardInterrupt) as err:  # noqa: BLE001
-                result["error"] = f"{type(err).__name__}: {err}"
+            except (Exception, KeyboardInterrupt, asyncio.CancelledError) as err:  # noqa: BLE001
+                observed_error = f"{type(err).__name__}: {err}"
+                result["error"] = result.get("scenario_error", observed_error)
+                if result["error"] != observed_error:
+                    result["cleanup_error"] = observed_error
             finally:
                 if "temporary" in locals():
                     result["temporary_config_removed"] = not Path(temporary).exists()
