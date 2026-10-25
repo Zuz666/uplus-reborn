@@ -149,6 +149,14 @@ or release is not overwritten. A draft receives the exact ZIP/checksum/provenanc
 download the uploaded bytes and compare their hashes before publishing. Resolve
 the actual tag object to the accepted commit: `targetCommitish` alone is not proof.
 
+Draft creation retains GitHub's returned numeric release ID. Before publication,
+the publisher reads that exact ID and requires the expected tag, draft state,
+non-prerelease status and complete asset names, after independently downloading
+and hashing the uploaded bytes and refreshing source evidence. The tag lookup
+endpoint is for published releases, not draft validation. After publication,
+the tag lookup must identify the same release ID and accepted commit. A changed
+identity or uncertain write stops the transaction without an automatic retry.
+
 If a write times out or its outcome is unknown, inspect the repository, tag,
 draft and assets before acting. Do not blindly rerun, delete tags/drafts, replace
 assets, retarget a tag or pass a clobber flag. An unexpected partially completed
