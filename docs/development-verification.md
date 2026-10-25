@@ -162,9 +162,13 @@ files remain identical; transfer checks still bind the exact archive SHA-256.
 
 `delivery.py docker-context --target test --output build/test-context` creates a
 new minimal build context; `--target core-current` selects the other environment.
-The shared `node` stage supplies checksum-pinned Node.js. The minimum `test`
-stage adds frozen uv dependencies; `core-current` copies Node directly from
-`node`, never from the minimum test environment.
+The `node` stage supplies checksum-pinned glibc Node.js for minimum `test`, which
+adds frozen uv dependencies. The musl-based `core-current` environment instead
+copies only Node and its license from a version/digest-pinned official Alpine
+Node image, never from minimum `test`. The current-Core build executes Node and
+checks its version, so an incompatible binary fails construction rather than
+remaining hidden until a later command. It adds no glibc compatibility layer,
+package-manager installation, npm or Yarn. Both environments retain Node 22.23.3.
 
 Only the non-installed root project's version is normalized in temporary
 `pyproject.toml`/`uv.lock` copies. The real files remain unchanged. A release-only
