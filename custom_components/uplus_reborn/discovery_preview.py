@@ -8,7 +8,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers.singleton import singleton
 from homeassistant.helpers.translation import async_get_translations
@@ -78,6 +78,13 @@ async def ws_start_preview(
     msg: dict[str, Any],
 ) -> None:
     """Bind only this administrator's active interval to the stock preview."""
+    disconnected = False
+
+    @callback
+    def cancel_pending() -> None:
+        nonlocal disconnected
+        disconnected = True
+
     try:
         status = hass.config_entries.flow.async_get(msg["flow_id"])
         interval = hass.data.get(DISCOVERY_INTERVALS, {}).get(msg["flow_id"])
@@ -87,9 +94,13 @@ async def ws_start_preview(
             or not isinstance(interval, DiscoveryInterval)
         ):
             raise ValueError("Not an active discovery form")
+        # Core must own cleanup before translation loading can suspend this command.
+        connection.subscriptions[msg["id"]] = cancel_pending
         labels = await async_get_translations(
             hass, hass.config.language, "selector", {DOMAIN}
         )
+        if disconnected:
+            return
         assert connection.user is not None
         unsubscribe = await interval.async_subscribe(
             connection.user.id,
@@ -97,8 +108,14 @@ async def ws_start_preview(
                 websocket_api.event_message(msg["id"], _preview_payload(state, labels))
             ),
         )
+        if disconnected:
+            unsubscribe()
+            return
+        connection.subscriptions[msg["id"]] = unsubscribe
     except (UnknownFlow, ValueError):
         connection.send_error(msg["id"], "invalid_flow", "Discovery form is not active for this user")
         return
-    connection.subscriptions[msg["id"]] = unsubscribe
+    finally:
+        if connection.subscriptions.get(msg["id"]) is cancel_pending:
+            connection.subscriptions.pop(msg["id"])
     connection.send_result(msg["id"])

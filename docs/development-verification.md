@@ -255,6 +255,28 @@ The disposable HA network inventory is synthetic; this does not prove physical
 LAN broadcast egress. `--serve` keeps the peers available for actual stock form/
 preview, animation continuity, Close and WebSocket cleanup acceptance.
 
+The same scenario also exercises the three discovery lifecycle findings from
+[#62](https://github.com/Zuz666/uplus-reborn/issues/62), without a second runner:
+it gates preview translations, waits for Core's real authenticated WebSocket
+disconnect cleanup, releases initialization, and checks that no search owner or
+UDP query survives while an unrelated interval crosses its normal 20-second
+cadence. Two connected native-preview consumers then receive Stop's terminal
+payload without its searching animation; repeated cleanup and later real UDP
+replies must leave the old observations frozen and a new interval unaffected.
+Finally, an interval remains active through the runner's existing, actual
+`hass.async_stop()` teardown. Only afterwards does the fixture check the shutdown
+outcome, settled collection, logged errors and exclusive rebinding of both
+discovery UDP ports, then dispose its own peers and synthetic network inventory.
+
+`discovery_lifecycle` in the receipt records a separate status and observations
+for `preview_disconnect`, `stop_publication` and `shutdown`, plus disposable-auth,
+WebSocket, fault-hook, socket and fixture cleanup evidence. Failed findings are
+retained and make the run fail after teardown; no finding is reported as fixed
+merely because initialization returned. The receipt includes the actual Core
+version but no temporary token values. These socket/payload checks do not prove
+browser rendering: use current-Core `--serve` for the separate native frontend
+acceptance. Run the same scenario with `--target test` for minimum-Core evidence.
+
 ```sh
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/discovery-smoke.json --scenario discovery
 ```

@@ -360,6 +360,11 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
   presentation contracts remain in `tests/test_local_discovery.py`.
   The interval owns tasks, owner subscriptions, frozen observations and cleanup;
   the flow owns catalog history/navigation, and the preview renders observations.
+  The preview adapter must register pending connection cleanup before asynchronous
+  initialization; a disconnected attempt cannot acquire a late search owner.
+  Explicit Stop settles final publication to connected subscribers before
+  releasing them. HA shutdown consumes its one-shot listener before the callback;
+  cleanup must not invoke the already-consumed unsubscribe handle again.
   Collection belongs to the authenticated flow-local preview subscription, not
   form polling or a real entity. The collector keeps each active search's
   observations and activity in one registration; it still shares sockets, not

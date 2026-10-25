@@ -122,9 +122,38 @@ async def test_concurrent_intervals_keep_send_fanout_and_independent_stop(
         await second.async_stop()
 
 
+async def test_stop_publishes_frozen_result_to_every_connected_owner(
+    hass: HomeAssistant, responder: Responder,
+) -> None:
+    interval = DiscoveryInterval(hass, "owner")
+    first_updates = []
+    second_updates = []
+    first = await interval.async_subscribe("owner", first_updates.append)
+    second = await interval.async_subscribe("owner", second_updates.append)
+    await wait_for(lambda: len(responder.queries) == 1)
+    responder.reply()
+    await wait_for(lambda: interval.progress.devices == 1)
+
+    result = await interval.async_stop()
+    assert [item.device_id for item in result.records] == ["020000000001"]
+    for updates in (first_updates, second_updates):
+        assert updates[-1].outcome == "stopped"
+        assert updates[-1].devices == 1
+        assert sum(item.outcome == "stopped" for item in updates) == 1
+    frozen = interval.progress
+    first()
+    second()
+    interval.close()
+    assert await interval.async_stop() == result
+    responder.reply(identity="020000000002")
+    await asyncio.sleep(0)
+    assert interval.progress == frozen
+    assert first_updates[-1] == second_updates[-1] == frozen
+
+
 @pytest.mark.parametrize("ending", ["stop", "close", "shutdown"])
 async def test_completion_is_final_and_releases_real_sockets(
-    hass: HomeAssistant, responder: Responder, ending: str,
+    hass: HomeAssistant, responder: Responder, ending: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     interval = DiscoveryInterval(hass, "owner")
     published = []
@@ -147,6 +176,11 @@ async def test_completion_is_final_and_releases_real_sockets(
     await interval.async_wait()
     frozen = interval.progress
     assert frozen.outcome == expected
+    if ending == "shutdown":
+        assert not [
+            record.getMessage() for record in caplog.records
+            if record.name == "homeassistant.core" and record.levelno >= 40
+        ]
     last()
     interval.close()
     assert interval.progress == frozen
@@ -294,3 +328,81 @@ async def test_bounded_journal_keeps_coverage_issues_and_exact_counters(
         await interval.async_stop()
         occupied.close()
         await occupied_peer.closed.wait()
+
+
+async def test_preview_disconnected_during_translation_cannot_start_collection(
+    hass: HomeAssistant, responder: Responder, hass_ws_client, hass_admin_user,
+) -> None:
+    from homeassistant.config_entries import SOURCE_USER
+    from homeassistant.setup import async_setup_component
+
+    from custom_components.uplus_reborn import discovery_preview
+    from custom_components.uplus_reborn.const import DOMAIN
+
+    assert await async_setup_component(hass, "http", {})
+    assert await async_setup_component(hass, "websocket_api", {})
+    refresh = await hass.auth.async_create_refresh_token(
+        hass_admin_user, client_id="http://localhost/"
+    )
+    token = hass.auth.async_create_access_token(refresh)
+    flow = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER, "user_id": hass_admin_user.id}
+    )
+    await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "local"}
+    )
+    interval = hass.data[discovery_preview.DISCOVERY_INTERVALS][flow["flow_id"]]
+    independent = DiscoveryInterval(hass, hass_admin_user.id)
+    await independent.async_subscribe(hass_admin_user.id, lambda _: None)
+    await wait_for(lambda: len(responder.queries) == 1)
+    client = await hass_ws_client(hass, access_token=token)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    resumed = asyncio.Event()
+    original = discovery_preview.async_get_translations
+
+    async def translations(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        try:
+            return await original(*args, **kwargs)
+        finally:
+            resumed.set()
+
+    try:
+        with patch.object(discovery_preview, "async_get_translations", translations):
+            await client.send_json({
+                "id": 1, "type": f"{DOMAIN}/start_preview",
+                "flow_type": "config_flow", "flow_id": flow["flow_id"], "user_input": {},
+            })
+            await asyncio.wait_for(entered.wait(), 3)
+            await client.close()
+            await hass.async_block_till_done()
+            release.set()
+            await asyncio.wait_for(resumed.wait(), 3)
+            await hass.async_block_till_done()
+            assert interval.progress.sent == 0
+            assert len(responder.queries) == 1
+            with pytest.raises(ValueError, match="no preview owner"):
+                await interval.async_wait()
+            responder.reply()
+            await wait_for(lambda: independent.progress.devices == 1)
+            assert independent.progress.outcome == "searching"
+        client = await hass_ws_client(hass, access_token=token)
+        await client.send_json({
+            "id": 1, "type": f"{DOMAIN}/start_preview",
+            "flow_type": "config_flow", "flow_id": flow["flow_id"], "user_input": {},
+        })
+        assert (await client.receive_json())["success"]
+        assert "entity_picture" in (await client.receive_json())["event"]["attributes"]
+        await wait_for(lambda: len(responder.queries) == 2)
+        await client.close()
+        await interval.async_wait()
+        assert interval.progress.outcome == "disconnected"
+        assert independent.progress.outcome == "searching"
+    finally:
+        release.set()
+        await client.close()
+        hass.config_entries.flow.async_abort(flow["flow_id"])
+        await independent.async_stop()
+        hass.auth.async_remove_refresh_token(refresh)
