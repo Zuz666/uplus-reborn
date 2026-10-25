@@ -51,8 +51,17 @@ def publish(repo: Path, repository: str, metadata: dict, directory: Path, *,
     github.api(f"repos/{repository}/git/refs", payload={"ref": f"refs/tags/{metadata['tag']}", "sha": metadata["commit"]})
     if github.tag_commit(repository, metadata["tag"]) != metadata["commit"]:
         raise ValueError("Created tag does not resolve to the approved commit")
-    github.gh("release", "create", metadata["tag"], "--repo", repository, "--verify-tag", "--target", metadata["commit"],
-              "--title", f"U+ Reborn {metadata['version']}", "--notes-file", str(directory / "release-notes.md"), "--draft")
+    created = github.api(f"repos/{repository}/releases", payload={
+        "tag_name": metadata["tag"], "target_commitish": metadata["commit"],
+        "name": f"U+ Reborn {metadata['version']}",
+        "body": (directory / "release-notes.md").read_text(encoding="utf-8"),
+        "draft": True,
+    })
+    release_id = created["id"]
+    if (type(release_id) is not int or release_id <= 0
+            or created.get("tag_name") != metadata["tag"] or created.get("draft") is not True
+            or created.get("prerelease") is not False):
+        raise ValueError("Created draft identity differs; inspect actual state before resuming")
     github.gh("release", "upload", metadata["tag"], *[str(directory / name) for name in ASSETS], "--repo", repository)
     with tempfile.TemporaryDirectory(prefix="uplus-release-download-") as temporary:
         github.gh("release", "download", metadata["tag"], "--repo", repository, "--dir", temporary)
@@ -63,14 +72,17 @@ def publish(repo: Path, repository: str, metadata: dict, directory: Path, *,
     # Approval/upload can outlive master, protection, the selected CI attempt or
     # its artifacts. Recheck all of them without relaxing duplicate-tag guards.
     release_evidence.verify_source_evidence(repo, repository, metadata, directory, matrix, selection)
-    draft = github.api(f"repos/{repository}/releases/tags/{metadata['tag']}")
-    if (draft.get("draft") is not True or draft.get("prerelease")
+    draft = github.api(f"repos/{repository}/releases/{release_id}")
+    if (draft.get("id") != release_id or draft.get("tag_name") != metadata["tag"]
+            or draft.get("draft") is not True or draft.get("prerelease") is not False
             or {asset["name"] for asset in draft["assets"]} != set(ASSETS)
             or github.tag_commit(repository, metadata["tag"]) != metadata["commit"]):
         raise ValueError("Draft/tag/asset state changed; inspect actual state before resuming")
     github.gh("release", "edit", metadata["tag"], "--repo", repository, "--draft=false", "--latest")
     released = github.api(f"repos/{repository}/releases/tags/{metadata['tag']}")
-    if released["draft"] or github.tag_commit(repository, metadata["tag"]) != metadata["commit"]:
+    if (released.get("id") != release_id or released.get("tag_name") != metadata["tag"]
+            or released.get("draft") is not False
+            or github.tag_commit(repository, metadata["tag"]) != metadata["commit"]):
         raise ValueError("Published release/tag acceptance failed; inspect actual state")
     result.update(published=True, url=released["html_url"], immutable=released.get("immutable", False))
     return result
