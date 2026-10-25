@@ -26,12 +26,12 @@
     "step": {
       "local": {
         "title": "Find on local network",
-        "description": "Searching continues while this dialog is connected. Choose **Show found devices** at any time to stop searching and inspect the catalog, even if no device has replied. Close this dialog with **×** to cancel.\n\nCounters show actual local UDP submissions and valid replies, not delivery acknowledgements. Silence does not prove that no devices are present. The animation illustrates searching, not a verified request/reply exchange.",
+        "description": "Searching continues while this dialog is connected. Choose **Show found devices** at any time to stop searching and inspect the catalog, even if no device has replied. Close this dialog with **×** to cancel.\n\nActive searches share discovery queries every 20 seconds. Joining waits for the next round without sending an extra query; Sent = 0 while waiting is normal. Counters cover only this search's participation: shared UDP submissions, valid replies and distinct devices. Submission is not delivery proof, and replies cannot be attributed to a query. Silence does not prove that no devices are present. The animation illustrates searching, not a verified request/reply exchange.",
         "submit": "Show found devices"
       },
       "local_activity": {
         "title": "Last search activity",
-        "description": "**{outcome} — {elapsed} seconds**\nQuery rounds: {rounds} · UDP submissions: {sent}\nValid replies: {replies} · Distinct devices: {devices}\n\n**Coverage:** {issues}\n\n**Recent activity (up to 12 events)**\n{journal}\n\nSubmission is not delivery proof. UDP replies cannot be attributed to a particular query round.",
+        "description": "**{outcome} — {elapsed} seconds**\nShared query rounds observed: {rounds} · Shared UDP submissions observed: {sent}\nValid replies: {replies} · Distinct devices: {devices}\n\n**Coverage:** {issues}\n\n**Recent activity (up to 12 events)**\n{journal}\n\nCounters cover only this search's participation. Active searches share submissions; adding their counters does not give a network total. Submission is not delivery proof. UDP replies cannot be attributed to a particular query round.",
         "submit": "Back to catalog"
       },
       "local_catalog": {

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CoreState, HomeAssistant, callback
 
 from .const import DOMAIN
 from .local_discovery import ScanActivity, ScanProgress, ScanResult, async_get_collector
@@ -36,7 +36,9 @@ class DiscoveryInterval:
         self, user_id: str, send: Callable[[ScanProgress], None]
     ) -> Callable[[], None]:
         """Acquire one authorized owner; the first starts collection."""
-        if self._terminal is not None or user_id != self._user_id:
+        if self._terminal is not None or user_id != self._user_id or self._hass.state in (
+            CoreState.stopping, CoreState.final_write, CoreState.stopped
+        ):
             raise ValueError("This discovery interval is not active for this user")
         owner = object()
         self._owners[owner] = send

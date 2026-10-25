@@ -344,8 +344,10 @@ HACS installation. Supported user distribution is through HACS.
 ### Find on local network
 
 1. Open **Settings → Devices & services → Add integration → U+ Reborn**.
-2. Choose **🔎︎ Find on local network**. Search sends a query immediately after
-   listeners are ready, then every 20 seconds per enabled IPv4 source.
+2. Choose **🔎︎ Find on local network**. The first active search sends immediately
+   after listeners are ready, then active searches share queries every 20 seconds
+   per usable enabled IPv4 source. A later search waits for the next shared round;
+   joining does not send an extra query or reset the schedule.
 3. Choose a **Discovered device** from the catalog dropdown, select **View device / last activity**
    and press **Confirm**. Unsupported and already-configured devices remain
    inspectable. Dropdown selection alone does not navigate, add or TCP-probe.
@@ -353,10 +355,14 @@ HACS installation. Supported user distribution is through HACS.
    confirm. Addition requires a fresh checksum-valid, read-only TCP state check.
 
 The native preview pairs **Sent / Replies / Found / Msg** with slash-separated
-values: submitted UDP datagrams, valid replies, distinct devices and the latest
-event. Time and query rounds stay in the stopped activity journal, not the live
-preview. **Device replied** means an already-discovered device replied again.
-Updates do not reload the form.
+values: shared UDP submissions observed during this search, valid replies,
+distinct devices and the latest event. No earlier search's counter or device
+history is imported. **Sent = 0** while waiting for the next round is normal;
+delayed replies can arrive before this search observes its first round.
+Simultaneous searches can show the same Sent value; adding their counters is not
+a network traffic total. Time and observed query rounds stay in the stopped
+activity journal, not the live preview. **Device replied** means an already-found
+device replied again. Updates do not reload the form.
 The animated washer ↔ Home Assistant illustration uses thick alternating blue
 signal arrows and two expanding washer echoes after the illustrative incoming
 pulse. It is decorative, not delivery or acknowledgement proof.
@@ -364,6 +370,11 @@ Reduced-motion settings show a static image.
 **Show found devices** is available immediately, including with no replies.
 It stops this search and opens the catalog without selecting/adding a device or
 starting a TCP check. There is no duration choice or automatic timeout.
+Stopping one search does not stop another. The last active search releases the
+shared sender and sockets. A fatal shared-sender failure stops active searches
+with diagnostics but retains each search's own valid observations for explicit
+catalog inspection; it does not prove those devices are currently reachable.
+A new search after failure is explicit, not an automatic restart.
 
 The catalog has three separate radio actions: **View device / last activity**, **Continue
 searching**, and **Enter manually**, followed by one **Confirm** button. Search

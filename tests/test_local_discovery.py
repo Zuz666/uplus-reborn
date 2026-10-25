@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import struct
+import weakref
 from dataclasses import replace
 from ipaddress import IPv4Network
 from unittest.mock import AsyncMock, patch
@@ -49,6 +51,44 @@ class Sender:
 async def open_synthetic(collector: DiscoveryCollector) -> None:
     collector._networks = NETWORKS
     collector._senders = [(Sender(), HOST)]
+
+
+
+class RecordingSender(Sender):
+    """Expose UDP submissions and controllable transport failures."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+        self.submissions: list[tuple[bytes, tuple[str, int]]] = []
+        self.error: Exception | None = None
+        self.closed = False
+
+    def sendto(self, data, address):
+        self.attempts += 1
+        if self.error is not None:
+            raise self.error
+        self.submissions.append((data, address))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def shared_rounds():
+    """Release only discovery's next 20-second delay, never unrelated sleeps."""
+    actual_sleep = asyncio.sleep
+    pending: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+
+    async def sleep(delay, *args, **kwargs):
+        if delay != 20:
+            return await actual_sleep(delay, *args, **kwargs)
+        release = asyncio.Event()
+        pending.put_nowait(release)
+        await release.wait()
+
+    with patch("custom_components.uplus_reborn.local_discovery.asyncio.sleep", sleep):
+        yield pending
+
 
 def packet(
     *,
@@ -173,6 +213,306 @@ async def test_real_udp_ephemeral_reply_and_port_occupancy(
         assert state.outcome == "stopped"
     finally:
         peer.close()
+
+
+async def test_partial_udp_opening_and_receive_errors_preserve_shared_search(
+    hass: HomeAssistant, shared_rounds,
+) -> None:
+    from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
+    first = DiscoveryInterval(hass, "owner")
+    late = DiscoveryInterval(hass, "owner")
+    endpoints = {}
+    adapters = [{
+        "enabled": True,
+        "ipv4": [
+            {"address": HOST, "network_prefix": 24},
+            {"address": "192.0.2.11", "network_prefix": 24},
+        ],
+    }]
+
+    async def open_endpoint(factory, *, local_addr, **kwargs):
+        if local_addr in ((HOST, 7083), ("192.0.2.11", 0)):
+            raise OSError("synthetic endpoint unavailable")
+        transport, protocol = RecordingSender(), factory()
+        endpoints[local_addr] = transport, protocol
+        return transport, protocol
+
+    with (
+        patch(
+            "custom_components.uplus_reborn.local_discovery.async_get_adapters",
+            AsyncMock(return_value=adapters),
+        ),
+        patch.object(
+            asyncio.get_running_loop(), "create_datagram_endpoint", open_endpoint
+        ),
+    ):
+        try:
+            await first.async_subscribe("owner", lambda _: None)
+            next_round = await asyncio.wait_for(shared_rounds.get(), 3)
+            sender, receiver = endpoints[(HOST, 0)]
+            receiver.error_received(OSError("synthetic receive error"))
+            receiver.datagram_received(packet(), (HOST, 45678))
+            assert first.progress.outcome == "searching"
+            assert (first.progress.rounds, first.progress.sent) == (1, 1)
+            assert (first.progress.replies, first.progress.devices) == (1, 1)
+            issues = {
+                "fixed_port_unavailable", "interface_unavailable", "receive_failed"
+            }
+            assert set(first.progress.issues) == issues
+
+            await late.async_subscribe("owner", lambda _: None)
+            await hass.async_block_till_done()
+            assert set(late.progress.issues) == issues
+            assert (
+                late.progress.rounds, late.progress.sent,
+                late.progress.replies, late.progress.devices,
+            ) == (0, 0, 0, 0)
+            assert sender.submissions == [(QUERY, ("192.0.2.255", 7083))]
+            next_round.set()
+            await asyncio.wait_for(shared_rounds.get(), 3)
+            receiver.datagram_received(packet(), (HOST, 45678))
+            assert (first.progress.rounds, first.progress.sent) == (2, 2)
+            assert (late.progress.rounds, late.progress.sent) == (1, 1)
+            assert (first.progress.replies, late.progress.replies) == (2, 1)
+            assert sender.submissions == [(QUERY, ("192.0.2.255", 7083))] * 2
+            first_result = await first.async_stop()
+            late_result = await late.async_stop()
+            assert {item.device_id for item in first_result.records} == {ID}
+            assert {item.device_id for item in late_result.records} == {ID}
+            assert set(first_result.issues) == set(late_result.issues) == issues
+            assert all(transport.closed for transport, _ in endpoints.values())
+        finally:
+            await first.async_stop()
+            await late.async_stop()
+
+
+async def test_shared_round_counts_each_successful_sender_and_survives_all_send_failures(
+    hass: HomeAssistant, shared_rounds,
+) -> None:
+    from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
+    collector = async_get_collector(hass)
+    first = DiscoveryInterval(hass, "owner")
+    late = DiscoveryInterval(hass, "owner")
+    senders = [RecordingSender() for _ in range(3)]
+    senders[2].error = OSError("synthetic send error")
+    broadcasts = ("192.0.2.255", "198.51.100.255", "203.0.113.255")
+
+    async def open_senders() -> None:
+        await open_synthetic(collector)
+        collector._senders = list(zip(senders, broadcasts, strict=True))
+
+    with patch.object(collector, "_open", open_senders):
+        try:
+            await first.async_subscribe("owner", lambda _: None)
+            next_round = await asyncio.wait_for(shared_rounds.get(), 3)
+            assert (first.progress.rounds, first.progress.sent) == (1, 2)
+            assert first.progress.issues == ("send_failed",)
+            await late.async_subscribe("owner", lambda _: None)
+            await hass.async_block_till_done()
+            assert (late.progress.rounds, late.progress.sent) == (0, 0)
+            assert late.progress.issues == ("send_failed",)
+            assert [sender.attempts for sender in senders] == [1, 1, 1]
+
+            for sender in senders:
+                sender.error = OSError("synthetic all-senders failure")
+            next_round.set()
+            next_round = await asyncio.wait_for(shared_rounds.get(), 3)
+            assert (first.progress.rounds, first.progress.sent) == (2, 2)
+            assert (late.progress.rounds, late.progress.sent) == (1, 0)
+            assert first.progress.outcome == late.progress.outcome == "searching"
+            assert [sender.attempts for sender in senders] == [2, 2, 2]
+
+            senders[0].error = senders[1].error = None
+            next_round.set()
+            await asyncio.wait_for(shared_rounds.get(), 3)
+            assert (first.progress.rounds, first.progress.sent) == (3, 4)
+            assert (late.progress.rounds, late.progress.sent) == (2, 2)
+            assert [sender.attempts for sender in senders] == [3, 3, 3]
+            assert senders[0].submissions == [(QUERY, ("192.0.2.255", 7083))] * 2
+            assert senders[1].submissions == [(QUERY, ("198.51.100.255", 7083))] * 2
+            assert senders[2].submissions == []
+            assert (await first.async_stop()).issues == ("send_failed",)
+            assert (await late.async_stop()).issues == ("send_failed",)
+            assert first.progress.outcome == late.progress.outcome == "stopped"
+        finally:
+            for sender in senders:
+                sender.error = None
+            await first.async_stop()
+            await late.async_stop()
+
+
+async def test_fatal_shared_sender_preserves_independent_results_and_explicit_fresh_search(
+    hass: HomeAssistant, shared_rounds,
+) -> None:
+    from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
+    first = DiscoveryInterval(hass, "owner")
+    second = DiscoveryInterval(hass, "owner")
+    empty = DiscoveryInterval(hass, "owner")
+    stopped = DiscoveryInterval(hass, "owner")
+    fresh = DiscoveryInterval(hass, "owner")
+    published = {interval: [] for interval in (first, second, empty)}
+    endpoints = {}
+    transports = []
+    adapters = [{
+        "enabled": True,
+        "ipv4": [{"address": HOST, "network_prefix": 24}],
+    }]
+
+    async def open_endpoint(factory, *, local_addr, **kwargs):
+        transport, protocol = RecordingSender(), factory()
+        endpoints[local_addr] = transport, protocol
+        transports.append(transport)
+        return transport, protocol
+
+    with (
+        patch(
+            "custom_components.uplus_reborn.local_discovery.async_get_adapters",
+            AsyncMock(return_value=adapters),
+        ),
+        patch.object(
+            asyncio.get_running_loop(), "create_datagram_endpoint", open_endpoint
+        ),
+    ):
+        try:
+            await first.async_subscribe("owner", published[first].append)
+            stopped_owner = await stopped.async_subscribe("owner", lambda _: None)
+            next_round = await asyncio.wait_for(shared_rounds.get(), 3)
+            await hass.async_block_till_done()
+            sender, receiver = endpoints[(HOST, 0)]
+            receiver.error_received(OSError("synthetic receive error"))
+            receiver.datagram_received(packet(), (HOST, 45678))
+            stopped_result = await stopped.async_stop()
+            stopped_progress = stopped.progress
+
+            second_owner = await second.async_subscribe("owner", published[second].append)
+            await hass.async_block_till_done()
+            receiver.datagram_received(
+                packet(identity="020000000002", host="192.0.2.11"),
+                ("192.0.2.11", 45678),
+            )
+            await empty.async_subscribe("owner", published[empty].append)
+            await hass.async_block_till_done()
+            expected_records = {
+                interval: tuple(
+                    event.record for event in interval.progress.events
+                    if event.kind == "found"
+                )
+                for interval in (first, second, empty)
+            }
+            assert [
+                item.device_id for item in expected_records[first]
+            ] == [ID, "020000000002"]
+            assert [
+                item.device_id for item in expected_records[second]
+            ] == ["020000000002"]
+            assert expected_records[empty] == ()
+            assert sender.submissions == [(QUERY, ("192.0.2.255", 7083))]
+
+            sender.error = RuntimeError("synthetic fatal sender termination")
+            next_round.set()
+            results = await asyncio.wait_for(
+                asyncio.gather(*(interval.async_wait() for interval in published)), 3
+            )
+            await hass.async_block_till_done()
+            frozen = {interval: interval.progress for interval in published}
+            for interval, result in zip(published, results, strict=True):
+                assert result.records == expected_records[interval]
+                assert set(result.issues) == {"receive_failed", "scan_failed"}
+                assert interval.progress.issues == result.issues
+                assert interval.progress.outcome == "failed"
+                assert published[interval][-1] == interval.progress
+                assert sum(
+                    update.outcome == "failed" for update in published[interval]
+                ) == 1
+            assert (first.progress.sent, first.progress.replies, first.progress.devices) == (
+                1, 2, 2
+            )
+            assert (second.progress.sent, second.progress.replies, second.progress.devices) == (
+                0, 1, 1
+            )
+            assert (empty.progress.sent, empty.progress.replies, empty.progress.devices) == (
+                0, 0, 0
+            )
+            assert stopped.progress == stopped_progress
+            assert stopped.progress.outcome == "stopped"
+            assert stopped_result.issues == ("receive_failed",)
+            assert [item.device_id for item in stopped_result.records] == [ID]
+            assert all(transport.closed for transport in transports)
+            with pytest.raises(ValueError):
+                await first.async_subscribe("owner", lambda _: None)
+            for interval in published:
+                await interval.async_stop()
+                interval.close()
+                assert interval.progress == frozen[interval]
+            second_owner()
+            stopped_owner()
+            assert await stopped.async_stop() == stopped_result
+            assert stopped.progress == stopped_progress
+
+            await fresh.async_subscribe("owner", lambda _: None)
+            await asyncio.wait_for(shared_rounds.get(), 3)
+            fresh_sender, fresh_receiver = endpoints[(HOST, 0)]
+            assert fresh.progress.issues == ()
+            assert (fresh.progress.rounds, fresh.progress.sent) == (1, 1)
+            assert (fresh.progress.replies, fresh.progress.devices) == (0, 0)
+            fresh_receiver.datagram_received(
+                packet(identity="020000000003", host="192.0.2.12"),
+                ("192.0.2.12", 45678),
+            )
+            assert fresh_sender.submissions == [(QUERY, ("192.0.2.255", 7083))]
+            fresh_result = await fresh.async_stop()
+            assert [item.device_id for item in fresh_result.records] == ["020000000003"]
+            assert fresh_result.issues == ()
+            assert fresh.progress.outcome == "stopped"
+            for interval, result in zip(published, results, strict=True):
+                assert interval.progress == frozen[interval]
+                assert await interval.async_wait() == result
+            assert stopped.progress == stopped_progress
+        finally:
+            for transport in transports:
+                transport.error = None
+            for interval in (first, second, empty, stopped, fresh):
+                await interval.async_stop()
+
+
+async def test_stop_during_udp_startup_never_submits_a_round(
+    hass: HomeAssistant,
+) -> None:
+    from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
+    collector = async_get_collector(hass)
+    interval = DiscoveryInterval(hass, "owner")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    sender = RecordingSender()
+
+    async def open_pending() -> None:
+        entered.set()
+        await release.wait()
+        await open_synthetic(collector)
+        collector._senders = [(sender, HOST)]
+
+    with patch.object(collector, "_open", open_pending):
+        stop = None
+        try:
+            await interval.async_subscribe("owner", lambda _: None)
+            await asyncio.wait_for(entered.wait(), 3)
+            stop = asyncio.create_task(interval.async_stop())
+            await asyncio.sleep(0)
+            assert interval.progress.outcome == "stopped"
+            release.set()
+            result = await asyncio.wait_for(stop, 3)
+            assert result.records == ()
+            assert sender.attempts == 0
+            assert (interval.progress.rounds, interval.progress.sent) == (0, 0)
+        finally:
+            release.set()
+            if stop is not None:
+                await stop
+            await interval.async_stop()
 
 
 
@@ -873,3 +1213,52 @@ async def test_preview_requires_admin_and_an_active_local_form(
         adapters.assert_not_called()
     await client.close()
     hass.config_entries.flow.async_abort(flow["flow_id"])
+
+
+async def test_cancelled_cleanup_releases_every_stopped_observation(
+    hass: HomeAssistant,
+) -> None:
+    """Closing a flow during another interval's teardown cannot retain its observations."""
+    class TrackedActivity(ScanActivity):
+        """Allow lifetime observation without inspecting collector registrations."""
+
+    collector = DiscoveryCollector(hass)
+    activities = (TrackedActivity(), TrackedActivity())
+    lifetimes = tuple(weakref.ref(activity) for activity in activities)
+    ready, closing, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    actual_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        if delay != 20:
+            return await actual_sleep(delay)
+        ready.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            closing.set()
+            await release.wait()
+            raise
+
+    with (
+        patch.object(collector, "_open", lambda: open_synthetic(collector)),
+        patch("custom_components.uplus_reborn.local_discovery.asyncio.sleep", sleep),
+    ):
+        tasks = [asyncio.create_task(collector.scan(activity=item)) for item in activities]
+        try:
+            await asyncio.wait_for(ready.wait(), 3)
+            assert activities[0].sent == activities[1].sent == 1
+            collector.receive(packet(), HOST)
+            activities[0].stop.set()
+            activities[1].stop.set()
+            await asyncio.wait_for(closing.wait(), 3)
+            tasks[1].cancel()
+            await asyncio.gather(tasks[1], return_exceptions=True)
+        finally:
+            release.set()
+            activities[0].stop.set()
+            activities[1].stop.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    del activities, tasks
+    await actual_sleep(0)
+    gc.collect()
+    assert all(lifetime() is None for lifetime in lifetimes)

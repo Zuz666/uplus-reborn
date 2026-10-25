@@ -7,6 +7,7 @@ import logging
 import socket
 import struct
 from dataclasses import asdict
+from itertools import pairwise
 from typing import Any
 
 from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
@@ -31,6 +32,17 @@ def _record(number: int, type_id: str, flags: int = 0) -> bytes:
     body[16:48] = bytes.fromhex(type_id)
     body[208:224] = f"127.0.0.{number}".encode().ljust(16, b"\0")
     return b"Haier" + struct.pack(">IH6sI", 0x684D, flags, bytes(6), 288) + body
+
+
+class _QueryReceiver(asyncio.DatagramProtocol):
+    """Identify a second synthetic broadcast destination without changing UDP."""
+
+    def __init__(self, fixture: DiscoveryFixture, destination: str) -> None:
+        self.fixture = fixture
+        self.destination = destination
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        self.fixture._receive_query(data, addr, self.destination)
 
 
 class DiscoveryFixture(asyncio.DatagramProtocol):
@@ -60,6 +72,9 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         self.shutdown_unsubscribe: Any = None
         self.shutdown_errors: list[dict[str, Any]] = []
         self.shutdown_log_handler: logging.Handler | None = None
+        self.shutdown_late_interval: Any = None
+        self.shutdown_late_done = asyncio.Event()
+        self.shutdown_late_unsubscribe: Any = None
 
     async def start(self, *, identification: bool = False) -> None:
         self.network = await async_get_network(self.hass)
@@ -93,10 +108,18 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             self.peers.append(peer)
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        self._receive_query(data, addr, "127.0.1.255")
+
+    def _receive_query(
+        self, data: bytes, addr: tuple[str, int], destination: str
+    ) -> None:
         if len(data) != 77 or data[:9] != b"Haier\0\0i\x15":
             raise RuntimeError("Unexpected discovery query")
         self.queries.append(
-            {"at": self.hass.loop.time(), "sender_port": addr[1], "bytes": len(data)}
+            {
+                "at": self.hass.loop.time(), "sender_address": addr[0],
+                "sender_port": addr[1], "destination": destination, "bytes": len(data),
+            }
         )
         self.query_received.set()
         if self.silent:
@@ -310,6 +333,329 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         )
         assert result["step_id"] == "local"
         return flow_id, self.hass.data[f"{DOMAIN}_discovery_intervals"][flow_id]
+
+    async def _wait_rounds(self, interval: Any, rounds: int) -> None:
+        async with asyncio.timeout(25):
+            while interval.progress.rounds < rounds:
+                assert interval.progress.outcome == "searching", interval.progress
+                await asyncio.sleep(0.05)
+
+    async def _wait_replies(self, interval: Any, replies: int) -> None:
+        async with asyncio.timeout(5):
+            while interval.progress.replies < replies:
+                assert interval.progress.outcome == "searching", interval.progress
+                await asyncio.sleep(0.05)
+
+    @staticmethod
+    def _reserve_released(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Exclusive binding proves release of fixed and ephemeral source ports."""
+        addresses = {(query["sender_address"], 7083) for query in queries}
+        addresses.update(
+            (query["sender_address"], query["sender_port"]) for query in queries
+        )
+        reservations = []
+        try:
+            for address in sorted(addresses):
+                reservation = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                reservations.append(reservation)
+                reservation.bind(address)
+            return [{"address": address, "port": port} for address, port in sorted(addresses)]
+        finally:
+            for reservation in reservations:
+                reservation.close()
+
+    def _shared_receipt(self) -> dict[str, Any]:
+        """Retain teardown evidence even when preparation failed before the shared phase."""
+        if "discovery_shared_sender" not in self.result:
+            self.result["discovery_shared_sender"] = {
+                "scope": "isolated real Core; two synthetic loopback sender/broadcast pairs",
+                "physical_hardware_verified": False,
+                "query_start_index": len(self.queries),
+                "shared_rounds": {"status": "not_run"},
+                "recoverable_and_fatal": {"status": "not_run"},
+                "shutdown": {"status": "pending"},
+                "cleanup": {"fault_hooks_restored": True, "network_inventory_restored": True},
+                "limits": [
+                    "Synthetic loopback only; no physical broadcast, appliance or browser proof.",
+                    "Send and receive errors are controlled runtime seams, not kernel fault injection.",
+                    "Earlier issue #62 evidence is separate; only this run's receipt proves re-execution.",
+                ],
+            }
+        return self.result["discovery_shared_sender"]
+
+    async def exercise_shared_sender(self) -> None:
+        """Exercise issue #63 using real sockets and unmodified 20-second sleeps."""
+        receipt = self._shared_receipt()
+        receipt["query_start_index"] = len(self.queries)
+        receipt["cleanup"]["network_inventory_restored"] = False
+        original_adapters = self.network.adapters
+        second = dict(original_adapters[0])
+        second.update(
+            name="loopback-discovery-fixture-second", index=2, default=False,
+            ipv4=[{"address": "127.0.2.1", "network_prefix": 23}],
+        )
+        self.network.adapters = [*original_adapters, second]
+        transport = None
+        try:
+            transport, _ = await self.hass.loop.create_datagram_endpoint(
+                lambda: _QueryReceiver(self, "127.0.3.255"),
+                local_addr=("127.0.3.255", 7083),
+            )
+            self.transports.append(transport)
+            for name, exercise in (
+                ("shared_rounds", self._shared_rounds),
+                ("recoverable_and_fatal", self._shared_faults),
+            ):
+                finding = receipt[name]
+                try:
+                    async with asyncio.timeout(90):
+                        await exercise(finding)
+                except Exception as err:  # noqa: BLE001
+                    finding.update(status="failed", error=f"{type(err).__name__}: {err}")
+                else:
+                    finding["status"] = "passed"
+                finally:
+                    active = {
+                        flow["flow_id"] for flow in
+                        self.hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+                    }
+                    for flow_id in self.lifecycle_flows:
+                        if flow_id in active:
+                            self.hass.config_entries.flow.async_abort(flow_id)
+                    self.lifecycle_flows.clear()
+                    await self.hass.async_block_till_done()
+        finally:
+            self.network.adapters = original_adapters
+            receipt["cleanup"]["network_inventory_restored"] = (
+                self.network.adapters is original_adapters
+            )
+            if transport is not None:
+                transport.close()
+            receipt["query_observations"] = self.queries[receipt["query_start_index"]:]
+
+    async def _shared_rounds(self, receipt: dict[str, Any]) -> None:
+        start = len(self.queries)
+        intervals, unsubscribes = [], []
+        frozen = []
+        try:
+            _, first = await self._new_interval("fixture-shared")
+            intervals.append(first)
+            unsubscribes.append(await first.async_subscribe("fixture-shared", lambda _: None))
+            await self._queries_at_least(start + 2)
+            await self._wait_replies(first, 36)
+            assert first.progress.rounds == 1 and first.progress.sent == 2
+            for _ in range(2):
+                await asyncio.sleep(3)
+                before = len(self.queries)
+                _, joined = await self._new_interval("fixture-shared")
+                intervals.append(joined)
+                unsubscribes.append(
+                    await joined.async_subscribe("fixture-shared", lambda _: None)
+                )
+                await self.hass.async_block_till_done()
+                assert joined.progress.rounds == joined.progress.sent == 0
+                assert joined.progress.replies == joined.progress.devices == 0
+                await asyncio.sleep(1)
+                assert len(self.queries) == before, "Joining emitted an extra query"
+            receipt["join_observations"] = [asdict(item.progress) for item in intervals]
+            # The first subsequent round has three owners, then two, then one.
+            for active, expected_round in ((3, 2), (2, 3), (1, 4)):
+                await self._queries_at_least(start + expected_round * 2)
+                await self._wait_rounds(first, expected_round)
+                await self._wait_replies(first, expected_round * 36)
+                assert len(self.queries) == start + expected_round * 2
+                receipt.setdefault("rounds", []).append({
+                    "active_intervals": active,
+                    "packets": self.queries[start + (expected_round - 1) * 2:],
+                    "observations": [asdict(item.progress) for item in intervals],
+                })
+                for previous, state, result in frozen:
+                    assert previous.progress == state
+                    assert await previous.async_wait() == result
+                stopping = intervals[active - 1]
+                state_result = await stopping.async_stop()
+                frozen.append((stopping, stopping.progress, state_result))
+            round_packets = self.queries[start:]
+            for destination in ("127.0.1.255", "127.0.3.255"):
+                times = [
+                    packet["at"] for packet in round_packets
+                    if packet["destination"] == destination
+                ]
+                assert len(times) == 4
+                gaps = [later - earlier for earlier, later in pairwise(times)]
+                assert all(19.5 <= gap <= 24 for gap in gaps), gaps
+                receipt.setdefault("cadence", []).append({
+                    "destination": destination, "timestamps": times, "gaps_seconds": gaps,
+                })
+            assert [(item.rounds, item.sent) for _, item, _ in frozen] == [
+                (1, 2), (2, 4), (4, 8),
+            ]
+            receipt["frozen_results"] = [
+                {"progress": asdict(state), "result": asdict(result)}
+                for _, state, result in frozen
+            ]
+            receipt["released_ports"] = self._reserve_released(round_packets)
+            # Simultaneous startup also shares a fresh immediate round.
+            new_intervals = await asyncio.gather(
+                *(self._new_interval("fixture-shared") for _ in range(3))
+            )
+            simultaneous = [item for _, item in new_intervals]
+            intervals.extend(simultaneous)
+            fresh = simultaneous[0]
+            before = len(self.queries)
+            reopened = self.hass.loop.time()
+            unsubscribes.extend(await asyncio.gather(*(
+                item.async_subscribe("fixture-shared", lambda _: None)
+                for item in simultaneous
+            )))
+            await self._queries_at_least(before + 2)
+            assert self.queries[before]["at"] - reopened < 2
+            assert fresh.progress.rounds == 1 and fresh.progress.sent == 2
+            assert all(item.progress.devices == item.progress.replies == 0 for item in simultaneous)
+            await asyncio.gather(*(self._wait_replies(item, 36) for item in simultaneous))
+            assert len(self.queries) == before + 2
+            assert all(item.progress.rounds <= 1 and item.progress.sent <= 2 for item in simultaneous)
+            await asyncio.gather(*(item.async_stop() for item in simultaneous))
+            receipt["simultaneous_start"] = {
+                "intervals": [asdict(item.progress) for item in simultaneous],
+                "packet_count": len(self.queries) - before,
+                "queries": self.queries[before:],
+            }
+            for previous, state, result in frozen:
+                assert previous.progress == state
+                assert await previous.async_wait() == result
+            receipt.update(
+                fresh_run=asdict(fresh.progress), previous_results_frozen=True,
+                new_run_immediate=True, last_owner_release=True,
+                packet_count=len(round_packets), pairs_per_round=2,
+            )
+        finally:
+            for unsubscribe in unsubscribes:
+                unsubscribe()
+            for interval in intervals:
+                await interval.async_stop()
+
+    async def _shared_faults(self, receipt: dict[str, Any]) -> None:
+        from custom_components.uplus_reborn.local_discovery import async_get_collector
+
+        collector = async_get_collector(self.hass)
+        intervals, unsubscribes = [], []
+        senders = None
+        reservation = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        reservation.bind(("127.0.2.1", 7083))
+        start = len(self.queries)
+        mode = {"error": "recoverable", "attempts": 0}
+
+        class FaultSender:
+            def sendto(self, data: bytes, address: tuple[str, int]) -> None:
+                mode["attempts"] += 1
+                if mode["error"] == "recoverable":
+                    raise OSError("Synthetic loopback send failure")
+                raise RuntimeError("Synthetic loopback sender termination")
+
+        cleanup = self.result["discovery_shared_sender"]["cleanup"]
+        original_silent = self.silent
+        try:
+            _, first = await self._new_interval("fixture-faults")
+            intervals.append(first)
+            unsubscribes.append(await first.async_subscribe("fixture-faults", lambda _: None))
+            await self._queries_at_least(start + 2)
+            await self._wait_replies(first, 30)
+            assert "fixed_port_unavailable" in first.progress.issues
+            reservation.close()
+            senders = list(collector._senders)
+            assert len(senders) == 2
+            # Exercise the production receive-error callback on a real UDP transport.
+            senders[0][0].get_protocol().error_received(OSError("Synthetic receive error"))
+            assert "receive_failed" in first.progress.issues
+            _, stopped = await self._new_interval("fixture-faults")
+            intervals.append(stopped)
+            unsubscribes.append(
+                await stopped.async_subscribe("fixture-faults", lambda _: None)
+            )
+            _, late = await self._new_interval("fixture-faults")
+            intervals.append(late)
+            unsubscribes.append(await late.async_subscribe("fixture-faults", lambda _: None))
+            await self.hass.async_block_till_done()
+            assert late.progress.rounds == late.progress.sent == late.progress.replies == 0
+            assert late.progress.devices == 0
+            self.responders[1].sendto(_record(1, TYPE), ("127.0.0.1", 7083))
+            await self._wait_replies(late, 1)
+            assert late.progress.devices == 1
+            stopped_result = await stopped.async_stop()
+            stopped_state = stopped.progress
+            cleanup["fault_hooks_restored"] = False
+            collector._senders[:] = [(FaultSender(), target) for _, target in senders]
+            await self._wait_rounds(first, 2)
+            # Both attempted pairs failed, yet neither active owner terminated.
+            assert mode["attempts"] == 2
+            assert len(self.queries) == start + 2
+            assert first.progress.sent == 2 and late.progress.sent == 0
+            assert first.progress.outcome == late.progress.outcome == "searching"
+            assert "send_failed" in first.progress.issues
+            assert "send_failed" in late.progress.issues
+            receipt["zero_success_round"] = {
+                "attempted_pairs": mode["attempts"], "packet_count": 0,
+                "observations": [asdict(first.progress), asdict(late.progress)],
+            }
+            # Keep the late owner's one-record observation window distinct, while
+            # proving the restored real transports still submit both queries.
+            self.silent = True
+            collector._senders[:] = senders
+            await self._queries_at_least(start + 4)
+            await self._wait_rounds(first, 3)
+            self.silent = original_silent
+            assert first.progress.outcome == late.progress.outcome == "searching"
+            receipt["recovery_round"] = {
+                "queries": self.queries[start + 2:],
+                "responders_silenced_to_preserve_distinct_partial_results": True,
+                "observations": [asdict(first.progress), asdict(late.progress)],
+            }
+            mode["error"] = "fatal"
+            collector._senders[:] = [(FaultSender(), target) for _, target in senders]
+            async with asyncio.timeout(25):
+                first_result, late_result = await asyncio.gather(
+                    first.async_wait(), late.async_wait()
+                )
+            assert first.progress.outcome == late.progress.outcome == "failed"
+            assert len(first_result.records) == 6 and len(late_result.records) == 1
+            assert "scan_failed" in first_result.issues and "scan_failed" in late_result.issues
+            assert stopped.progress == stopped_state
+            assert await stopped.async_wait() == stopped_result
+            receipt.update(
+                fatal_results=[
+                    {"progress": asdict(item.progress), "result": asdict(result)}
+                    for item, result in ((first, first_result), (late, late_result))
+                ],
+                stopped_before_fatal={
+                    "progress": asdict(stopped_state), "result": asdict(stopped_result),
+                },
+                stopped_result_unchanged=True,
+                released_ports=self._reserve_released(self.queries[start:]),
+            )
+            # Fatal run cleanup must not poison the next explicit search.
+            _, fresh = await self._new_interval("fixture-faults")
+            intervals.append(fresh)
+            before = len(self.queries)
+            unsubscribes.append(await fresh.async_subscribe("fixture-faults", lambda _: None))
+            await self._queries_at_least(before + 2)
+            assert not fresh.progress.issues
+            await self._wait_replies(fresh, 36)
+            await fresh.async_stop()
+            receipt["fresh_after_failure"] = asdict(fresh.progress)
+        finally:
+            reservation.close()
+            self.silent = original_silent
+            # Never reinstall old transports into an already closed/new collector run.
+            if senders is not None and collector._senders and any(
+                isinstance(sender, FaultSender) for sender, _ in collector._senders
+            ):
+                collector._senders[:] = senders
+            cleanup["fault_hooks_restored"] = True
+            for unsubscribe in unsubscribes:
+                unsubscribe()
+            for interval in intervals:
+                await interval.async_stop()
 
     @staticmethod
     async def _message(ws: ClientWebSocketResponse) -> dict[str, Any]:
@@ -606,6 +952,33 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
         except Exception as err:  # noqa: BLE001
             receipt.update(status="failed", error=f"{type(err).__name__}: {err}")
 
+        from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+        from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
+        shared_shutdown = self._shared_receipt()["shutdown"]
+
+        async def late_owner(_event: Any) -> None:
+            shared_shutdown["queries_at_stop_event"] = len(self.queries)
+            shared_shutdown["is_stopping_at_attempt"] = self.hass.is_stopping
+            self.shutdown_late_interval = DiscoveryInterval(self.hass, "fixture-shutdown-late")
+            try:
+                self.shutdown_late_unsubscribe = (
+                    await self.shutdown_late_interval.async_subscribe(
+                        "fixture-shutdown-late", lambda _: None
+                    )
+                )
+            except ValueError:
+                shared_shutdown["late_subscription"] = "rejected"
+            except Exception as err:  # noqa: BLE001
+                shared_shutdown.update(status="failed", error=type(err).__name__)
+            else:
+                shared_shutdown["late_subscription"] = "accepted_without_sender"
+            finally:
+                self.shutdown_late_done.set()
+
+        self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, late_owner)
+
         errors = self.shutdown_errors
 
         class ShutdownErrors(logging.Handler):
@@ -629,6 +1002,8 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
 
     async def finish_shutdown(self, *, core_stopped: bool) -> None:
         """Measure after hass.async_stop, before any fixture-forced flow cleanup."""
+        from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+
         receipt = self.result["discovery_lifecycle"]["shutdown"]
         try:
             receipt["actual_core_stopped"] = core_stopped
@@ -639,6 +1014,41 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             receipt["outcome"] = self.shutdown_interval.progress.outcome
             receipt["collection_settled"] = True
             assert receipt["outcome"] == "shutdown"
+            shared_shutdown = self._shared_receipt()["shutdown"]
+            async with asyncio.timeout(5):
+                await self.shutdown_late_done.wait()
+                assert self.shutdown_late_interval is not None
+                if shared_shutdown.get("late_subscription") != "rejected":
+                    await self.shutdown_late_interval.async_wait()
+            shared_shutdown["late_progress"] = asdict(self.shutdown_late_interval.progress)
+            assert shared_shutdown["is_stopping_at_attempt"]
+            assert self.shutdown_late_interval.progress.sent == 0
+            if shared_shutdown.get("late_subscription") != "rejected":
+                assert self.shutdown_late_interval.progress.outcome == "shutdown"
+            else:
+                assert self.shutdown_late_interval.progress.rounds == 0
+            post_stop = DiscoveryInterval(self.hass, "fixture-after-shutdown")
+            try:
+                unsubscribe = await post_stop.async_subscribe(
+                    "fixture-after-shutdown", lambda _: None
+                )
+            except ValueError:
+                shared_shutdown["after_stopped_subscription"] = "rejected"
+            else:
+                unsubscribe()
+                await post_stop.async_stop()
+                raise AssertionError("Stopped Core admitted a new discovery owner")
+            shared_shutdown["after_stopped_progress"] = asdict(post_stop.progress)
+            assert post_stop.progress.rounds == post_stop.progress.sent == 0
+            post_stop.close()
+            assert len(self.queries) == shared_shutdown["queries_at_stop_event"]
+            assert shared_shutdown["status"] != "failed"
+            shared_shutdown.update(
+                status="passed", actual_core_stopped=True,
+                queries_after_stop_event=0, new_sender_admitted=False,
+            )
+            if self.shutdown_late_unsubscribe is not None:
+                self.shutdown_late_unsubscribe()
             # Release is demonstrated by exclusive rebinding, not a delay/no-packet guess.
             ports = (7083, receipt["sender_port"])
             reservations = []
@@ -668,6 +1078,9 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             receipt["status"] = "passed"
         except Exception as err:  # noqa: BLE001
             receipt.update(status="failed", error=f"{type(err).__name__}: {err}")
+            self._shared_receipt()["shutdown"].update(
+                status="failed", error=f"{type(err).__name__}: {err}"
+            )
         finally:
             lifecycle = self.result["discovery_lifecycle"]
             lifecycle["query_observations"] = self.queries[lifecycle["query_start_index"]:]
@@ -689,6 +1102,17 @@ class DiscoveryFixture(asyncio.DatagramProtocol):
             f"cleanup.{name}" for name, complete in receipt["cleanup"].items()
             if not complete
         )
+        shared = self.result.get("discovery_shared_sender")
+        if shared is not None:
+            failed.extend(
+                f"shared_sender.{name}"
+                for name in ("shared_rounds", "recoverable_and_fatal", "shutdown")
+                if shared[name]["status"] != "passed"
+            )
+            failed.extend(
+                f"shared_sender.cleanup.{name}"
+                for name, complete in shared["cleanup"].items() if not complete
+            )
         if failed:
             raise RuntimeError("Discovery lifecycle acceptance failed: " + ", ".join(failed))
 

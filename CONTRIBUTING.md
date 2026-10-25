@@ -367,10 +367,14 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
   cleanup must not invoke the already-consumed unsubscribe handle again.
   Collection belongs to the authenticated flow-local preview subscription, not
   form polling or a real entity. The collector keeps each active search's
-  observations and activity in one registration; it still shares sockets, not
-  send cadence, across intervals. Sent/Rounds remain interval-local; Replies
-  includes every valid datagram seen during that interval, including responses
-  induced by another dialog. Devices remain deduplicated by identity. The
+  observations and activity in one registration, sharing one immediate/20-second
+  send loop and sockets. Joining does not send or reset the schedule. Sent/Rounds
+  describe shared submissions/rounds during that interval's participation; Replies
+  includes every valid datagram seen in that window, without query attribution.
+  Devices remain deduplicated by identity. Last-owner cleanup settles the sender
+  before admitting a fresh run. Fatal sender termination freezes each active
+  interval as failed while preserving its own accepted records and diagnostics;
+  recoverable coverage warnings do not add retries or change cadence. The
   real-Core `--scenario discovery` uses `tools/discovery_fixture.py` with loopback
   UDP/TCP peers, real adapter selection, both reply-port paths, indefinite search
   across the former 120-second boundary, explicit stop and local/manual creation.
