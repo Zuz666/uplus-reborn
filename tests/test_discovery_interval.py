@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.uplus_reborn.const import SUPPORTED_WIFI_TYPE
 from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
+from tools.discovery_fixture import _DiscoveryTiming
 
 
 async def wait_for(predicate: Callable[[], bool]) -> None:
@@ -561,3 +562,68 @@ async def test_cancelled_sender_at_creation_terminates_or_releases_its_run(
             release.set()
             await first.async_stop()
             await new.async_stop()
+
+
+async def test_controlled_rounds_leave_other_asyncio_tasks_and_terminal_results_untouched(
+    hass, responder,
+):
+    first, late = (DiscoveryInterval(hass, "owner") for _ in range(2))
+    original_sleep = asyncio.sleep
+    unrelated = asyncio.create_task(asyncio.sleep(20))
+    try:
+        with _DiscoveryTiming("fast") as timing:
+            await first.async_subscribe("owner", lambda _: None)
+            await wait_for(lambda: len(responder.queries) == 1)
+            pending = timing.waiter
+            assert pending is not None and not pending.done()
+            await late.async_subscribe("owner", lambda _: None)
+            await hass.async_block_till_done()
+            assert late.progress.sent == 0
+            assert len(responder.queries) == 1
+            assert timing.waiter is pending and not pending.done()
+            await timing.advance()
+            await wait_for(lambda: len(responder.queries) == 2)
+            responder.reply(query_index=1)
+            await wait_for(lambda: first.progress.replies == late.progress.replies == 1)
+            await first.async_stop()
+            frozen = first.progress
+            await timing.advance()
+            await wait_for(lambda: len(responder.queries) == 3)
+            assert first.progress == frozen
+            assert late.progress.sent == 2
+            assert not unrelated.done()
+            assert asyncio.sleep is original_sleep
+            await late.async_stop()
+        assert asyncio.sleep is original_sleep
+        # The same public interface still starts promptly after fixture restoration.
+        fresh = DiscoveryInterval(hass, "owner")
+        await fresh.async_subscribe("owner", lambda _: None)
+        await wait_for(lambda: len(responder.queries) == 4)
+        await fresh.async_stop()
+    finally:
+        unrelated.cancel()
+        await asyncio.gather(unrelated, return_exceptions=True)
+        await first.async_stop()
+        await late.async_stop()
+
+
+@pytest.mark.parametrize("exit_kind", ["error", "cancel"])
+async def test_fixture_hook_restored_after_abnormal_exit(hass, responder, exit_kind):
+    from custom_components.uplus_reborn import local_discovery
+
+    original_asyncio = local_discovery.asyncio
+    interval = DiscoveryInterval(hass, "owner")
+    expected = RuntimeError if exit_kind == "error" else asyncio.CancelledError
+    try:
+        with pytest.raises(expected), _DiscoveryTiming("fast"):
+            await interval.async_subscribe("owner", lambda _: None)
+            await wait_for(lambda: len(responder.queries) == 1)
+            raise expected()
+        assert local_discovery.asyncio is original_asyncio
+        await interval.async_stop()
+        frozen = interval.progress
+        responder.reply()
+        await asyncio.sleep(0)
+        assert interval.progress == frozen
+    finally:
+        await interval.async_stop()
