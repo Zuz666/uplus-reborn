@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
 from itertools import count
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_LOGGING_CHANGED
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -20,6 +21,7 @@ from .const import (
     DOMAIN,
     configured_poll_interval,
 )
+from .exchange_trace import ExchangeTrace
 from .profile_choices import async_refresh_profile_actions
 from .profiles import ProfileStore, SavedProfile
 from .protocol import (
@@ -102,7 +104,8 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                 seconds=configured_poll_interval(config_entry.options)
             ),
         )
-        self.client = client
+        self.trace = ExchangeTrace()
+        self.client = replace(client, observer=self.trace)
         self._connection_lock = asyncio.Lock()
         self._drafts: dict[Drum, ProgramIntent | None] = {"upper": None, "lower": None}
         self.profiles = ProfileStore(hass, config_entry.entry_id, self.device_id)
@@ -113,6 +116,19 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
         self._last_error: ClassifiedError | None = None
         self._latest_command: CommandOutcome | None = None
         self._read_available = False
+
+    @callback
+    def start_trace_listener(self) -> None:
+        """Follow native logger changes before the first entry refresh."""
+        self.config_entry.async_on_unload(
+            self.hass.bus.async_listen(EVENT_LOGGING_CHANGED, self._sync_trace_logging)
+        )
+        self.config_entry.async_on_unload(self.trace.close)
+        self._sync_trace_logging()
+
+    @callback
+    def _sync_trace_logging(self, event: Event | None = None) -> None:
+        self.trace.set_enabled(_LOGGER.isEnabledFor(logging.DEBUG))
 
     @property
     def health(self) -> CoordinatorHealth:
@@ -342,16 +358,29 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
         """Fetch one fresh, checksum-validated appliance snapshot."""
         request = next(_REQUEST_IDS)
         async with self._connection_lock:
+            self.trace.begin(
+                "poll", request=request, cached_snapshot=self.data,
+                host=self.client.host, port=self.client.port,
+                device_id=self.client.device_id,
+            )
+            outcome = "interrupted"
+            cause: str | None = None
             try:
-                snapshot = await self.client.read_state()
-            except ProtocolError as error:
-                cause = self._record_failure(error, request)
-                # DUC logs this message: never forward arbitrary exception text.
-                raise UpdateFailed(
-                    f"Unable to read appliance state ({cause})"
-                ) from None
-            self._record_snapshot(snapshot, request)
-            return snapshot
+                try:
+                    snapshot = await self.client.read_state()
+                except ProtocolError as error:
+                    outcome, cause = "failed", self._record_failure(error, request)
+                    raise UpdateFailed(
+                        f"Unable to read appliance state ({cause})"
+                    ) from None
+                except asyncio.CancelledError:
+                    cause = "cancelled"
+                    raise
+                self._record_snapshot(snapshot, request)
+                outcome = "received"
+                return snapshot
+            finally:
+                self.trace.finish(outcome, cause=cause)
 
     async def async_start_program(
         self, drum: Drum, intent: ProgramIntent | None = None
@@ -367,6 +396,8 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             selected = intent if intent is not None else self.draft(drum)
             if selected is None:
                 raise UnsafeState("Select a program first", reason="program_not_staged")
+            if self.trace.active:
+                self.trace.event("intent", requested_intent=selected)
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
                     "kind=%s_start event=intent fields=%s",
@@ -383,7 +414,10 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                 selected, allow_live=True, expected=self.data
             )
 
-        return await self._async_control(f"{drum}_start", execute)
+        return await self._async_control(
+            f"{drum}_start", execute,
+            requested=lambda: intent if intent is not None else self.draft(drum),
+        )
 
     async def async_control_drum(self, drum: Drum, action: str) -> ControlResult:
         """Execute an explicit per-drum lifecycle action once."""
@@ -404,56 +438,63 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             lambda: self.client.set_appliance_option(
                 option, enabled, allow_live=True, expected=self.data
             ),
+            requested=lambda: {"option": option, "enabled": enabled},
         )
 
     async def _async_control(
-        self, kind: str, execute: Callable[[], Awaitable[ControlResult]]
+        self, kind: str, execute: Callable[[], Awaitable[ControlResult]],
+        *, requested: Callable[[], object] | None = None,
     ) -> ControlResult:
         request = next(_REQUEST_IDS)
         async with self._connection_lock:
+            self.trace.begin(
+                kind, request=request, cached_snapshot=self.data,
+                requested_intent=requested() if requested is not None else None,
+                host=self.client.host,
+                port=self.client.port, device_id=self.client.device_id,
+            )
+            outcome = "interrupted"
+            cause: str | None = None
             try:
-                if not self.controls_enabled:
-                    raise UnsafeState(
-                        "Remote controls are disabled", reason="controls_disabled"
+                try:
+                    if not self.controls_enabled:
+                        raise UnsafeState(
+                            "Remote controls are disabled", reason="controls_disabled"
+                        )
+                    if self.data is None:
+                        raise UnsafeState("No appliance snapshot", reason="no_snapshot")
+                    result = await execute()
+                except (ProtocolError, asyncio.CancelledError) as error:
+                    cause = classify_error(error)
+                    unknown = isinstance(error, OutcomeUnknown) or (
+                        isinstance(error, asyncio.CancelledError)
+                        and bool(getattr(error, "control_dispatched", False))
                     )
-                if self.data is None:
-                    raise UnsafeState("No appliance snapshot", reason="no_snapshot")
-                result = await execute()
-            except (ProtocolError, asyncio.CancelledError) as error:
-                cause = classify_error(error)
-                unknown = isinstance(error, OutcomeUnknown) or (
-                    isinstance(error, asyncio.CancelledError)
-                    and bool(getattr(error, "control_dispatched", False))
-                )
-                outcome = "unknown" if unknown else "not_dispatched"
+                    outcome = "unknown" if unknown else "not_dispatched"
+                    self._latest_command = CommandOutcome(
+                        datetime.now(UTC), kind, outcome, cause
+                    )
+                    _LOGGER.debug(
+                        "request=%s kind=%s event=%s cause=%s retried=false",
+                        request, kind, outcome, cause,
+                    )
+                    if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
+                        self._record_failure(error, request)
+                        self.async_set_update_error(
+                            UpdateFailed(f"Authoritative state unavailable ({cause})")
+                        )
+                    raise
                 self._latest_command = CommandOutcome(
-                    datetime.now(UTC), kind, outcome, cause
+                    datetime.now(UTC), kind, "confirmed",
+                    unconfirmed_settings=result.unconfirmed_settings,
                 )
                 _LOGGER.debug(
-                    "request=%s kind=%s event=%s cause=%s retried=false",
-                    request,
-                    kind,
-                    outcome,
-                    cause,
+                    "request=%s kind=%s event=confirmed unconfirmed_settings=%s",
+                    request, kind, result.unconfirmed_settings,
                 )
-                if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
-                    self._record_failure(error, request)
-                    self.async_set_update_error(
-                        UpdateFailed(f"Authoritative state unavailable ({cause})")
-                    )
-                raise
-            self._latest_command = CommandOutcome(
-                datetime.now(UTC),
-                kind,
-                "confirmed",
-                unconfirmed_settings=result.unconfirmed_settings,
-            )
-            _LOGGER.debug(
-                "request=%s kind=%s event=confirmed unconfirmed_settings=%s",
-                request,
-                kind,
-                result.unconfirmed_settings,
-            )
-            self._record_snapshot(result.after, request)
-            self.async_set_updated_data(result.after)
-            return result
+                self._record_snapshot(result.after, request)
+                self.async_set_updated_data(result.after)
+                outcome = "confirmed"
+                return result
+            finally:
+                self.trace.finish(outcome, cause=cause)

@@ -206,6 +206,9 @@ class ReadOnlyPeer:
         self.allow_profile_start = False
         self.profile_controls: list[str] = []
         self.profile_initializations = 0
+        self.query_response_writer: (
+            Callable[[asyncio.StreamWriter, bytes, bytes], Awaitable[None]] | None
+        ) = None
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> None:
         self.server = await asyncio.start_server(self._accept, host, port)
@@ -256,8 +259,11 @@ class ReadOnlyPeer:
                         "request_sha256": hashlib.sha256(header + payload).hexdigest(),
                         "response_sha256": hashlib.sha256(response).hexdigest(),
                     })
-                    writer.write(response)
-                    await writer.drain()
+                    if self.query_response_writer is None:
+                        writer.write(response)
+                        await writer.drain()
+                    else:
+                        await self.query_response_writer(writer, header + payload, response)
         except asyncio.CancelledError:
             raise
         except (OSError, ValueError, TimeoutError, asyncio.IncompleteReadError) as err:
@@ -965,6 +971,7 @@ async def _exercise(
     refresh = None
     signal_handlers_installed = False
     discovery_fixture = None
+    exchange_trace_fixture = None
     result["shutdown"] = {"entry_unloaded": False, "core_stopped": False}
     try:
         async with asyncio.timeout(
@@ -1065,6 +1072,7 @@ async def _exercise(
                         or scenario in ("offline", "programme-intents"),
                         "poll_interval": 15,
                     },
+                    pref_disable_polling=scenario == "exchange-trace",
                     discovery_keys=MappingProxyType({}), subentries_data=(),
                 )
                 await hass.config_entries.async_add(entry)
@@ -1191,7 +1199,7 @@ async def _exercise(
                 coordinator = entry.runtime_data
             if scenario == "programme-intents":
                 await _exercise_programme_intents(hass, entry, peer, result)
-            if serve or scenario == "discovery":
+            if serve or scenario in ("discovery", "exchange-trace"):
                 # Current Core does not allow removing the first, owner account.
                 await hass.auth.async_create_user("Fixture owner", local_only=True)
             if scenario in ("discovery", "discovery-identification"):
@@ -1211,6 +1219,13 @@ async def _exercise(
                     await discovery_fixture.exercise_acceptance(
                         http_port, selection["mode"], selection["reason"],
                     )
+            if scenario == "exchange-trace":
+                if __package__:
+                    from .exchange_trace_fixture import ExchangeTraceFixture
+                else:
+                    from exchange_trace_fixture import ExchangeTraceFixture
+                exchange_trace_fixture = ExchangeTraceFixture(hass, entry, peer, result)
+                await exchange_trace_fixture.exercise(http_port)
             if after_scenario is not None:
                 await after_scenario(hass, entry, peer)
             _require(not peer.rejected, "Peer rejected a control or malformed request")
@@ -1338,6 +1353,11 @@ async def _exercise(
         try:
             try:
                 async with asyncio.timeout(SHUTDOWN_TIMEOUT):
+                    if exchange_trace_fixture is not None:
+                        try:
+                            await exchange_trace_fixture.close()
+                        except Exception as err:  # noqa: BLE001
+                            result["exchange_trace_cleanup_error"] = f"{type(err).__name__}: {err}"
                     if discovery_fixture is not None:
                         if "discovery_lifecycle" in result:
                             # Arm only at the existing final teardown. Do not fake a
@@ -1357,6 +1377,8 @@ async def _exercise(
                         result["shutdown"]["entry_unloaded"] = (
                             await hass.config_entries.async_unload(entry.entry_id)
                         )
+                    _require(not result.get("exchange_trace_cleanup_error"),
+                             result.get("exchange_trace_cleanup_error", "Trace cleanup failed"))
             finally:
                 try:
                     async with asyncio.timeout(SHUTDOWN_TIMEOUT):
@@ -1402,7 +1424,7 @@ def main() -> int:
                         help="New JSON result file (existing files are never overwritten)")
     parser.add_argument(
         "--scenario",
-        choices=("standby", "execution", "profiles", "programme-intents", "discovery", "discovery-identification", "offline"),
+        choices=("standby", "execution", "profiles", "programme-intents", "discovery", "discovery-identification", "offline", "exchange-trace"),
         default="standby",
     )
     parser.add_argument("--discovery-timing", choices=("full", "fast"), default="full")

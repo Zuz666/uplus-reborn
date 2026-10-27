@@ -30,6 +30,8 @@ imports, entity domains, or logger names from either.
   typed validation and encoding remain there
 - reported-setting applicability: `reported_settings.py`; status platforms:
   `sensor.py`, `binary_sensor.py`; cached health: `system_health.py`
+- bounded opt-in diagnostic capture: `exchange_trace.py`; protocol observation
+  contract: `protocol/_observation.py`; lifecycle/operation ownership: coordinator
 - native controls: `select.py`, `switch.py`, `button.py`, `text.py`; atomic action: `services.py`
 - saved-profile operation policy/completion: `coordinator.py`; durable store:
   `profiles.py`; native action choices: `profile_choices.py`; consumer contracts:
@@ -342,6 +344,15 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
   Validate each state frame into one complete word sequence, then reuse it for
   snapshot projection and any selected-frame raw inspection. This boundary does
   not change stream queues, report retention, correlation or confirmation proof.
+- Temporary exchange tracing observes only existing runtime entry traffic.
+  The coordinator owns per-entry operation grouping and native DEBUG lifecycle;
+  the protocol emits passive observations without changing validation/proof.
+  `exchange_trace.py` enforces shared operation/event/raw-byte limits and bounded
+  metadata. Keep incoming-envelope processing independent of diagnostic retention.
+  Ordinary logs/state/config remain redacted; only the explicit opt-in trace
+  section may include original local bytes/endpoints/device identifiers.
+  Never include onboarding/cloud secrets or unrelated traffic. Use synthetic
+  data in tests and review evidence, not committed real traces.
 - Pure intent validation/encoding belongs in `protocol/_commands.py`, with
   source/capture-derived behavioral cases in `tests/test_commands.py`.
 - Coordination, per-drum draft isolation, atomic actions, opt-in and HA lifecycle

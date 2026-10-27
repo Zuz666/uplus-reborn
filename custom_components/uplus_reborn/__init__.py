@@ -72,6 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UplusRebornConfigEntry) 
     coordinator = UplusRebornCoordinator(hass, entry, client)
     # Retain classified first-refresh failure context for cached diagnostics.
     entry.runtime_data = coordinator
+    coordinator.start_trace_listener()
 
     controls_enabled = coordinator.controls_enabled
     setup_complete = False
@@ -136,6 +137,7 @@ async def async_unload_entry(
     """Unload an appliance entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        entry.runtime_data.trace.close()
         await async_refresh_profile_actions(hass)
     return unloaded
 

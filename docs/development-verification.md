@@ -200,7 +200,7 @@ coordinator, entities, decoder or transport. Each run uses a fresh temporary
 config and unloads/stops afterward.
 
 Use `tools/delivery.py docker` to run against the immutable container images
-(`--target core-current` for Home Assistant 2026.10.2 on Python 3.14; `--target test`
+(`--target core-current` for Home Assistant 2026.10.4 on Python 3.14; `--target test`
 for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
 stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
@@ -223,6 +223,55 @@ The default `standby` scenario proves both drums' actual HA phase/execution stat
 Spinning. It records Core/Python versions, the artifact and installed hashes,
 real query counts, authoritative snapshots/entity states and shutdown evidence.
 A control or malformed request fails acceptance. Output files are never replaced.
+
+**Native exchange-trace acceptance.**
+
+The `exchange-trace` scenario extends this same isolated boot with native
+`logger/integration_log_level` WebSocket commands (`persistence: none`) and
+authenticated HTTP **Download diagnostics** attachments. Run it on both supported
+acceptance versions; the receipt records the actual Core/Python versions and
+installed bundle hashes rather than inferring acceptance from the image name.
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/exchange-trace-min.json --scenario exchange-trace
+uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/exchange-trace-current.json --scenario exchange-trace
+```
+
+The synthetic peer remains query-only. It splits an unmatched state frame across
+writes, then coalesces the remainder with the correlated reply. Acceptance compares
+downloaded TX/RX bytes with the actual peer buffers, verifies the observed read
+boundaries and unmatched/correlated chronology, and retains authoritative standby
+state. Matched capture-OFF/ON queries must have identical connection/query counts
+and zero controls or retries. It also checks unrelated logger notifications,
+frozen repeated downloads, no appliance network activity during downloads,
+capture-OFF activity without retained events, and OFF/ON reset with no intervening
+appliance event.
+
+Two entries share native DEBUG activation but retain independent traces and
+fixed limits. Unload clears/closes the old store without changing ordinary
+cached-state behavior: a Core-retained runtime can expose its cached state,
+while a Core-cleared runtime reports no state as before. Logger changes cannot
+revive the old capture, and reload creates a fresh one.
+The fixture revokes its disposable authentication, closes its WebSocket/session,
+unloads its second entry and closes its peer; the existing runner unloads the
+primary entry, stops Core and removes the temporary configuration. Scenario errors
+remain primary if cleanup also fails. Receipts contain only synthetic identities
+and exchanges, never temporary token values; an unrelated synthetic credential
+sentinel must remain absent from diagnostic downloads.
+
+The scenario is public software/transport evidence, not physical appliance or
+browser acceptance. Perform independent source review first and run the exact
+committed bundle for final evidence. These commands describe the required
+acceptance; only a successful recorded execution proves it.
+
+The versioned public Core contracts are the native logger commands
+([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/logger/websocket_api.py),
+[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/logger/websocket_api.py))
+and authenticated `/api/diagnostics/config_entry/{entry_id}` download
+([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/diagnostics/__init__.py),
+[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/diagnostics/__init__.py)).
+The fixture does not read private Core logger storage or invoke diagnostic
+callbacks in place of these native requests.
 
 The `offline` scenario refuses the first real TCP connection while loading a
 previously configured entry. It requires a loaded entry, absent authoritative
@@ -500,7 +549,7 @@ license and attribution remain separately defined by README and `docs/LICENSE`.
 | Metadata and packaging | Manifest/project/uv root agree; dated notes; committed-byte, licensed, root-layout ZIP; rejection of unsafe/incomplete/occupied candidates |
 | Standalone tooling | Windows and Ubuntu artifact/release boundary regressions, including stale SHA, duplicate tag, version rollback and failed required checks |
 | HA contracts | Full pytest and Ruff in the frozen Docker test image |
-| Real Core | 2026.2.3 and 2026.10.2: standby, execution, profiles including restart, discovery and discovery-identification |
+| Real Core | 2026.2.3 and 2026.10.4: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
 | Public surface | Markdown/Mermaid, actual issue/PR/private-report routes, hosted CI and effective protection settings |
 | HACS | Separate actual source-tree bootstrap and published-ZIP installation/upgrade; exact installed-member comparison |
 

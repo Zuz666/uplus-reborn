@@ -7,7 +7,7 @@ import struct
 import sys
 import unittest
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,28 @@ from custom_components.uplus_reborn.protocol._protocol import (
     validate_drum_control,
     validate_program_start,
 )
+
+
+class _RecordingObserver:
+    """Public observer seam retaining synthetic loopback observations."""
+
+    def __init__(self, *, active: bool = True) -> None:
+        self.active = active
+        self.events: list[tuple[str, dict[str, object]]] = []
+        self.raw_chunks: list[tuple[str, bytes, str]] = []
+        self.order: list[str] = []
+
+    def event(self, event: str, **context: object) -> None:
+        if not self.active:
+            raise AssertionError("Inactive observer received an event")
+        self.events.append((event, context))
+        self.order.append(event)
+
+    def raw(self, direction: str, data: bytes, *, stage: str) -> None:
+        if not self.active:
+            raise AssertionError("Inactive observer received raw bytes")
+        self.raw_chunks.append((direction, data, stage))
+        self.order.append(f"raw_{direction}")
 
 
 def _inner_frame(frame_type: int, payload: bytes) -> bytes:
@@ -1217,8 +1239,232 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.after.upper.phase_value, 0)
         self.assertFalse(result.after.upper.door_locked)
 
-    async def test_state_query_preserves_non_matching_report(self) -> None:
-        standby = _standby_words()
+    async def test_observer_preserves_actual_fragmented_and_coalesced_stream(
+        self,
+    ) -> None:
+        unmatched = _state_response(_active_spin_words(), sequence=19)
+        selected = _state_response(_standby_words(), frame_type=0x02)
+        trailing = _state_response(_active_spin_words())
+        incoming = unmatched + selected + trailing
+        expected_tx = (
+            struct.pack(">II32s32sII", 10004, 0, b"", b"TESTDEVICE", 0, 13)
+            + bytes.fromhex("ffff0a000000000000014d0159")
+        )
+        traffic: list[list[bytes]] = []
+        for enabled in (False, True):
+            with self.subTest(capture=enabled):
+                requests: list[bytes] = []
+                finished = asyncio.Event()
+                first_read = asyncio.Event()
+
+                class FragmentObserver(_RecordingObserver):
+                    def __init__(
+                        self, first_read: asyncio.Event, *, active: bool
+                    ) -> None:
+                        super().__init__(active=active)
+                        self.first_read = first_read
+
+                    def raw(
+                        self, direction: str, data: bytes, *, stage: str
+                    ) -> None:
+                        super().raw(direction, data, stage=stage)
+                        if direction == "rx":
+                            self.first_read.set()
+
+                async def handle(
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    requests: list[bytes] = requests,
+                    finished: asyncio.Event = finished,
+                    first_read: asyncio.Event = first_read,
+                    enabled: bool = enabled,
+                ) -> None:
+                    try:
+                        header = await reader.readexactly(80)
+                        requests.append(
+                            header
+                            + await reader.readexactly(
+                                int.from_bytes(header[76:80], "big")
+                            )
+                        )
+                        writer.write(incoming[:7])
+                        await writer.drain()
+                        if enabled:
+                            await asyncio.wait_for(first_read.wait(), 1)
+                        else:
+                            await asyncio.sleep(0.01)
+                        writer.write(incoming[7:])
+                        await writer.drain()
+                        requests.append(await reader.read())
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                        finished.set()
+
+                observer = FragmentObserver(first_read, active=enabled)
+                client = replace(await self._control_client(handle), observer=observer)
+                with self.assertLogs(
+                    "custom_components.uplus_reborn.protocol._protocol", level="DEBUG"
+                ) as logs:
+                    state = await client.read_state()
+                await asyncio.wait_for(finished.wait(), 1)
+                ordinary_logs = "\n".join(logs.output)
+                self.assertNotIn("TESTDEVICE", ordinary_logs)
+                self.assertNotIn(incoming.hex(), ordinary_logs)
+                self.assertNotIn(expected_tx.hex(), ordinary_logs)
+                self.assertEqual(state.upper.phase_value, 0)
+                traffic.append(requests)
+                if not enabled:
+                    self.assertEqual(observer.events, [])
+                    self.assertEqual(observer.raw_chunks, [])
+                    continue
+                self.assertEqual(
+                    observer.raw_chunks[0], ("tx", expected_tx, "write_submitted")
+                )
+                received = [
+                    data
+                    for direction, data, stage in observer.raw_chunks
+                    if direction == "rx" and stage == "read"
+                ]
+                self.assertEqual(received, [incoming[:7], incoming[7:]])
+                self.assertTrue(all(len(data) <= 4096 for data in received))
+                states = [
+                    context
+                    for event, context in observer.events
+                    if event == "state_observed"
+                ]
+                self.assertEqual(
+                    [context["decision"] for context in states],
+                    ["uncorrelated", "correlated"],
+                )
+        self.assertEqual(traffic, [[expected_tx, b""], [expected_tx, b""]])
+
+    async def test_observer_retains_rejected_bytes_before_strict_failure(self) -> None:
+        header = _frame_response(0x05, b"")[:76]
+        cases = (
+            ("checksum_mismatch", bytes.fromhex("ffff08000000000000050c")),
+            ("invalid_escape", bytes.fromhex("ffff0a00000000000001ff0160")),
+            ("invalid_inner_size", bytes.fromhex("ffff0700000000000005")),
+        )
+        packets = [
+            (reason, header + len(inner).to_bytes(4, "big") + inner)
+            for reason, inner in cases
+        ]
+        packets.extend(
+            (
+                ("partial_envelope", _state_response(_standby_words())[:-4]),
+                ("invalid_frame", header + (4097).to_bytes(4, "big")),
+            )
+        )
+        for reason, packet in packets:
+            with self.subTest(reason=reason):
+                async def handle(
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    packet: bytes = packet,
+                ) -> None:
+                    await _read_request(reader)
+                    writer.write(packet)
+                    await writer.drain()
+                    writer.close()
+                    await writer.wait_closed()
+
+                observer = _RecordingObserver()
+                client = replace(await self._control_client(handle), observer=observer)
+                with self.assertRaises(InvalidFrame):
+                    await client.read_state()
+                self.assertEqual(
+                    b"".join(
+                        data
+                        for direction, data, _ in observer.raw_chunks
+                        if direction == "rx"
+                    ),
+                    packet,
+                )
+                failures = [
+                    context for event, context in observer.events if event == "failed"
+                ]
+                self.assertEqual(len(failures), 1)
+                self.assertEqual(failures[0]["cause"], reason)
+                self.assertLess(
+                    observer.order.index("raw_rx"), observer.order.index("failed")
+                )
+                self.assertFalse(
+                    any(event == "state_observed" for event, _ in observer.events)
+                )
+
+    async def test_initialization_observes_both_sides_of_acceptance_before_refusal(
+        self,
+    ) -> None:
+        for after_acceptance in (False, True):
+            with self.subTest(after_acceptance=after_acceptance):
+                requests: list[tuple[int, bytes]] = []
+                finished = asyncio.Event()
+                changed = _standby_words(remote_control=False)
+
+                async def handle(
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    requests: list[tuple[int, bytes]] = requests,
+                    finished: asyncio.Event = finished,
+                    changed: list[int] = changed,
+                    after_acceptance: bool = after_acceptance,
+                ) -> None:
+                    requests.append(await _read_request(reader))
+                    writer.write(_state_response(_standby_words()))
+                    await writer.drain()
+                    initialization = await _read_request(reader)
+                    requests.append(initialization)
+                    accepted = _frame_response(
+                        0x74, b"", sequence=initialization[0]
+                    )
+                    report = _state_response(changed)
+                    writer.write(
+                        accepted + report if after_acceptance else report + accepted
+                    )
+                    await writer.drain()
+                    self.assertEqual(await reader.read(), b"")
+                    writer.close()
+                    await writer.wait_closed()
+                    finished.set()
+
+                observer = _RecordingObserver()
+                client = replace(await self._control_client(handle), observer=observer)
+                with self.assertRaises(StateChanged):
+                    await client.start_program(
+                        default_intent("upper", "spin"), allow_live=True
+                    )
+                await asyncio.wait_for(finished.wait(), 1)
+                self.assertEqual(len(requests), 2)
+                states = [
+                    context
+                    for event, context in observer.events
+                    if event == "state_observed"
+                ]
+                self.assertEqual(
+                    [context["stage"] for context in states],
+                    ["query", "initialization"],
+                )
+                self.assertEqual(
+                    states[-1]["decision"],
+                    "pre_dispatch_pending_observation"
+                    if after_acceptance
+                    else "pre_dispatch_observation",
+                )
+                self.assertFalse(states[-1]["decoded_snapshot"].remote_control)
+                self.assertTrue(
+                    any(
+                        event == "failed" and context["cause"] == "state_changed"
+                        for event, context in observer.events
+                    )
+                )
+
+    async def test_query_observes_reports_in_order_without_changing_selected_reply(
+        self,
+    ) -> None:
         active = _active_spin_words()
         finished = _standby_words(program=0x1C)
         finished[3] = 0x1303
@@ -1228,13 +1474,9 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             requests.append(await _read_request(reader))
-            writer.write(_state_response(standby))
-            await writer.drain()
-            requests.append(await _accept_control_initialization(reader, writer))
-            final_query = await _read_request(reader)
-            requests.append(final_query)
+            final_query = requests[0]
             writer.write(
-                _state_response(active)
+                _state_response(active, sequence=17)
                 + _state_response(
                     finished,
                     sequence=final_query[0],
@@ -1246,27 +1488,34 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
-        client = await self._control_client(handle)
-        async with client._session(1) as session:
-            initial = await session.query_state()
-            await session.initialize_controls(initial.snapshot)
-            final = await session.query_state()
-            backlog = session.drain_state_backlog()
+        observer = _RecordingObserver()
+        client = replace(await self._control_client(handle), observer=observer)
+        final = await client.read_state()
 
         self.assertEqual(
             requests,
             [
                 (0, _inner_frame(0x01, b"\x4d\x01")),
-                (1, _inner_frame(0x73, b"")),
-                (2, _inner_frame(0x01, b"\x4d\x01")),
             ],
         )
+        observations = [
+            context
+            for event, context in observer.events
+            if event == "state_observed"
+        ]
         self.assertEqual(
-            [result.snapshot.upper.phase_value for result in backlog],
-            [0x0B],
+            [
+                context["decoded_snapshot"].upper.phase_value
+                for context in observations
+            ],
+            [0x0B, 0x13],
         )
-        self.assertEqual(final.snapshot.upper.phase_value, 0x13)
-        self.assertFalse(final.snapshot.upper.door_locked)
+        self.assertEqual(
+            [context["decision"] for context in observations],
+            ["uncorrelated", "correlated"],
+        )
+        self.assertEqual(final.upper.phase_value, 0x13)
+        self.assertFalse(final.upper.door_locked)
 
     async def _exercise_transition(
         self,
