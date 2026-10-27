@@ -193,7 +193,7 @@ def classify_error(error: BaseException) -> str:
         "not_finished",
         "unsupported_phase",
         "controls_disabled",
-        "preset_not_staged",
+        "program_not_staged",
         "no_snapshot",
         "partial_envelope",
         "invalid_escape",

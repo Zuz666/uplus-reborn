@@ -43,7 +43,10 @@ _STATE_PROVENANCE = {
         "cycle_count": "word 7, 16 bits",
         "cycle_active": "word 3, bit 7; source command-active flag, not motion",
         "delay_active": "word 2, bit 2",
-        "builder_context": "load 15H, stain 18H, water 23, scrub 21H, rotate/stop 22H/L",
+        "builder_context": "load 15H, water 23, scrub 21H, rotate/stop 22H/L",
+        "reported_settings": {
+            "stain_value": "word 18, bits 8..15; reported code may persist after deselection, not proof of active treatment",
+        },
     },
     "lower": {
         "program_value": "word 24, bits 8..15",
@@ -53,7 +56,10 @@ _STATE_PROVENANCE = {
         "cycle_count": "word 30, 16 bits",
         "cycle_active": "word 26, bit 7; source command-active flag, not motion",
         "delay_active": "word 25, bit 2",
-        "builder_context": "load 32H, stain 35H, water 40, scrub 38H, rotate/stop 39H/L, drying 24L",
+        "builder_context": "load 32H, water 40, scrub 38H, rotate/stop 39H/L, drying 24L",
+        "reported_settings": {
+            "stain_value": "word 35, bits 8..15; reported code may persist after deselection, not proof of active treatment",
+        },
     },
     "shared": {
         "power": "word 3, bit 0",

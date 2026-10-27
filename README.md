@@ -858,6 +858,14 @@ for raw-word layouts and wire evidence boundaries.
 
 Download diagnostics from the integration entry before filing an issue. Host and device ID are redacted. Diagnostics include decoded state so unsupported values can be investigated without publishing APKs, credentials, or raw private captures.
 
+`health.latest_command` records the latest command outcome and sanitized cause.
+A Start refused because no program was staged is `not_dispatched` with cause
+`program_not_staged`; it does not represent an appliance command or polling error.
+State provenance attributes stain codes to each drum's `reported_settings`, not
+command-builder context. A retained stain code alone does not prove an active
+stain treatment. Native System Health retains its separate cached read-health
+summary.
+
 Include:
 
 - Home Assistant version;
