@@ -69,7 +69,7 @@ def _inspect_inner(
         and frame.payload[:2] == b"\x6d\x01"
     ):
         words = _state_words(frame)
-        result["state"] = _snapshot_dict(_decode_state(frame, observed_at))
+        result["state"] = _snapshot_dict(_decode_state(words, observed_at))
         if include_raw:
             result["_diagnostics"] = {
                 "raw_profile_fields": _raw_profile_fields(words),
