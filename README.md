@@ -899,11 +899,16 @@ or command success. Reports processed during command confirmation are included.
 This is an **integration exchange trace**, not a complete physical cycle history
 or an alternative source of authoritative state.
 
-Capture is memory-only and bounded per entry: at most 20 operations, 2000 events
+Capture is memory-only and bounded per entry: at most 300 operations, 6000 events
 and 4 MiB of original raw bytes, enforced together, with separately bounded
-metadata. Raw bytes are encoded as hexadecimal in the download, so this is not a
-4 MiB total RAM/JSON limit. Old operations are evicted first; partial captures,
-omitted bytes/events and overflow are marked rather than presented as complete.
+metadata. These budgets target at least 240 consecutive ordinary polls (about an
+hour at 15-second intervals), with some headroom for controls. Bursts of reports,
+commands or malformed traffic can shorten that window; no complete cycle or
+fixed-duration history is guaranteed. Raw bytes are hex-encoded in the download,
+so 4 MiB is not a total RAM/JSON limit. Old operations are evicted first; partial
+captures, omitted bytes/events and overflow are marked honestly. See the
+[synthetic sizing evidence](docs/development-verification.md#real-isolated-core-fixture-docker)
+for measured depth and metadata/export memory costs.
 
 Stopping DEBUG retains the trace. Downloads are nondestructive and do not contact
 the appliance. Starting a new capture clears the old one, even without an

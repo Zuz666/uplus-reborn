@@ -286,3 +286,73 @@ async def test_draft_intent_survives_capture_start_and_restart_during_start(
             with pytest.raises(OutcomeUnknown):
                 await asyncio.wait_for(command, 2)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.usefixtures("loopback_socket")
+async def test_native_trace_retains_240_consecutive_ordinary_polls(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One hour of 15-second poll slots survives every retention resource."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    assert await async_setup_component(hass, "logger", {})
+    await _level(hass, "info")
+    response = _state_response(_standby_words(), frame_type=0x02)
+    peers = []
+    requests = []
+    errors = []
+
+    async def serve(reader, writer):
+        try:
+            requests.append(await _read_request(reader))
+            writer.write(response)
+            await writer.drain()
+            assert await reader.read() == b""
+        except (AssertionError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+            errors.append(err)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    def connected(reader, writer):
+        peers.append(asyncio.create_task(serve(reader, writer)))
+
+    server = await asyncio.start_server(connected, "127.0.0.1", 0)
+    async with server:
+        entry = _entry()
+        entry.add_to_hass(hass)
+        hass.config_entries.async_update_entry(
+            entry, data={
+                **entry.data, CONF_HOST: "127.0.0.1",
+                CONF_PORT: server.sockets[0].getsockname()[1],
+            }, pref_disable_polling=True,
+        )
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coordinator = entry.runtime_data
+        try:
+            await _level(hass, "debug")
+            for _ in range(240):
+                await coordinator.async_refresh()
+                assert coordinator.last_update_success
+            await asyncio.wait_for(asyncio.gather(*peers), 5)
+            assert not errors
+            assert len(requests) == 241  # Initial setup plus the captured hour.
+            await _level(hass, "info")
+            trace = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
+            assert [op["operation_id"] for op in trace["operations"]] == list(range(1, 241))
+            assert trace["omitted"] == {
+                "operations": 0, "events": 0, "raw_bytes": 0, "metadata": 0,
+            }
+            for operation in trace["operations"]:
+                assert operation["kind"] == "poll"
+                assert operation["result"] == {"outcome": "received", "cause": None}
+                assert not operation["partial"]
+                received = b"".join(
+                    bytes.fromhex(event["data_hex"]) for event in operation["events"]
+                    if event["event"] == "raw" and event["direction"] == "rx"
+                )
+                assert received == response
+        finally:
+            await _level(hass, "info")
+            assert await hass.config_entries.async_unload(entry.entry_id)
+            await asyncio.wait_for(asyncio.gather(*peers), 5)

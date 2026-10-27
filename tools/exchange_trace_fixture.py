@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 DOMAIN = "uplus_reborn"
 SECOND_DEVICE_ID = "020000000002"
 HEADER = struct.Struct(">II32s32sII")
-LIMITS = {"operations": 20, "events": 2000, "raw_bytes": 4194304}
+LIMITS = {"operations": 300, "events": 6000, "raw_bytes": 4194304}
 SYNTHETIC_SECRET = "fixture-unrelated-cloud-secret-not-for-trace"
 
 
@@ -199,6 +199,42 @@ class ExchangeTraceFixture:
             "unmatched_then_correlated": True,
         }
 
+    async def _history_depth(self) -> None:
+        """Exercise capacity with accelerated real polls, not an elapsed-hour claim."""
+        self.peer.query_response_writer = None
+        for number in range(1, 361):
+            await self._poll()
+            if number == 240:
+                hour = (await self._download(self.entry, "history_240"))["exchange_trace"]
+                _require([op["operation_id"] for op in hour["operations"]] == list(range(1, 241))
+                         and hour["omitted"]["operations"] == 0,
+                         "Ordinary polls did not retain the first 240 consecutive operations")
+        await self._level("WARNING")
+        history = (await self._download(self.entry, "history_after_360"))["exchange_trace"]
+        operations = history["operations"]
+        _require([op["operation_id"] for op in operations] == list(range(61, 361))
+                 and history["omitted"]["operations"] == 60,
+                 "Operation pressure did not evict only the oldest ordinary polls")
+        _require(all(not op["partial"] and op["kind"] == "poll"
+                     and op["result"] == {"outcome": "received", "cause": None}
+                     for op in operations),
+                 "The retained ordinary history lost coverage or changed poll outcomes")
+        self.receipt["history_depth"] = {
+            "status": "passed", "polls_executed": 360,
+            "retained_after_240": hour["retained"],
+            "retained_after_360": history["retained"],
+            "first_operation": operations[0]["operation_id"],
+            "last_operation": operations[-1]["operation_id"],
+            "omitted": history["omitted"], "nominal_poll_interval_seconds": 15,
+            "nominal_retained_poll_slots_seconds": len(operations) * 15,
+            "compact_trace_export_bytes": len(json.dumps(
+                history, ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")),
+            "elapsed_hour_verified": False,
+        }
+        await self._level("DEBUG")
+        self.peer.query_response_writer = self._reply
+
     async def exercise(self, http_port: int) -> None:
         self.receipt["status"] = "running"
         self.url = f"http://127.0.0.1:{http_port}"
@@ -258,6 +294,7 @@ class ExchangeTraceFixture:
             self._empty((await self._download(self.entry, "off_on_without_exchange"))["exchange_trace"], "recording")
             _require(self._traffic() == before, "OFF/ON reset needed an appliance event")
             self.receipt["off_on_without_exchange_cleared"] = True
+            await self._history_depth()
             await self.second_peer.start()
             self.second_entry = ConfigEntry(
                 version=1, minor_version=1, domain=DOMAIN, title="Second trace fixture",

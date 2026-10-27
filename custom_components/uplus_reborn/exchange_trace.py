@@ -18,8 +18,9 @@ from math import isfinite
 from time import monotonic
 from typing import Final
 
-_OPERATION_LIMIT: Final = 20
-_EVENT_LIMIT: Final = 2000
+# About an hour of ordinary 15-second polls, with headroom for controls.
+_OPERATION_LIMIT: Final = 300
+_EVENT_LIMIT: Final = 6000
 _RAW_LIMIT: Final = 4 * 1024 * 1024
 _COUNTER_LIMIT: Final = (1 << 63) - 1
 _STRING_LIMIT: Final = 512

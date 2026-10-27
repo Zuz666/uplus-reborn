@@ -27,11 +27,6 @@ def test_capture_preserves_raw_chunks_and_stopped_downloads() -> None:
 
     exported = trace.export()
     assert exported["capture_state"] == "stopped"
-    assert exported["limits"] == {
-        "operations": 20,
-        "events": 2000,
-        "raw_bytes": 4194304,
-    }
     assert exported["retained"] == {
         "operations": 1,
         "events": 4,
@@ -106,17 +101,17 @@ def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
     """An added operation evicts the entire oldest one, not arbitrary events."""
     trace = ExchangeTrace()
     trace.set_enabled(True)
-    for number in range(20):
+    for number in range(300):
         trace.begin("poll", number=number)
-        size = 209716 if number < 4 else 209715
+        size = 13982 if number < 4 else 13981
         trace.raw("rx", b"x" * size, stage="read")
-        for _ in range(99):
+        for _ in range(19):
             trace.event("observation")
         trace.finish("success")
     boundary = trace.export()
     assert boundary["retained"] == {
-        "operations": 20,
-        "events": 2000,
+        "operations": 300,
+        "events": 6000,
         "raw_bytes": 4194304,
     }
     assert boundary["omitted"] == {
@@ -127,23 +122,42 @@ def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
     }
     _assert_retention_matches_evidence(boundary)
 
-    trace.begin("control", number=20)
-    trace.raw("tx", b"y" * 209716, stage="write_submitted")
-    for _ in range(99):
+    trace.begin("control", number=300)
+    trace.raw("tx", b"y" * 13982, stage="write_submitted")
+    for _ in range(19):
         trace.event("observation")
     trace.finish("confirmed")
     exported = trace.export()
     assert exported["retained"] == boundary["retained"]
     assert [operation["context"]["number"] for operation in exported["operations"]] == list(
-        range(1, 21)
+        range(1, 301)
     )
     assert exported["omitted"] == {
         "operations": 1,
-        "events": 100,
-        "raw_bytes": 209716,
+        "events": 20,
+        "raw_bytes": 13982,
         "metadata": 0,
     }
     assert all(not operation["partial"] for operation in exported["operations"])
+    _assert_retention_matches_evidence(exported)
+
+
+def test_operation_pressure_alone_preserves_newest_complete_operations() -> None:
+    """Small exchanges hit the operation bound without event or byte pressure."""
+    trace = ExchangeTrace()
+    trace.set_enabled(True)
+    for number in range(301):
+        trace.begin("poll", number=number)
+        trace.raw("rx", bytes([number % 256]), stage="read")
+        trace.finish("received")
+    exported = trace.export()
+    assert [op["context"]["number"] for op in exported["operations"]] == list(range(1, 301))
+    assert exported["retained"] == {"operations": 300, "events": 300, "raw_bytes": 300}
+    assert exported["omitted"] == {
+        "operations": 1, "events": 1, "raw_bytes": 1, "metadata": 0,
+    }
+    assert all(not op["partial"] and op["result"]["outcome"] == "received"
+               for op in exported["operations"])
     _assert_retention_matches_evidence(exported)
 
 
@@ -156,12 +170,12 @@ def test_event_pressure_evicts_oldest_operation_before_current_events() -> None:
     trace.event("second")
     trace.finish("success")
     trace.begin("current")
-    for index in range(1999):
+    for index in range(5999):
         trace.event("observed", index=index)
     trace.finish("success")
     exported = trace.export()
     assert [operation["kind"] for operation in exported["operations"]] == ["current"]
-    assert exported["retained"]["events"] == 1999
+    assert exported["retained"]["events"] == 5999
     assert exported["omitted"]["operations"] == 1
     assert exported["omitted"]["events"] == 2
     assert not exported["operations"][0]["partial"]
@@ -206,7 +220,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     assert len(payload) == 4194321
     trace.raw("rx", payload, stage="read")
     trace.raw("rx", b"missing", stage="read")
-    for _ in range(1998):
+    for _ in range(5998):
         trace.event("confirmation_pending")
     trace.event("not_retained")
     trace.raw("rx", b"end", stage="read")
@@ -214,7 +228,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     exported = trace.export()
     assert exported["retained"] == {
         "operations": 1,
-        "events": 2000,
+        "events": 6000,
         "raw_bytes": 4194304,
     }
     operation = exported["operations"][0]
@@ -245,7 +259,7 @@ def test_event_limit_also_accounts_for_unretained_raw_chunk() -> None:
     trace = ExchangeTrace()
     trace.set_enabled(True)
     trace.begin("poll")
-    for _ in range(2000):
+    for _ in range(6000):
         trace.event("observed")
     trace.raw("rx", b"unretained", stage="read")
     trace.finish("success")
