@@ -26,6 +26,7 @@ from .test_protocol import (
     _frame_response,
     _inner_frame,
     _read_request,
+    _RecordingObserver,
     _snapshot,
     _standby_words,
     _state_response,
@@ -36,6 +37,142 @@ _EMPTY_RAW_05 = bytes.fromhex("ffff08000000000000050d")
 
 @pytest.mark.usefixtures("loopback_socket")
 class ResponseContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_observer_sees_superseding_reports_and_both_confirmation_paths(
+        self,
+    ) -> None:
+        before = _standby_words()
+        requested = before.copy()
+        requested[2] = 0x0100
+        for proof in ("accepted_and_report", "independent_query"):
+            with self.subTest(proof=proof):
+                requests: list[tuple[int, bytes]] = []
+                finished = asyncio.Event()
+
+                async def handle(
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    requests: list[tuple[int, bytes]] = requests,
+                    finished: asyncio.Event = finished,
+                    proof: str = proof,
+                ) -> None:
+                    try:
+                        requests.append(await _read_request(reader))
+                        writer.write(_state_response(before, frame_type=0x02))
+                        await writer.drain()
+                        requests.append(
+                            await _accept_control_initialization(reader, writer)
+                        )
+                        command = await _read_request(reader)
+                        requests.append(command)
+                        # A transient match is superseded before acceptance.
+                        writer.write(
+                            _state_response(requested)
+                            + _state_response(before)
+                            + _frame_response(0x05, b"", sequence=command[0])
+                        )
+                        await writer.drain()
+                        if proof == "accepted_and_report":
+                            writer.write(
+                                _frame_response(0x03, b"", sequence=command[0])
+                                + _state_response(requested)
+                            )
+                            await writer.drain()
+                        else:
+                            query = await _read_request(reader)
+                            requests.append(query)
+                            writer.write(
+                                _state_response(
+                                    before, sequence=query[0], frame_type=0x02
+                                )
+                            )
+                            await writer.drain()
+                            query = await _read_request(reader)
+                            requests.append(query)
+                            writer.write(
+                                _state_response(
+                                    requested, sequence=query[0], frame_type=0x02
+                                )
+                            )
+                            await writer.drain()
+                        self.assertEqual(await reader.read(), b"")
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                        finished.set()
+
+                observer = _RecordingObserver()
+                server = await asyncio.start_server(handle, "127.0.0.1", 0)
+                async with server:
+                    client = UwtClient(
+                        "127.0.0.1",
+                        "TESTDEVICE",
+                        port=server.sockets[0].getsockname()[1],
+                        control_timeout=1,
+                        observer=observer,
+                    )
+                    with patch(
+                        "custom_components.uplus_reborn.protocol._protocol._CONFIRMATION_QUERY_DELAY",
+                        0.01,
+                    ):
+                        result = await client.set_appliance_option(
+                            "buzzer", False, allow_live=True
+                        )
+                    await asyncio.wait_for(finished.wait(), 1)
+                self.assertFalse(result.after.buzzer_enabled)
+                self.assertEqual(
+                    sum(
+                        packet == _inner_frame(0x01, b"\x4d\x2f")
+                        for _, packet in requests
+                    ),
+                    1,
+                )
+                evidence = [
+                    context
+                    for event, context in observer.events
+                    if event == "confirmation_evidence"
+                ]
+                self.assertEqual(
+                    [context["postcondition"] for context in evidence[:2]],
+                    [True, False],
+                )
+                self.assertTrue(evidence[1]["supersedes_previous"])
+                self.assertEqual(
+                    [
+                        context["proof"]
+                        for event, context in observer.events
+                        if event == "postcondition_observed"
+                    ],
+                    [proof],
+                )
+                if proof == "independent_query":
+                    self.assertTrue(
+                        any(
+                            event == "postcondition_pending"
+                            for event, _ in observer.events
+                        )
+                    )
+                    self.assertFalse(
+                        any(
+                            event == "control_accepted"
+                            for event, _ in observer.events
+                        )
+                    )
+                observed = [
+                    context
+                    for event, context in observer.events
+                    if event == "state_observed" and context["stage"] == "confirmation"
+                ]
+                self.assertEqual(
+                    [
+                        context["decoded_snapshot"].buzzer_enabled
+                        for context in observed
+                    ],
+                    [False, True, False]
+                    if proof == "accepted_and_report"
+                    else [False, True, True, False],
+                )
+
     def test_exact_empty_raw_05_decodes_without_reclassification(self) -> None:
         frame, consumed = _decode_inner_frame(_EMPTY_RAW_05)
 
@@ -71,6 +208,7 @@ class ResponseContractTest(unittest.IsolatedAsyncioTestCase):
         trailing: list[bytes] = []
         connections = 0
         finished = asyncio.Event()
+        observer = _RecordingObserver()
 
         async def handle(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -103,6 +241,7 @@ class ResponseContractTest(unittest.IsolatedAsyncioTestCase):
                 timeout=1,
                 control_timeout=0.1,
                 device_id="TESTDEVICE",
+                observer=observer,
             )
             with self.assertRaises(OutcomeUnknown):
                 await client.start_program(
@@ -127,6 +266,27 @@ class ResponseContractTest(unittest.IsolatedAsyncioTestCase):
                     ),
                 ),
             ],
+        )
+        self.assertTrue(
+            any(
+                event == "response" and context["response_type"] == 0x05
+                for event, context in observer.events
+            )
+        )
+        self.assertTrue(
+            any(
+                event == "state_observed" and context["stage"] == "confirmation"
+                for event, context in observer.events
+            )
+        )
+        self.assertTrue(
+            any(
+                event == "outcome_unknown" and context["cause"] == "timeout"
+                for event, context in observer.events
+            )
+        )
+        self.assertFalse(
+            any(event == "postcondition_observed" for event, _ in observer.events)
         )
 
     async def test_raw_05_can_be_resolved_only_by_matching_fresh_requested_state(

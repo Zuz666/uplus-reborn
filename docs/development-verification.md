@@ -200,7 +200,7 @@ coordinator, entities, decoder or transport. Each run uses a fresh temporary
 config and unloads/stops afterward.
 
 Use `tools/delivery.py docker` to run against the immutable container images
-(`--target core-current` for Home Assistant 2026.10.2 on Python 3.14; `--target test`
+(`--target core-current` for Home Assistant 2026.10.4 on Python 3.14; `--target test`
 for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
 stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
@@ -223,6 +223,110 @@ The default `standby` scenario proves both drums' actual HA phase/execution stat
 Spinning. It records Core/Python versions, the artifact and installed hashes,
 real query counts, authoritative snapshots/entity states and shutdown evidence.
 A control or malformed request fails acceptance. Output files are never replaced.
+
+**Native exchange-trace acceptance.**
+
+The `exchange-trace` scenario extends this same isolated boot with native
+`logger/integration_log_level` WebSocket commands (`persistence: none`) and
+authenticated HTTP **Download diagnostics** attachments. Run it on both supported
+acceptance versions; the receipt records the actual Core/Python versions and
+installed bundle hashes rather than inferring acceptance from the image name.
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/exchange-trace-min.json --scenario exchange-trace
+uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/exchange-trace-current.json --scenario exchange-trace
+```
+
+The synthetic peer remains query-only. It splits an unmatched state frame across
+writes, then coalesces the remainder with the correlated reply. Acceptance compares
+downloaded TX/RX bytes with the actual peer buffers, verifies the observed read
+boundaries and unmatched/correlated chronology, and retains authoritative standby
+state. Matched capture-OFF/ON queries must have identical connection/query counts
+and zero controls or retries. It also checks unrelated logger notifications,
+frozen repeated downloads, no appliance network activity during downloads,
+capture-OFF activity without retained events, and OFF/ON reset with no intervening
+appliance event.
+
+The same scenario then executes 360 accelerated ordinary polls: a native download
+after 240 must retain all 240, and after 360 it must retain exactly the newest 300
+with the oldest 60 reported as omitted. The receipt records events/raw bytes,
+export size and nominal 15-second poll-slot coverage, not an elapsed-hour claim.
+Autonomous polling is disabled on the disposable fixture entries from creation;
+each explicit refresh still uses the real coordinator/TCP path.
+
+Two entries share native DEBUG activation but retain independent traces and
+fixed limits. Unload clears/closes the old store without changing ordinary
+cached-state behavior: a Core-retained runtime can expose its cached state,
+while a Core-cleared runtime reports no state as before. Logger changes cannot
+revive the old capture, and reload creates a fresh one.
+The fixture revokes its disposable authentication, closes its WebSocket/session,
+unloads its second entry and closes its peer; the existing runner unloads the
+primary entry, stops Core and removes the temporary configuration. Scenario errors
+remain primary if cleanup also fails. Receipts contain only synthetic identities
+and exchanges, never temporary token values; an unrelated synthetic credential
+sentinel must remain absent from diagnostic downloads.
+
+The scenario is public software/transport evidence, not physical appliance or
+browser acceptance. Perform independent source review first and run the exact
+committed bundle for final evidence. These commands describe the required
+acceptance; only a successful recorded execution proves it.
+
+The versioned public Core contracts are the native logger commands
+([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/logger/websocket_api.py),
+[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/logger/websocket_api.py))
+and authenticated `/api/diagnostics/config_entry/{entry_id}` download
+([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/diagnostics/__init__.py),
+[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/diagnostics/__init__.py)).
+The fixture does not read private Core logger storage or invoke diagnostic
+callbacks in place of these native requests.
+
+**Retention sizing: measured coordinator/TCP sample.**
+
+Fixed budgets are 300 operations, 6000 events and 4,194,304 raw bytes. Operation
+capacity leaves room beyond the required 240 ordinary polls; the event budget also
+fits the measured 240 fragmented/unmatched polls and the mixed poll/control run.
+Raw pressure was far below 4 MiB, so increasing that budget was not justified.
+All three budgets still apply together, including to one oversized operation.
+
+The following run used Linux Docker, CPython 3.13.15 and actual coordinator
+refresh/Start paths with the existing synthetic TCP fixtures. A normal poll
+received one correlated report; the fragmented case split an unmatched frame then
+coalesced its tail with a correlated report. Start used initialization, an accepted
+response and an independent active-state report. Refusal sent no bytes.
+Sizes include a fresh store/export envelope; timing/ID lengths can vary.
+
+| Single operation | Events | Raw bytes | JSON metadata/framing bytes | Full compact JSON bytes | Python metadata/container bytes | Python raw-object bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ordinary poll | 10 | 266 | 4799 | 5331 | 18345 | 332 |
+| Fragmented/unmatched poll | 14 | 439 | 6907 | 7785 | 23171 | 538 |
+| Confirmed Spin/400 Start | 31 | 845 | 9905 | 11595 | 33654 | 1076 |
+| Local Start refusal | 0 | 0 | 2084 | 2084 | 9112 | 0 |
+
+| Executed workload | Retained polls / controls | Events | Raw KiB | Compact JSON MiB | Python store graph MiB | Additional export/JSON peak MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 240 ordinary polls | 240 / 0 | 2400 | 62.34 | 1.14 | 2.52 | 4.71 |
+| 360 ordinary polls | 300 / 0 | 3000 | 77.93 | 1.43 | 3.16 | 5.89 |
+| 240 fragmented/unmatched polls | 240 / 0 | 3360 | 102.89 | 1.70 | 3.64 | 6.87 |
+| 240 ordinary polls + 16 Starts | 240 / 16 | 2896 | 75.55 | 1.31 | 2.91 | 5.42 |
+
+The 360-poll run retained operation IDs 61–360 without partial operations; the
+mixed run retained all 256 operations. With the old 20-operation budget, the same
+240-poll workload retained only IDs 221–240. These are accelerated capacity
+measurements: 240 ordinary 15-second poll slots correspond to about an hour;
+300 correspond to about 75 minutes. This does not establish wall-clock coverage
+under arbitrary command/report intensity, physical-cycle completeness or latency.
+
+Memory method: walk the captured store's reachable Python object graph using
+`sys.getsizeof`, deduplicating object identities, including dictionaries, slot
+records, containers and referenced strings once. Raw-object sizes include `bytes`
+overhead; remaining graph bytes are metadata/containers, not raw payload. This
+is not process RSS or exclusive ownership accounting. Compact UTF-8 JSON uses
+`separators=(",", ":")`; subtracting its ASCII hex content gives metadata/framing
+size. `tracemalloc` starts after the captured store exists and measures additional
+allocations through `export()` and JSON encoding, including transient serializer
+buffers. Its peak is additional to the existing store, not a 4 MiB total-memory
+promise, and varies with Python/platform and workload. No measurement machinery
+runs in the integration or changes production polling.
 
 The `offline` scenario refuses the first real TCP connection while loading a
 previously configured entry. It requires a loaded entry, absent authoritative
@@ -500,7 +604,7 @@ license and attribution remain separately defined by README and `docs/LICENSE`.
 | Metadata and packaging | Manifest/project/uv root agree; dated notes; committed-byte, licensed, root-layout ZIP; rejection of unsafe/incomplete/occupied candidates |
 | Standalone tooling | Windows and Ubuntu artifact/release boundary regressions, including stale SHA, duplicate tag, version rollback and failed required checks |
 | HA contracts | Full pytest and Ruff in the frozen Docker test image |
-| Real Core | 2026.2.3 and 2026.10.2: standby, execution, profiles including restart, discovery and discovery-identification |
+| Real Core | 2026.2.3 and 2026.10.4: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
 | Public surface | Markdown/Mermaid, actual issue/PR/private-report routes, hosted CI and effective protection settings |
 | HACS | Separate actual source-tree bootstrap and published-ZIP installation/upgrade; exact installed-member comparison |
 

@@ -62,6 +62,14 @@ def _assert_private(text: str) -> None:
         assert secret not in text
 
 
+def _ordinary_diagnostics_json(result: dict) -> str:
+    """Only opt-in local trace evidence is exempt from identity redaction."""
+    trace = json.dumps(result.get("exchange_trace"))
+    for secret in (ACCOUNT, TOKEN):
+        assert secret not in trace
+    return json.dumps({key: value for key, value in result.items() if key != "exchange_trace"})
+
+
 def _coordinator(hass: HomeAssistant, *, controls: bool = False):
     entry = _entry(controls=controls)
     entry.add_to_hass(hass)
@@ -182,7 +190,7 @@ async def test_no_data_and_exception_privacy_are_available_without_setup(
     assert result["device"]["state"] is None
     assert result["health"]["last_error"]["cause"] == "connection_error"
     assert result["health"]["last_error"]["context"] == {"inner_offset": 7}
-    _assert_private(json.dumps(result) + caplog.text + str(coordinator.last_exception))
+    _assert_private(_ordinary_diagnostics_json(result) + caplog.text + str(coordinator.last_exception))
     assert classify_error(UnsafeState(TOKEN, reason=TOKEN)) == "unsafe_state"
 
 
@@ -203,7 +211,7 @@ async def test_unloaded_diagnostics_allowlist_configuration(
     assert not result["health"]["available"]
     assert result["device"]["state"] is None
     assert result["staged_intents"] == {"upper": None, "lower": None}
-    _assert_private(json.dumps(result))
+    _assert_private(_ordinary_diagnostics_json(result))
 
 
 async def test_poll_failure_recovery_preserves_cached_state_without_duplicate_noise(
@@ -254,7 +262,7 @@ async def test_poll_failure_recovery_preserves_cached_state_without_duplicate_no
             if record.name == f"{LOGGER}.coordinator" and record.levelno == logging.INFO
         ]
         assert len(recovery) == 1
-        _assert_private(json.dumps(recovered) + caplog.text)
+        _assert_private(_ordinary_diagnostics_json(recovered) + caplog.text)
         assert await hass.config_entries.async_unload(entry.entry_id)
         unloaded = await async_get_config_entry_diagnostics(hass, entry)
         assert unloaded["health"]["freshness"] == "unloaded"
@@ -365,7 +373,7 @@ async def test_control_logs_proof_boundaries_without_identifiers_or_retry(
         for message in messages
         if "event=response " in message
     )
-    _assert_private(caplog.text + json.dumps(diagnostics))
+    _assert_private(caplog.text + _ordinary_diagnostics_json(diagnostics))
     for _, packet in requests:
         assert packet.hex() not in caplog.text
 
@@ -391,7 +399,7 @@ async def test_precondition_rejection_does_not_consume_or_dispatch(
     assert coordinator.health.latest_command.outcome == "not_dispatched"
     assert coordinator.health.latest_command.cause == "controls_disabled"
     result = await async_get_config_entry_diagnostics(hass, entry)
-    _assert_private(json.dumps(result) + caplog.text)
+    _assert_private(_ordinary_diagnostics_json(result) + caplog.text)
 
 
 @pytest.mark.parametrize("drum", ["upper", "lower"])
@@ -439,7 +447,7 @@ async def test_missing_program_retains_specific_private_command_diagnostics(
         record.args[1:] == (f"{drum}_start", "not_dispatched", "program_not_staged")
         for record in outcomes
     )
-    _assert_private(json.dumps(result) + caplog.text)
+    _assert_private(_ordinary_diagnostics_json(result) + caplog.text)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -467,7 +475,7 @@ async def test_unknown_command_reasons_remain_sanitized(
     assert result["health"]["latest_command"]["outcome"] == "not_dispatched"
     assert result["health"]["latest_command"]["retried"] is False
     assert reason not in json.dumps(result) + caplog.text
-    _assert_private(json.dumps(result) + caplog.text)
+    _assert_private(_ordinary_diagnostics_json(result) + caplog.text)
 
 
 @pytest.mark.parametrize("drum", ["upper", "lower"])
@@ -507,7 +515,7 @@ async def test_offline_first_setup_retains_classified_diagnostics(
     assert result["health"]["last_error"]["cause"] == "connection_closed"
     assert result["health"]["loaded"]
     assert not result["health"]["available"]
-    _assert_private(json.dumps(result) + caplog.text)
+    _assert_private(_ordinary_diagnostics_json(result) + caplog.text)
 
 
 async def test_enabling_debug_after_setup_logs_a_baseline(
@@ -592,7 +600,7 @@ async def test_malformed_stream_logs_only_bounded_context(
     )
     assert malformed.hex() not in caplog.text
     assert repr(malformed) not in caplog.text
-    _assert_private(caplog.text + json.dumps(result))
+    _assert_private(caplog.text + _ordinary_diagnostics_json(result))
 
 
 def test_loopback_fixture_rejects_external_connections(loopback_socket: None) -> None:
@@ -674,7 +682,7 @@ async def test_cleanup_cancellation_preserves_dispatched_outcome(
     assert outcome["cause"] == "cancelled"
     assert not outcome["retried"]
     assert len(requests) == 3
-    _assert_private(caplog.text + json.dumps(diagnostics))
+    _assert_private(caplog.text + _ordinary_diagnostics_json(diagnostics))
 
 
 async def test_loaded_draft_diagnostics_are_private_cached_and_clear_on_unload(
@@ -714,10 +722,10 @@ async def test_loaded_draft_diagnostics_are_private_cached_and_clear_on_unload(
             assert result["staged_intents"]["upper"]["stains"] == ("W1", "W30")
             assert result["staged_intents"]["lower"]["drying_mode"] == "30_min"
             assert result["device"]["state"]["lower"]["program"] == "none"
-            _assert_private(json.dumps(result))
+            _assert_private(_ordinary_diagnostics_json(result))
             assert await hass.config_entries.async_unload(entry.entry_id)
             unloaded = await async_get_config_entry_diagnostics(hass, entry)
             assert unloaded["staged_intents"] == {"upper": None, "lower": None}
             assert not unloaded["health"]["available"]
-            _assert_private(json.dumps(unloaded))
+            _assert_private(_ordinary_diagnostics_json(unloaded))
         read_state.assert_awaited_once_with()

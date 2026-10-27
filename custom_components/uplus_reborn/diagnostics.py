@@ -16,6 +16,7 @@ from .const import (
     MODEL,
     configured_poll_interval,
 )
+from .exchange_trace import ExchangeTrace
 from .protocol import (
     DELAY_HALF_HOUR_STEPS,
     DRYING_MODE_OPTIONS,
@@ -75,7 +76,7 @@ _STATE_PROVENANCE = {
     "unsupported": (
         "Unknown program/phase codes are unsupported, never guessed.",
         "Motion semantics, hint codes and physical door position are not decoded state.",
-        "No complete frames or unassigned raw words are retained by the coordinator.",
+        "Ordinary cached state excludes complete frames and unassigned words; opt-in exchange_trace may retain original local bytes.",
         "Consumption fields here are raw; this metadata does not establish units or cycle scope.",
     ),
 }
@@ -163,6 +164,9 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return cached state and allowlisted configuration, including no-data states."""
     coordinator = getattr(entry, "runtime_data", None)
+    trace = coordinator.trace if coordinator is not None else ExchangeTrace()
+    if coordinator is None:
+        trace.close()
     snapshot = coordinator.data if coordinator is not None else None
     state = None
     if snapshot is not None:
@@ -240,4 +244,5 @@ async def async_get_config_entry_diagnostics(
             "automatic_retry": False,
         },
         "capabilities": _capability_diagnostics(),
+        "exchange_trace": trace.export(),
     }

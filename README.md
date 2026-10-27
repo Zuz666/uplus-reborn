@@ -591,7 +591,7 @@ calling the integration, so a custom error is not guaranteed for disabled action
 
 Use the integration entry's **Enable debug logging** action temporarily,
 observe the problem, then **Disable debug logging** to collect the log.
-Use **Download diagnostics** for the separate cached, redacted snapshot.
+Use **Download diagnostics** for cached state and any retained opt-in exchange trace.
 There is no persistent debug option in this integration. See
 [Diagnostics and issue reports](#diagnostics-and-issue-reports) for reporting
 and privacy guidance; never attach credentials or raw private captures.
@@ -856,7 +856,12 @@ for raw-word layouts and wire evidence boundaries.
 
 ## Diagnostics and issue reports
 
-Download diagnostics from the integration entry before filing an issue. Host and device ID are redacted. Diagnostics include decoded state so unsupported values can be investigated without publishing APKs, credentials, or raw private captures.
+Download diagnostics from the integration entry before filing an issue. Ordinary
+configuration/state sections redact host and device ID. If temporary DEBUG
+capture has been enabled, the separate **`exchange_trace` section is not
+anonymized**: it can contain local addresses, MAC/device identifiers, opaque
+identifier bytes and complete original local UWT traffic. Review and redact that
+section before posting a download publicly.
 
 `health.latest_command` records the latest command outcome and sanitized cause.
 A Start refused because no program was staged is `not_dispatched` with cause
@@ -875,7 +880,43 @@ Include:
 - what action was attempted;
 - redacted integration diagnostics.
 
-Do not attach account tokens, the device ID, APK files, decompiled sources, or unsanitized packet captures.
+Do not publish account tokens, APK files, decompiled sources, device identifiers,
+or unsanitized packet captures/diagnostic traces. Full local traces can be useful
+for private diagnosis; the integration never uploads them automatically.
+
+### Temporary exchange tracing
+
+Use the integration entry's native **Enable debug logging** control, reproduce
+the problem, then stop debug logging and choose **Download diagnostics**. Capture
+observes only the entry's existing polls and control attempts; it opens no extra
+connections, changes no polling interval and never repeats commands. Enabling
+diagnostics does not authorize appliance controls.
+
+Each entry groups requests, actual transmitted/received byte chunks, decoded
+observations and processing decisions by poll or control operation. TCP chunks
+are not frame boundaries, and a submitted write is not proof of appliance receipt
+or command success. Reports processed during command confirmation are included.
+This is an **integration exchange trace**, not a complete physical cycle history
+or an alternative source of authoritative state.
+
+Capture is memory-only and bounded per entry: at most 300 operations, 6000 events
+and 4 MiB of original raw bytes, enforced together, with separately bounded
+metadata. These budgets target at least 240 consecutive ordinary polls (about an
+hour at 15-second intervals), with some headroom for controls. Bursts of reports,
+commands or malformed traffic can shorten that window; no complete cycle or
+fixed-duration history is guaranteed. Raw bytes are hex-encoded in the download,
+so 4 MiB is not a total RAM/JSON limit. Old operations are evicted first; partial
+captures, omitted bytes/events and overflow are marked honestly. See the
+[synthetic sizing evidence](docs/development-verification.md#real-isolated-core-fixture-docker)
+for measured depth and metadata/export memory costs.
+
+Stopping DEBUG retains the trace. Downloads are nondestructive and do not contact
+the appliance. Starting a new capture clears the old one, even without an
+intervening appliance event. Entry unload/reload and Core restart clear it.
+Starting/stopping midway through an operation marks that trace partial.
+The native DEBUG switch is integration-wide; each entry's records and limits
+remain separate. Cloud onboarding, discovery, standalone CLI sessions and
+unrelated traffic are not part of this capture.
 
 ### System Health
 
@@ -894,7 +935,8 @@ currently unavailable.
 U+ Reborn's System Health callback reads cached integration state only: it
 does not request a refresh or connect to the appliance or cloud. Other
 integrations' sections may perform their own checks. Download the separate
-integration diagnostics for a more detailed redacted troubleshooting snapshot.
+integration diagnostics for more detailed cached state and any retained opt-in
+exchange trace; review its privacy guidance before sharing.
 
 ## Protocol documentation
 

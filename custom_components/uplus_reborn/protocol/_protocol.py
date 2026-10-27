@@ -16,6 +16,7 @@ from typing import Final, Literal
 
 from ._capabilities import Drum, ordinary_stain_choices
 from ._commands import BuilderContext, ProgramIntent, encode_start, validate_intent
+from ._observation import ExchangeObserver
 
 _LOGGER = logging.getLogger(__name__)
 _SESSION_IDS = count(1)
@@ -928,7 +929,7 @@ class _LocalSession:
     started_at: float
     decoder: _EnvelopeDecoder = field(default_factory=_EnvelopeDecoder)
     pending: deque[_Envelope] = field(default_factory=deque)
-    state_backlog: deque[_StateResult] = field(default_factory=deque)
+    observer: ExchangeObserver | None = field(default=None, kw_only=True, repr=False)
     control_name: str | None = None
     next_sequence: int = 0
     heartbeat_due: float | None = None
@@ -949,11 +950,58 @@ class _LocalSession:
                 context,
             )
 
+    def observe_state(
+        self, result: _StateResult, *, stage: str, decision: str
+    ) -> None:
+        """Expose the authoritative decode once, never a second state source."""
+        if self.observer is not None and self.observer.active:
+            self.observer.event(
+                "state_observed",
+                stage=stage,
+                decision=decision,
+                response_sequence=result.envelope.sequence,
+                response_kind=_response_kind(result.frame),
+                decoded_snapshot=result.snapshot,
+            )
+
+    def observe_envelope(self, envelope: _Envelope) -> None:
+        if self.observer is not None and self.observer.active:
+            self.observer.event(
+                "envelope",
+                message_id=envelope.message_id,
+                response_sequence=envelope.sequence,
+                decision=(
+                    "decode_inner"
+                    if envelope.message_id == _UWT_RESPONSE
+                    else "non_state_envelope"
+                ),
+            )
+
+    def observe_response(self, envelope: _Envelope, frame: _InnerFrame) -> None:
+        if self.observer is not None and self.observer.active:
+            self.observer.event(
+                "response",
+                request_kind=self.request_kind,
+                request_sequence=self.request_sequence,
+                response_sequence=envelope.sequence,
+                sequence_matches_request=envelope.sequence == self.request_sequence,
+                response_kind=_response_kind(frame),
+                response_type=frame.frame_type,
+                message_id=envelope.message_id,
+                opaque_word=envelope.opaque_word,
+                opaque_identifier_hex=envelope.opaque_identifier.hex(),
+                device_id_hex=envelope.device_id.hex(),
+                flags=frame.flags,
+                reserved_hex=frame.reserved.hex(),
+            )
+
     def begin_request(self, kind: str, sequence: int) -> None:
         self.request_kind = kind
         self.request_sequence = sequence
         self.request_started_at = monotonic()
         self.log_event("dispatch")
+        if self.observer is not None and self.observer.active:
+            self.observer.event("dispatch", kind=kind, sequence=sequence)
 
     def _allocate_sequence(self) -> int:
         sequence = self.next_sequence
@@ -967,7 +1015,11 @@ class _LocalSession:
             inner_frame=_build_inner_frame(frame_type, payload),
         )
         self.writer.write(request)
+        if self.observer is not None and self.observer.active:
+            self.observer.raw("tx", request, stage="write_submitted")
         await self.writer.drain()
+        if self.observer is not None and self.observer.active:
+            self.observer.event("write_drained", sequence=sequence)
 
     async def _send_state_query(self) -> int:
         """Dispatch one query; its caller owns all incoming proof channels."""
@@ -986,10 +1038,11 @@ class _LocalSession:
             envelope, frame = await self.receive_inner()
             if result := _state_result(envelope, frame):
                 if envelope.sequence == sequence:
+                    self.observe_state(result, stage="query", decision="correlated")
                     self.log_event("correlated", response_kind=_response_kind(frame))
                     return result
                 self.log_event("uncorrelated", response_sequence=envelope.sequence)
-                self.state_backlog.append(result)
+                self.observe_state(result, stage="query", decision="uncorrelated")
 
     async def initialize_controls(
         self,
@@ -1007,10 +1060,12 @@ class _LocalSession:
         while True:
             envelope, frame = await self.receive_inner()
             if result := _state_result(envelope, frame):
+                self.observe_state(
+                    result, stage="initialization", decision="pre_dispatch_observation"
+                )
                 if check is not None:
                     check(result.snapshot)
                 current = result.snapshot
-                self.state_backlog.append(result)
             if (
                 envelope.sequence == sequence
                 and frame.frame_type == _CONTROL_INIT_RESPONSE
@@ -1018,26 +1073,34 @@ class _LocalSession:
                 # Reports already received before dispatch cannot prove its result.
                 while self.pending:
                     pending = self.pending.popleft()
+                    self.observe_envelope(pending)
                     if pending.message_id != _UWT_RESPONSE:
                         continue
                     inner, consumed = _decode_inner_frame(pending.payload)
                     if consumed != len(pending.payload):
                         raise InvalidFrame("Trailing bytes after inner frame")
+                    self.observe_response(pending, inner)
                     if result := _state_result(pending, inner):
+                        self.observe_state(
+                            result,
+                            stage="initialization",
+                            decision="pre_dispatch_pending_observation",
+                        )
                         if check is not None:
                             check(result.snapshot)
                         current = result.snapshot
-                        self.state_backlog.append(result)
                 self.log_event("correlated", response_kind=_response_kind(frame))
+                if self.observer is not None and self.observer.active:
+                    self.observer.event(
+                        "correlated",
+                        stage="initialization",
+                        response_sequence=envelope.sequence,
+                        response_kind=_response_kind(frame),
+                    )
                 self.heartbeat_due = (
                     asyncio.get_running_loop().time() + _HEARTBEAT_INTERVAL
                 )
                 return current
-
-    def drain_state_backlog(self) -> tuple[_StateResult, ...]:
-        results = tuple(self.state_backlog)
-        self.state_backlog.clear()
-        return results
 
     async def send_control(self, name: str, *, frame_type: int, payload: bytes) -> int:
         if self.control_name is not None:
@@ -1051,7 +1114,11 @@ class _LocalSession:
         self.control_name = name
         self.begin_request(name, sequence)
         self.writer.write(request)
+        if self.observer is not None and self.observer.active:
+            self.observer.raw("tx", request, stage="write_submitted")
         await self.writer.drain()
+        if self.observer is not None and self.observer.active:
+            self.observer.event("write_drained", sequence=sequence)
         return sequence
 
     async def confirm_control(
@@ -1080,6 +1147,25 @@ class _LocalSession:
                 envelope, frame = await self.receive_inner()
             result = _state_result(envelope, frame)
             if (
+                result is not None
+                and self.observer is not None
+                and self.observer.active
+            ):
+                self.observe_state(
+                    result,
+                    stage="confirmation",
+                    decision=(
+                        "correlated_query"
+                        if query_sequence is not None
+                        and envelope.sequence == query_sequence
+                        else "correlated_control"
+                        if envelope.sequence == sequence
+                        else "independent_report"
+                        if envelope.sequence == 0 and frame.frame_type == _FRAME_REPORT
+                        else "uncorrelated"
+                    ),
+                )
+            if (
                 query_sequence is not None
                 and envelope.sequence == query_sequence
                 and result is not None
@@ -1087,6 +1173,12 @@ class _LocalSession:
                 self.log_event("correlated", response_kind=_response_kind(frame))
                 if predicate(result.snapshot):
                     self.log_event("postcondition_observed", proof="independent_query")
+                    if self.observer is not None and self.observer.active:
+                        self.observer.event(
+                            "postcondition_observed",
+                            proof="independent_query",
+                            response_sequence=envelope.sequence,
+                        )
                     return result.snapshot
                 self.log_event(
                     "postcondition_pending",
@@ -1097,6 +1189,13 @@ class _LocalSession:
                     upper=result.snapshot.upper,
                     lower=result.snapshot.lower,
                 )
+                if self.observer is not None and self.observer.active:
+                    self.observer.event(
+                        "postcondition_pending",
+                        proof="independent_query",
+                        response_sequence=envelope.sequence,
+                        supersedes_previous=observed is not None,
+                    )
                 observed = None
                 query_sequence = None
                 query_due = (
@@ -1109,15 +1208,33 @@ class _LocalSession:
             ):
                 accepted = True
                 self.log_event("correlated", response_kind=_response_kind(frame))
+                if self.observer is not None and self.observer.active:
+                    self.observer.event(
+                        "control_accepted",
+                        response_sequence=envelope.sequence,
+                        response_kind=_response_kind(frame),
+                    )
             if (
                 result is not None
                 and envelope.sequence == 0
                 and frame.frame_type == _FRAME_REPORT
             ):
                 # Latest evidence supersedes an earlier transient match.
+                previous_observation = observed
                 observed = result.snapshot if predicate(result.snapshot) else None
+                if self.observer is not None and self.observer.active:
+                    self.observer.event(
+                        "confirmation_evidence",
+                        postcondition=observed is not None,
+                        supersedes_previous=previous_observation is not None,
+                        accepted=accepted,
+                    )
             if accepted and observed is not None:
                 self.log_event("postcondition_observed", proof="accepted_and_report")
+                if self.observer is not None and self.observer.active:
+                    self.observer.event(
+                        "postcondition_observed", proof="accepted_and_report"
+                    )
                 return observed
 
     async def _send_heartbeat(self) -> None:
@@ -1125,7 +1242,11 @@ class _LocalSession:
         request = _build_heartbeat_request(self.device_id, sequence)
         self.log_event("heartbeat_dispatch", heartbeat_sequence=sequence)
         self.writer.write(request)
+        if self.observer is not None and self.observer.active:
+            self.observer.raw("tx", request, stage="write_submitted")
         await self.writer.drain()
+        if self.observer is not None and self.observer.active:
+            self.observer.event("write_drained", sequence=sequence, kind="heartbeat")
         self.heartbeat_due = asyncio.get_running_loop().time() + _HEARTBEAT_INTERVAL
 
     async def receive_inner(self) -> tuple[_Envelope, _InnerFrame]:
@@ -1144,6 +1265,8 @@ class _LocalSession:
                     except TimeoutError:
                         await self._send_heartbeat()
                         continue
+                if self.observer is not None and self.observer.active:
+                    self.observer.raw("rx", chunk, stage="read")
                 if not chunk:
                     if self.decoder.buffered_bytes:
                         raise InvalidFrame(
@@ -1162,6 +1285,7 @@ class _LocalSession:
                 self.pending.extend(self.decoder.feed(chunk))
 
             envelope = self.pending.popleft()
+            self.observe_envelope(envelope)
             if envelope.message_id != _UWT_RESPONSE:
                 self.log_event(
                     "non_state_envelope", response_sequence=envelope.sequence
@@ -1176,6 +1300,7 @@ class _LocalSession:
                         ("inner_received_length", len(envelope.payload)),
                     ),
                 )
+            self.observe_response(envelope, inner)
             self.log_event(
                 "response",
                 response_kind=_response_kind(inner),
@@ -1195,6 +1320,9 @@ class UwtClient:
     port: int = 56800
     timeout: float = 5.0
     control_timeout: float = 15.0
+    observer: ExchangeObserver | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not self.host:
@@ -1355,13 +1483,9 @@ class UwtClient:
                 before=before, after=after, unconfirmed_settings=unconfirmed_settings
             )
 
-    async def _read_state_batch(self) -> tuple[_StateResult, ...]:
-        async with self._session(self.timeout) as session:
-            result = await session.query_state()
-            return (*session.drain_state_backlog(), result)
-
     async def _read_state_result(self) -> _StateResult:
-        return (await self._read_state_batch())[-1]
+        async with self._session(self.timeout) as session:
+            return await session.query_state()
 
     @asynccontextmanager
     async def _session(self, timeout: float) -> AsyncIterator[_LocalSession]:
@@ -1372,14 +1496,38 @@ class UwtClient:
         unknown_logged = False
 
         try:
+            if self.observer is not None and self.observer.active:
+                self.observer.event(
+                    "session_connecting",
+                    session=correlation,
+                    host=self.host,
+                    port=self.port,
+                    device_id=self.device_id,
+                )
             async with asyncio.timeout(timeout):
                 reader, writer = await asyncio.open_connection(self.host, self.port)
                 session = _LocalSession(
-                    reader, writer, self.device_id, correlation, started_at
+                    reader,
+                    writer,
+                    self.device_id,
+                    correlation,
+                    started_at,
+                    observer=self.observer,
                 )
+                if self.observer is not None and self.observer.active:
+                    self.observer.event("session_connected", session=correlation)
                 yield session
         except (TimeoutError, OSError, ProtocolError, asyncio.CancelledError) as error:
             dispatched = session is not None and session.control_name is not None
+            if self.observer is not None and self.observer.active:
+                self.observer.event(
+                    "outcome_unknown" if dispatched else "failed",
+                    session=correlation,
+                    cause=classify_error(error),
+                    stage="response" if session is not None else "connect",
+                    incomplete_bytes=session.decoder.buffered_bytes if session else 0,
+                    context=error.context if isinstance(error, ProtocolError) else (),
+                )
             _LOGGER.debug(
                 "session=%s elapsed=%.3f event=%s cause=%s incomplete_bytes=%s stage=%s context=%s",
                 correlation,
@@ -1428,7 +1576,17 @@ class UwtClient:
                                 "session=%s control outcome unknown cause=cancelled_cleanup; not retried",
                                 correlation,
                             )
+                    if self.observer is not None and self.observer.active:
+                        self.observer.event(
+                            "session_cleanup_cancelled",
+                            session=correlation,
+                            control_dispatched=(
+                                session is not None and session.control_name is not None
+                            ),
+                        )
                     raise
+            if self.observer is not None and self.observer.active:
+                self.observer.event("session_closed", session=correlation)
             _LOGGER.debug(
                 "session=%s elapsed=%.3f event=closed",
                 correlation,
