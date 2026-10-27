@@ -339,6 +339,9 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
 - Protocol framing, decoding and lifecycle confirmation belong in the embedded
   protocol package, with offline cases in `tests/test_protocol.py` and
   `tests/test_response_contract.py`.
+  Validate each state frame into one complete word sequence, then reuse it for
+  snapshot projection and any selected-frame raw inspection. This boundary does
+  not change stream queues, report retention, correlation or confirmation proof.
 - Pure intent validation/encoding belongs in `protocol/_commands.py`, with
   source/capture-derived behavioral cases in `tests/test_commands.py`.
 - Coordination, per-drum draft isolation, atomic actions, opt-in and HA lifecycle

@@ -10,6 +10,7 @@ from custom_components.uplus_reborn.protocol._protocol import (
     _build_inner_frame,
     _decode_inner_frame,
     _decode_state,
+    _state_words,
 )
 
 from .test_protocol import _standby_words
@@ -23,7 +24,7 @@ class ConsumptionContractTest(unittest.TestCase):
         )
         frame, consumed = _decode_inner_frame(encoded)
         self.assertEqual(consumed, len(encoded))
-        return _decode_state(frame, datetime(2026, 1, 1, tzinfo=UTC))
+        return _decode_state(_state_words(frame), datetime(2026, 1, 1, tzinfo=UTC))
 
     def test_current_fields_preserve_unsigned_sixteen_bit_boundaries(self) -> None:
         for word, field in ((8, "current_water_raw"), (11, "current_electricity_raw")):

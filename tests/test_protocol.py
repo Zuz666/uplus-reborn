@@ -41,6 +41,7 @@ from custom_components.uplus_reborn.protocol._protocol import (
     _decode_inner_frame,
     _decode_state,
     _EnvelopeDecoder,
+    _state_words,
     validate_drum_control,
     validate_program_start,
 )
@@ -86,7 +87,7 @@ def _snapshot(words: list[int]) -> DeviceSnapshot:
     )
     if consumed == 0:
         raise AssertionError("Test fixture did not contain an inner frame")
-    return _decode_state(frame, datetime.now(UTC))
+    return _decode_state(_state_words(frame), datetime.now(UTC))
 
 
 def _standby_words(*, program: int = 0, remote_control: bool = True) -> list[int]:

@@ -602,9 +602,8 @@ def _phase_name(value: int) -> str:
     return _PHASE_NAMES.get(value, UNKNOWN_VALUE)
 
 
-def _decode_state(frame: _InnerFrame, observed_at: datetime) -> DeviceSnapshot:
-    words = _state_words(frame)
-
+def _decode_state(words: tuple[int, ...], observed_at: datetime) -> DeviceSnapshot:
+    """Project words validated by _state_words into an authoritative snapshot."""
     upper_hours = _field(words, 4, 0, 8)
     upper_minutes = _field(words, 5, 8, 8)
     lower_hours = _field(words, 27, 0, 8)
@@ -708,9 +707,11 @@ def _state_result(envelope: _Envelope, frame: _InnerFrame) -> _StateResult | Non
         return None
     if int.from_bytes(frame.payload[:2], "big") != _STATE_REPORT:
         return None
+    observed_at = datetime.now(UTC)
+    words = _state_words(frame)
     return _StateResult(
-        snapshot=_decode_state(frame, datetime.now(UTC)),
-        words=_state_words(frame),
+        snapshot=_decode_state(words, observed_at),
+        words=words,
         envelope=envelope,
         frame=frame,
     )
