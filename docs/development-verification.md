@@ -266,7 +266,7 @@ and the latest command outcome unchanged and cause no operation-triggered traffi
 All cases and normal unload/Core/peer/temporary-config cleanup must complete.
 
 ```sh
-python tools/delivery.py docker --target core-current -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/programme-intents.json --scenario programme-intents
+uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/programme-intents.json --scenario programme-intents
 ```
 
 The protocol consumer regressions also invoke the actual CLI against a bounded
