@@ -46,6 +46,7 @@ from ._commands import (
     intent_capabilities,
     intent_wash_stage_minutes,
     ordinary_stain_capability,
+    prepare_intent,
     update_intent,
     validate_intent,
 )
@@ -126,6 +127,7 @@ __all__ = (
     "intent_wash_stage_minutes",
     "ordinary_stain_capability",
     "ordinary_stain_choices",
+    "prepare_intent",
     "program_capabilities",
     "program_delay_capabilities",
     "program_drying_modes",

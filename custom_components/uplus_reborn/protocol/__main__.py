@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ._commands import default_intent, fabric_intent, update_intent
+from ._commands import prepare_intent
 from ._protocol import (
     ControlResult,
     ProtocolError,
@@ -230,20 +230,17 @@ async def _run_live_control(arguments: argparse.Namespace) -> dict[str, Any]:
         }
         if arguments.function is not None:
             changes["enabled_functions"] = tuple(arguments.function)
-        if arguments.fabric is not None:
-            if changes:
-                raise ProtocolError(
-                    "Smart fabric recipes do not accept manual settings"
-                )
-            intent = fabric_intent(
-                arguments.drum, arguments.fabric, tuple(arguments.stains or ())
-            )
-        else:
-            if arguments.stains:
+        if arguments.stains is not None:
+            if arguments.fabric is None:
                 raise ProtocolError("--stain requires --fabric")
-            intent = update_intent(
-                default_intent(arguments.drum, arguments.program), **changes
-            )
+            changes["stains"] = tuple(arguments.stains)
+        intent = prepare_intent(
+            arguments.drum,
+            program=arguments.program,
+            fabric=arguments.fabric,
+            manual_override_error=ProtocolError,
+            **changes,
+        )
         result = await client.start_program(intent, allow_live=arguments.allow_live)
     elif arguments.command == "set-option":
         result = await client.set_appliance_option(

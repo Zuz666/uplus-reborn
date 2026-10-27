@@ -1436,6 +1436,8 @@ async def test_atomic_action_keeps_drafts_and_serializes_with_polling(
     [
         ({"program": "not_a_program"}, ServiceValidationError),
         ({"program": "spin", "spin_rpm": 601}, ServiceValidationError),
+        ({"program": "spin", "spin_rpm": None}, vol.Invalid),
+        ({"fabric": "B1", "delay_hours": None}, vol.Invalid),
         ({"program": "spin", "delay_hours": 3}, ServiceValidationError),
         (
             {"program": "spin", "enabled_functions": ["high_water"]},

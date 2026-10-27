@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr
 from .const import DOMAIN
 from .coordinator import UplusRebornCoordinator
 from .entity import async_execute_control
-from .protocol import WASH_OPTION_BITS, default_intent, fabric_intent, update_intent
+from .protocol import WASH_OPTION_BITS, prepare_intent
 
 
 def _integer(value: object) -> int:
@@ -104,17 +104,12 @@ def async_register_actions(hass: HomeAssistant) -> None:
         if "stains" in changes:
             changes["stains"] = tuple(changes["stains"])
         try:
-            if "fabric" in call.data:
-                stains = changes.pop("stains", ())
-                if changes:
-                    raise ValueError(
-                        "Smart fabric recipes do not offer manual setting overrides"
-                    )
-                intent = fabric_intent(drum, call.data["fabric"], stains)
-            else:
-                intent = update_intent(
-                    default_intent(drum, call.data["program"]), **changes
-                )
+            intent = prepare_intent(
+                drum,
+                program=call.data.get("program"),
+                fabric=call.data.get("fabric"),
+                **changes,
+            )
         except ValueError as error:
             raise ServiceValidationError(str(error)) from error
         await async_execute_control(coordinator.async_start_program(drum, intent))

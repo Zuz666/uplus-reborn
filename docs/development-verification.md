@@ -248,6 +248,42 @@ This is protocol/runtime proof, not physical appliance acceptance.
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/profiles-smoke.json --scenario profiles
 ```
 
+### Programme-intent preparation
+
+The optional `programme-intents` scenario exercises the registered atomic
+`start_program` action in current isolated Core: lower Spin/400, upper A1/W30
+Smart recipe, lower Mix/Blood/600 and rejected Smart override with explicit
+zero delay. Its peer separately arms each independently specified initialization
+and grouped Start, returns a correlated confirmation, and rejects different or
+repeated commands. The default peer stays query-only; the profiles scenario
+retains its separate single Spin/400 allowance.
+
+The receipt records command payloads, confirmed outcomes, preserved interactive
+drafts/saved-profile selection and operation-attributed traffic. Scheduled polling
+is suspended during measurement; labelled synthetic-readiness refreshes are
+separate from action traffic. Invalid preparation must leave authoritative state
+and the latest command outcome unchanged and cause no operation-triggered traffic.
+All cases and normal unload/Core/peer/temporary-config cleanup must complete.
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python tools/ha_smoke.py --bundle build/delivery-candidate --output build/programme-intents.json --scenario programme-intents
+```
+
+The protocol consumer regressions also invoke the actual CLI against a bounded
+loopback peer, checking ordinary/Smart command content, confirmation, rejected
+inputs, parser/handled exit statuses and opt-in/readiness precedence:
+
+```sh
+python tools/delivery.py docker --target test -- pytest -q tests/test_protocol.py -k cli_start
+```
+
+Both commands use Docker without external networking and synthetic identities,
+not a real appliance. Offline CLI `decode` is not recipe-preparation proof.
+Keep detailed presence/null/empty cases in focused regressions rather than
+repeating a full recipe/Core/adapter matrix. Required minimum/current acceptance
+is unchanged; add a minimum-Core action smoke only for a concrete changed
+compatibility dependency. No browser or physical-appliance acceptance is implied.
+
 The `discovery` scenario exercises real UDP collection and native config-flow
 steps against loopback peers: enabled-adapter prefix calculation, continuous
 20-second queries beyond the former 120-second limit in default **full** mode,

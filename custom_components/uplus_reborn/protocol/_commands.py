@@ -324,6 +324,32 @@ def fabric_intent(
     )
 
 
+def prepare_intent(
+    drum: Drum,
+    *,
+    program: str | None = None,
+    fabric: str | None = None,
+    manual_override_error: type[Exception] = ValueError,
+    **settings: object,
+) -> ProgramIntent:
+    """Prepare one complete recipe without editing a draft or authorizing I/O.
+
+    Input adapters normalize units/collections and preserve supplied keys. They
+    may select their existing error category for prohibited smart overrides;
+    recipe and setting validation retain their own ValueError contract.
+    """
+    if (program is None) == (fabric is None):
+        raise ValueError("Select exactly one program or fabric recipe")
+    if fabric is not None:
+        stains = settings.pop("stains", ())
+        if settings:
+            raise manual_override_error(
+                "Smart fabric recipes do not accept manual settings"
+            )
+        return fabric_intent(drum, fabric, stains)
+    return update_intent(default_intent(drum, program), **settings)
+
+
 def intent_capabilities(intent: ProgramIntent) -> ProgramCapabilities:
     """Return adjustable choices or fixed recipe-owned scalar coordinates."""
     capability = program_capabilities(intent.drum, intent.program)
