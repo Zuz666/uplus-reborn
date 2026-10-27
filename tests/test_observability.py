@@ -28,6 +28,7 @@ from custom_components.uplus_reborn.protocol import (
     UwtClient,
     classify_error,
 )
+from custom_components.uplus_reborn.protocol._capabilities import Drum
 
 from .conftest import DEVICE_ID, HOST
 from .test_integration import _entry
@@ -391,6 +392,99 @@ async def test_precondition_rejection_does_not_consume_or_dispatch(
     assert coordinator.health.latest_command.cause == "controls_disabled"
     result = await async_get_config_entry_diagnostics(hass, entry)
     _assert_private(json.dumps(result) + caplog.text)
+
+
+@pytest.mark.parametrize("drum", ["upper", "lower"])
+async def test_missing_program_retains_specific_private_command_diagnostics(
+    hass: HomeAssistant,
+    standby_snapshot: DeviceSnapshot,
+    caplog: pytest.LogCaptureFixture,
+    drum: Drum,
+) -> None:
+    """An unstaged Start is a local refusal, not an appliance/read failure."""
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with patch.object(
+        UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    coordinator = entry.runtime_data
+    previous_health = coordinator.health
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    caplog.clear()
+    with (
+        patch.object(UwtClient, "start_program", side_effect=AssertionError("dispatch")),
+        patch("asyncio.open_connection", side_effect=AssertionError("network")),
+    ):
+        with pytest.raises(UnsafeState) as caught:
+            await coordinator.async_start_program(drum)
+        assert caught.value.reason == "program_not_staged"
+        result = json.loads(
+            json.dumps(await async_get_config_entry_diagnostics(hass, entry))
+        )
+    command = result["health"]["latest_command"]
+    assert command["kind"] == f"{drum}_start"
+    assert command["outcome"] == "not_dispatched"
+    assert command["cause"] == "program_not_staged"
+    assert command["retried"] is False
+    assert result["health"]["available"]
+    assert coordinator.health.last_error == previous_health.last_error
+    assert coordinator.health.last_success == previous_health.last_success
+    assert coordinator.data is standby_snapshot
+    outcomes = [
+        record for record in caplog.records if record.name == f"{LOGGER}.coordinator"
+    ]
+    assert any(
+        record.args[1:] == (f"{drum}_start", "not_dispatched", "program_not_staged")
+        for record in outcomes
+    )
+    _assert_private(json.dumps(result) + caplog.text)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("reason", [TOKEN, "preset_not_staged"])
+async def test_unknown_command_reasons_remain_sanitized(
+    hass: HomeAssistant,
+    standby_snapshot: DeviceSnapshot,
+    caplog: pytest.LogCaptureFixture,
+    reason: str,
+) -> None:
+    entry, coordinator = _coordinator(hass, controls=True)
+    coordinator.async_set_updated_data(standby_snapshot)
+    coordinator.stage_program("upper", "spin")
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    with (
+        patch.object(
+            UwtClient, "start_program",
+            AsyncMock(side_effect=UnsafeState(TOKEN, reason=reason)),
+        ),
+        pytest.raises(UnsafeState),
+    ):
+        await coordinator.async_start_program("upper")
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["health"]["latest_command"]["cause"] == "unsafe_state"
+    assert result["health"]["latest_command"]["outcome"] == "not_dispatched"
+    assert result["health"]["latest_command"]["retried"] is False
+    assert reason not in json.dumps(result) + caplog.text
+    _assert_private(json.dumps(result) + caplog.text)
+
+
+@pytest.mark.parametrize("drum", ["upper", "lower"])
+async def test_start_without_snapshot_keeps_earlier_guard(
+    hass: HomeAssistant,
+    drum: Drum,
+) -> None:
+    entry, coordinator = _coordinator(hass, controls=True)
+    with (
+        patch.object(UwtClient, "start_program", side_effect=AssertionError("dispatch")),
+        pytest.raises(UnsafeState) as caught,
+    ):
+        await coordinator.async_start_program(drum)
+    assert caught.value.reason == "no_snapshot"
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["health"]["latest_command"]["cause"] == "no_snapshot"
+    assert result["health"]["latest_command"]["outcome"] == "not_dispatched"
 
 
 async def test_offline_first_setup_retains_classified_diagnostics(
