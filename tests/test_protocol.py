@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import struct
+import sys
 import unittest
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -147,8 +152,326 @@ async def _accept_control_initialization(
     return request
 
 
+def _cli_start_success_cases() -> list[tuple[str, list[str], str, list[int]]]:
+    """Independent command literals already established by the loopback proofs."""
+    smart = _cycle_words("upper", program=0x13, phase=0x05)
+    smart[2], smart[14], smart[15], smart[16] = 0x0200, 2, 2, 20
+    return [
+        (
+            "ordinary_lower",
+            ["--drum", "lower", "--program", "spin", "--spin-rpm", "400"],
+            "00021c000000000000000190000200000000000000000000",
+            _cycle_words("lower"),
+        ),
+        (
+            "smart_upper",
+            ["--drum", "upper", "--fabric", "A1", "--stain", "W30"],
+            "000113000002000000140000020200000000000000000000",
+            smart,
+        ),
+    ]
+
+
+def _cli_start_rejection_cases() -> list[tuple[str, list[str], int, tuple[str, ...]]]:
+    ready = ["--allow-live", "--confirm-appliance-ready", "--drum", "upper"]
+    smart_override = ["--fabric", "A1", "--delay-half-hour-step", "0"]
+    return [
+        ("smart_zero_override", ready + smart_override, 1, ("smart", "manual")),
+        (
+            "smart_function_override",
+            ready + ["--fabric", "A1", "--function", "eco"],
+            1,
+            ("smart", "manual"),
+        ),
+        (
+            "stain_without_fabric",
+            ready + ["--program", "spin", "--stain", "W1"],
+            1,
+            ("stain", "fabric"),
+        ),
+        (
+            "stain_parser_vocabulary",
+            ready + ["--fabric", "A1", "--stain", "grass"],
+            2,
+            ("invalid choice", "stain"),
+        ),
+        (
+            "mutually_exclusive_selection",
+            ready + ["--program", "spin", "--fabric", "A1"],
+            2,
+            ("not allowed",),
+        ),
+        (
+            "unsupported_program",
+            ready + ["--program", "not-a-program"],
+            1,
+            ("program",),
+        ),
+        (
+            "missing_opt_in_precedes_preparation",
+            ["--confirm-appliance-ready", "--drum", "upper", *smart_override],
+            1,
+            ("allow-live",),
+        ),
+        (
+            "missing_readiness_precedes_preparation",
+            ["--allow-live", "--drum", "upper", *smart_override],
+            1,
+            ("confirm-appliance-ready",),
+        ),
+    ]
+
+
+async def _exercise_cli_start(
+    options: list[str],
+    *,
+    expected_group: str | None = None,
+    after: list[int] | None = None,
+    source_root: Path | None = None,
+) -> dict[str, Any]:
+    """Run the real entry point; allow only one exact bounded synthetic transaction."""
+    root = (source_root or Path(__file__).resolve().parents[1]).resolve()
+    expected = (
+        [
+            (0, _inner_frame(0x01, b"\x4d\x01")),
+            (1, _inner_frame(0x73, b"")),
+            (2, _inner_frame(0x60, bytes.fromhex(expected_group))),
+        ]
+        if expected_group is not None
+        else []
+    )
+    requests: list[tuple[int, bytes]] = []
+    errors: list[str] = []
+    tasks: set[asyncio.Task] = set()
+    connections = 0
+    peer_confirmed = False
+    trailing = b""
+
+    async def handle(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        nonlocal connections, peer_confirmed, trailing
+        connections += 1
+        try:
+            if not expected or connections != 1:
+                raise AssertionError("Unexpected CLI connection")
+            for index, wanted in enumerate(expected):
+                observed = await asyncio.wait_for(_read_request(reader), 5)
+                requests.append(observed)
+                if observed != wanted:
+                    raise AssertionError(f"Unexpected CLI request at position {index}")
+                if index == 0:
+                    writer.write(_state_response(_standby_words(), frame_type=0x02))
+                elif index == 1:
+                    writer.write(
+                        _frame_response(
+                            0x74,
+                            bytes.fromhex("0f5a0000000000000000000000000000"),
+                            sequence=1,
+                        )
+                    )
+                else:
+                    if after is None:
+                        raise AssertionError("Missing synthetic confirmation")
+                    writer.write(
+                        _frame_response(0x03, b"\x00\x00", sequence=2)
+                        + _state_response(after)
+                    )
+                    peer_confirmed = True
+                await writer.drain()
+            trailing = await asyncio.wait_for(reader.read(), 5)
+            if trailing:
+                raise AssertionError("Unexpected traffic after the single Start")
+        except (AssertionError, OSError, ValueError, asyncio.IncompleteReadError) as error:
+            errors.append(f"{type(error).__name__}: {error}")
+        finally:
+            try:
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), 1)
+            except (OSError, RuntimeError) as error:
+                errors.append(f"Peer cleanup {type(error).__name__}: {error}")
+
+    def connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.create_task(handle(reader, writer))
+        tasks.add(task)
+
+    server = await asyncio.start_server(connected, "127.0.0.1", 0)
+    command = [
+        sys.executable,
+        "-m",
+        "custom_components.uplus_reborn.protocol",
+        "start",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(server.sockets[0].getsockname()[1]),
+        "--device-id",
+        "TESTDEVICE",
+        "--timeout",
+        "1",
+        "--control-timeout",
+        "3",
+        *options,
+    ]
+    environment = dict(os.environ)
+    environment.pop("UPLUS_REBORN_DEVICE_ID", None)
+    environment["PYTHONPATH"] = str(root)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = None
+    stdout = stderr = b""
+    timed_out = False
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=root,
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+    except TimeoutError:
+        if process is None:
+            raise
+        timed_out = True
+        errors.append("CLI subprocess exceeded its bounded deadline")
+    finally:
+        try:
+            if process is not None and process.returncode is None:
+                process.kill()
+                stdout, stderr = await process.communicate()
+        except (OSError, RuntimeError) as error:
+            errors.append(f"Subprocess cleanup {type(error).__name__}: {error}")
+        try:
+            server.close()
+            await server.wait_closed()
+        except (OSError, RuntimeError) as error:
+            errors.append(f"Server cleanup {type(error).__name__}: {error}")
+        finally:
+            if tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True), 6
+                    )
+                except (TimeoutError, RuntimeError) as error:
+                    errors.append(f"Peer cleanup {type(error).__name__}: {error}")
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+    return {
+        "command": command,
+        "returncode": process.returncode,
+        "timed_out": timed_out,
+        "stdout": stdout.decode("utf-8"),
+        "stderr": stderr.decode("utf-8"),
+        "connections": connections,
+        "expected_requests": [
+            {"sequence": sequence, "inner_hex": payload.hex()}
+            for sequence, payload in expected
+        ],
+        "observed_requests": [
+            {"sequence": sequence, "inner_hex": payload.hex()}
+            for sequence, payload in requests
+        ],
+        "expected_group_payload_hex": expected_group,
+        "peer_confirmed": peer_confirmed,
+        "peer_errors": errors,
+        "trailing_hex": trailing.hex(),
+        "cleanup": {
+            "subprocess_reaped": process.returncode is not None,
+            "server_closed": not server.is_serving(),
+            "peer_tasks_done": all(task.done() for task in tasks),
+        },
+    }
+
+
 @pytest.mark.usefixtures("loopback_socket")
 class ProtocolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_core_action_peer_proves_one_bounded_transaction(self) -> None:
+        """The Core fixture supplies both acceptance and independent state proof."""
+        from tools.ha_smoke import DEVICE_ID, ProgrammeIntentPeer
+
+        peer = ProgrammeIntentPeer()
+        await peer.start()
+        try:
+            peer.arm("ordinary")
+            client = UwtClient(
+                "127.0.0.1", DEVICE_ID, port=peer.port, timeout=1, control_timeout=2
+            )
+            result = await client.start_program(
+                update_intent(default_intent("lower", "spin"), spin_rpm=400),
+                allow_live=True,
+            )
+            self.assertTrue(result.after.lower.cycle_active)
+            self.assertEqual([query["sequence"] for query in peer.queries], [0])
+            self.assertEqual(len(peer.action_transactions), 1)
+            self.assertEqual(
+                peer.action_transactions[0]["grouped_start_payload"],
+                "00021c000000000000000190000200000000000000000000",
+            )
+            self.assertEqual(peer.rejected, [])
+        finally:
+            await peer.close()
+        self.assertTrue(peer.evidence()["closed"])
+
+    async def test_cli_start_prepares_ordinary_and_smart_commands(self) -> None:
+        for name, options, expected_group, after in _cli_start_success_cases():
+            with self.subTest(case=name):
+                receipt = await _exercise_cli_start(
+                    ["--allow-live", "--confirm-appliance-ready", *options],
+                    expected_group=expected_group,
+                    after=after,
+                )
+                self.assertEqual(receipt["returncode"], 0, receipt["stderr"])
+                self.assertEqual(receipt["stderr"], "")
+                self.assertEqual(receipt["connections"], 1)
+                self.assertEqual(receipt["peer_errors"], [])
+                self.assertEqual(
+                    receipt["observed_requests"], receipt["expected_requests"]
+                )
+                self.assertTrue(receipt["peer_confirmed"])
+                self.assertEqual(receipt["trailing_hex"], "")
+                self.assertTrue(all(receipt["cleanup"].values()))
+                result = json.loads(receipt["stdout"])
+                self.assertEqual(result["intent"], "start")
+                drum = "lower" if name == "ordinary_lower" else "upper"
+                self.assertEqual(result["result"]["before"][drum]["phase_value"], 0)
+                observed = result["result"]["after"][drum]
+                self.assertTrue(observed["cycle_active"])
+                self.assertTrue(observed["door_locked"])
+                self.assertEqual(
+                    observed["program_value"], 0x1C if drum == "lower" else 0x13
+                )
+                self.assertEqual(
+                    result["result"]["unconfirmed_settings"],
+                    ["spin_rpm"] if drum == "lower" else [],
+                )
+                if drum == "upper":
+                    self.assertTrue(observed["reported_settings"]["smart"])
+                    self.assertEqual(
+                        observed["reported_settings"]["wash_minutes_encoded"], 20
+                    )
+
+    async def test_cli_start_rejections_preserve_exits_and_prevent_network(self) -> None:
+        for name, options, status, cause in _cli_start_rejection_cases():
+            with self.subTest(case=name):
+                receipt = await _exercise_cli_start(options)
+                self.assertEqual(receipt["returncode"], status, receipt["stderr"])
+                self.assertEqual(receipt["stdout"], "")
+                for fragment in cause:
+                    self.assertIn(fragment, receipt["stderr"].lower())
+                self.assertNotIn("Traceback", receipt["stderr"])
+                if status == 1:
+                    self.assertTrue(receipt["stderr"].startswith("error: "))
+                else:
+                    self.assertIn("usage:", receipt["stderr"])
+                self.assertEqual(receipt["connections"], 0)
+                self.assertEqual(receipt["observed_requests"], [])
+                self.assertEqual(receipt["peer_errors"], [])
+                self.assertFalse(receipt["peer_confirmed"])
+                self.assertTrue(all(receipt["cleanup"].values()))
+
     def test_inner_frame_stuffs_body_and_checksum_octets(self) -> None:
         stuffed_body = _build_inner_frame(0x01, b"\xff\x01")
         self.assertEqual(

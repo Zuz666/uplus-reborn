@@ -772,7 +772,8 @@ data:
 ```
 
 Smart recipes accept source fabric IDs and stain IDs, but no manual scalar or
-option overrides:
+option overrides. Even explicitly supplied `delay_hours: 0` or
+`enabled_functions: []` is rejected; omit manual settings instead.
 
 ```yaml
 action: uplus_reborn.start_program
@@ -1032,6 +1033,12 @@ uv run --frozen --group test --no-group research python -m custom_components.upl
 
 Hardware-control commands require their additional physical checks and explicit
 gates. A successful read does not authorize Start, Cancel, or another write.
+
+HA atomic Start and CLI Start share pure complete-intent preparation, not input
+grammar or authorization. HA delay inputs use whole hours; CLI uses half-hour
+steps. CLI `--stain` accepts only Smart `W1`–`W30` identifiers with `--fabric`;
+ordinary stain names remain an HA action feature. Preparing an intent neither
+edits interactive drafts nor authorizes an appliance transaction.
 
 ## License
 

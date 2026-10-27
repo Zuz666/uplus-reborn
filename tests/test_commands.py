@@ -10,10 +10,12 @@ import pytest
 from custom_components.uplus_reborn.protocol import (
     BuilderContext,
     Drum,
+    ProtocolError,
     default_intent,
     encode_start,
     fabric_intent,
     intent_capabilities,
+    prepare_intent,
     update_intent,
     validate_intent,
 )
@@ -26,6 +28,22 @@ def test_captured_spin_400_groups_remain_byte_exact(drum: Drum, group: str) -> N
     assert encode_start(intent) == bytes.fromhex(
         f"{group} 1c00 0000 0000 0000 0190 0002 0000 0000 0000 0000 0000"
     )
+
+
+def test_complete_smart_preparation_preserves_override_error_precedence() -> None:
+    """A supplied default is still an override, before recipe lookup or dispatch."""
+    with pytest.raises(ProtocolError):
+        prepare_intent(
+            "upper",
+            fabric="not_a_fabric",
+            manual_override_error=ProtocolError,
+            delay_half_hour_step=0,
+        )
+    with pytest.raises(ValueError):
+        prepare_intent("upper", fabric="A1", enabled_functions=())
+    with pytest.raises(ValueError) as invalid_recipe:
+        prepare_intent("upper", fabric="not_a_fabric", manual_override_error=ProtocolError)
+    assert type(invalid_recipe.value) is ValueError
 
 
 def test_group_preserves_shared_flags_and_unedited_source_fields() -> None:

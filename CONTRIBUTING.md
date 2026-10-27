@@ -25,7 +25,9 @@ imports, entity domains, or logger names from either.
   facts and provenance: `discovery_catalog.py`; existing runtime MAC/DHCP helpers:
   `discovery.py` (no new UDP recovery loop)
 - embedded protocol module: `custom_components/uplus_reborn/protocol/`
-- pure typed intent validation/encoding: `protocol/_commands.py` inside that package
+- pure complete-intent preparation: `prepare_intent` in `protocol/_commands.py`;
+  draft editing: `update_intent` in the same module; existing constructors,
+  typed validation and encoding remain there
 - reported-setting applicability: `reported_settings.py`; status platforms:
   `sensor.py`, `binary_sensor.py`; cached health: `system_health.py`
 - native controls: `select.py`, `switch.py`, `button.py`, `text.py`; atomic action: `services.py`

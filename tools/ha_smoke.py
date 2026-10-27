@@ -11,6 +11,7 @@ installs dependencies. Example::
 The result is software/transport evidence, not appliance or browser acceptance.
 The default peer is query-only; the profiles scenario permits one exact synthetic
 Spin/400 Start and verifies persistent intents across a second Core instance.
+The programme-intents scenario separately arms three exact atomic action Starts.
 Core base/registries and the required API components run without unrelated default
 integrations. The process-local socket guard is not an OS sandbox for untrusted
 Python/native code. HTTP binds only to an ephemeral loopback address.
@@ -232,13 +233,13 @@ class ReadOnlyPeer:
                         raise ValueError("non-query UWT envelope")
                     header = prefix + await reader.readexactly(HEADER.size - 8)
                     _, _, source, device, sequence, size = HEADER.unpack(header)
-                    if not 0 < size <= (128 if self.allow_profile_start else len(READ_REQUEST)):
+                    if not 0 < size <= (128 if self._controls_armed() else len(READ_REQUEST)):
                         raise ValueError("unexpected payload length")
                     payload = await reader.readexactly(size)
                     if source != bytes(32) or device.rstrip(b"\0") != self.device_id.encode():
                         raise ValueError("unexpected synthetic peer identity")
                     if payload != READ_REQUEST:
-                        writer.write(self._profile_reply(payload, sequence))
+                        writer.write(self._control_reply(payload, sequence))
                         await writer.drain()
                         continue
                     words = self.words
@@ -269,7 +270,10 @@ class ReadOnlyPeer:
                 pass
             self.writers.discard(writer)
 
-    def _profile_reply(self, payload: bytes, sequence: int) -> bytes:
+    def _controls_armed(self) -> bool:
+        return self.allow_profile_start
+
+    def _control_reply(self, payload: bytes, sequence: int) -> bytes:
         """Accept only the one independently specified synthetic Spin/400 Start."""
         if not self.allow_profile_start:
             raise ValueError("non-query payload or invalid checksum")
@@ -300,6 +304,8 @@ class ReadOnlyPeer:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+            # Already-done tasks may still have their discard callback queued.
+            self.tasks.difference_update(tasks)
 
     def evidence(self) -> dict[str, Any]:
         return {
@@ -313,6 +319,100 @@ class ReadOnlyPeer:
             "profile_start_frames": self.profile_controls,
             "closed": self.server is not None and not self.server.is_serving()
             and not self.tasks and not self.writers,
+        }
+
+
+# Independent grouped-command fixtures: captured Spin/400 in test_commands,
+# A1/W30 in test_protocol, and lower Mix/Blood's 60 C/49 minutes and stain 1
+# in test_commands. The latter retains Mix's source defaults (two rinses,
+# two spin minutes), with the action's explicit 600 rpm. Never encode expectations
+# with production intent/command helpers.
+PROGRAMME_INTENT_CASES = {
+    "ordinary": {
+        "drum": "lower", "input": {"program": "spin", "spin_rpm": 400},
+        "group": "0002 1c00 0000 0000 0000 0190 0002 0000 0000 0000 0000 0000",
+        "report": {24: 0x1C00, 26: 0x0BA3, 28: 0x0600, 32: 2},
+    },
+    "smart": {
+        "drum": "upper", "input": {"fabric": "A1", "stains": ["W30"]},
+        "group": "0001 1300 0002 0000 0014 0000 0202 0000 0000 0000 0000 0000",
+        "report": {1: 0x1300, 2: 0x0200, 3: 0x05A3, 5: 0x0600, 14: 2, 15: 2, 16: 20},
+    },
+    "ordinary_stain": {
+        "drum": "lower",
+        "input": {"program": "mix", "stains": ["blood"], "spin_rpm": 600},
+        "group": "0002 0500 0000 0000 3c31 0258 0202 0000 0100 0000 0000 0000",
+        "report": {24: 0x0500, 26: 0x05A3, 28: 0x0600, 31: 2, 32: 2, 33: 0x3C31, 35: 0x0100},
+    },
+}
+
+
+class ProgrammeIntentPeer(ReadOnlyPeer):
+    """Separate finite action allowance; default/profile peers remain unchanged."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.armed_case: str | None = None
+        self.initialized = False
+        self.action_transactions: list[dict[str, Any]] = []
+
+    def arm(self, name: str) -> None:
+        _require(name in PROGRAMME_INTENT_CASES, "Unknown programme-intents case")
+        _require(self.armed_case is None, "Previous programme-intents case is still armed")
+        _require(not any(row["case"] == name for row in self.action_transactions),
+                 "A synthetic programme Start must never be retried")
+        self.armed_case = name
+        self.initialized = False
+        self.stage = f"action_{name}"
+        self.action_transactions.append({"case": name, "status": "armed"})
+
+    def _controls_armed(self) -> bool:
+        return self.armed_case is not None
+
+    def _control_reply(self, payload: bytes, sequence: int) -> bytes:
+        name = self.armed_case
+        if name is None:
+            raise ValueError("programme-intents control was not explicitly armed")
+        receipt = self.action_transactions[-1]
+        independent_report = b""
+        if payload == _inner(0x73, b"") and sequence == 1 and not self.initialized:
+            self.initialized = True
+            receipt["initialization_frame"] = payload.hex()
+            receipt["initialization_sequence"] = sequence
+            inner = _inner(0x74, bytes.fromhex("0f5a0000000000000000000000000000"))
+        elif (
+            self.initialized and sequence == 2
+            and payload == _inner(0x60, bytes.fromhex(PROGRAMME_INTENT_CASES[name]["group"]))
+        ):
+            receipt["grouped_start_frame"] = payload.hex()
+            receipt["grouped_start_payload"] = bytes.fromhex(
+                PROGRAMME_INTENT_CASES[name]["group"]
+            ).hex()
+            receipt["control_sequence"] = sequence
+            receipt["status"] = "replied"
+            self.armed_case = None  # Repeated initialization/control fails closed.
+            words = list(_words("standby"))
+            for index, value in PROGRAMME_INTENT_CASES[name]["report"].items():
+                words[index] = value
+            self.words = tuple(words)
+            receipt["confirmation_report_words"] = words
+            state_payload = struct.pack(">41H", *words)
+            inner = _inner(0x02, state_payload)
+            report = _inner(0x06, state_payload)
+            independent_report = HEADER.pack(
+                10005, 0, b"", self.device_id.encode(), 0, len(report)
+            ) + report
+        else:
+            raise ValueError(f"Unexpected {name} control; only its exact initialization/Start is permitted")
+        return HEADER.pack(
+            10005, 0, b"", self.device_id.encode(), sequence, len(inner)
+        ) + inner + independent_report
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            **super().evidence(),
+            "programme_intent_transactions": self.action_transactions,
+            "programme_intent_case_still_armed": self.armed_case,
         }
 
 
@@ -335,6 +435,155 @@ def _installed_hashes(root: Path) -> dict[str, str]:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+async def _exercise_programme_intents(
+    hass: Any, entry: Any, peer: ProgrammeIntentPeer, result: dict[str, Any],
+) -> None:
+    """Exercise registered atomic actions, not an intercepted preparation helper."""
+    from homeassistant.exceptions import ServiceValidationError
+    from homeassistant.helpers import device_registry as dr
+
+    c = entry.runtime_data
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    _require(len(devices) == 1, "Programme fixture must have exactly one owned device")
+    device = devices[0]
+    receipt = {
+        "status": "running",
+        "scheduled_polling_excluded": False,
+        "cases": [
+            {"case": name, "status": "not_run"}
+            for name in (*PROGRAMME_INTENT_CASES, "invalid_smart_override")
+        ],
+    }
+    result["programme_intents"] = receipt
+
+    async def call(action: str, drum: str, **data: Any) -> Any:
+        return await hass.services.async_call(
+            DOMAIN, action, {"device_id": device.id, "drum": drum, **data},
+            blocking=True, return_response=action == "save_profile",
+        )
+
+    # Same public coordinator mechanism as the profiles scenario: cancel the
+    # scheduled poll and drain pending work before measuring operation traffic.
+    poll_interval = c.update_interval
+    c.update_interval = None
+    c.async_set_updated_data(c.data)
+    current = None
+    try:
+        await hass.async_block_till_done()
+        receipt["scheduled_polling_excluded"] = True
+        before_setup = (len(peer.queries), peer.connections)
+        for drum, program in (("upper", "baby_care"), ("lower", "cotton")):
+            c.stage_program(drum, program)
+            c.stage_settings(drum, spin_rpm=400)
+            saved = await call("save_profile", drum, name=f"Independent {drum} draft")
+            await call("apply_profile", drum, profile_id=saved["profile_id"])
+            _require(c.selected_profile(drum) == saved["profile_id"],
+                     "Fixture did not establish a real saved-profile selection")
+        await hass.async_block_till_done()
+        _require((len(peer.queries), peer.connections) == before_setup,
+                 "Local draft/profile fixture contacted the peer")
+        drafts = {drum: c.draft(drum) for drum in ("upper", "lower")}
+        selected = {drum: c.selected_profile(drum) for drum in drafts}
+        profiles = c.profiles.profiles()
+        names = {drum: c.profile_name(drum) for drum in drafts}
+        receipt["initial_drafts"] = {drum: asdict(draft) for drum, draft in drafts.items()}
+        receipt["selected_profile_ids"] = selected
+
+        def require_local_unchanged() -> None:
+            _require(all(c.draft(drum) is draft for drum, draft in drafts.items()),
+                     "Atomic action replaced an independent interactive draft")
+            _require(all(c.selected_profile(drum) == value for drum, value in selected.items()),
+                     "Atomic action changed selected profile identity")
+            _require(c.profiles.profiles() == profiles
+                     and all(c.profile_name(drum) == value for drum, value in names.items()),
+                     "Atomic action changed saved profiles or transient names")
+
+        for current in receipt["cases"][:-1]:
+            name = current["case"]
+            fixture = PROGRAMME_INTENT_CASES[name]
+            current.update({
+                "status": "running", "drum": fixture["drum"], "input": fixture["input"],
+                "expected_grouped_payload": bytes.fromhex(fixture["group"]).hex(),
+            })
+            # Synthetic readiness is a labelled fixture query, not an operation
+            # or appliance Cancel. Each valid action still performs its own fresh
+            # read, initialization, grouped command and correlated confirmation.
+            peer.stage = f"fixture_reset_{name}"
+            peer.words = _words("standby")
+            before_reset = len(peer.queries)
+            await c.async_refresh()
+            await hass.async_block_till_done()
+            _require(c.last_update_success and len(peer.queries) == before_reset + 1,
+                     f"{name}: synthetic readiness refresh failed")
+            current["fixture_reset_query_count"] = 1
+            before = (len(peer.queries), peer.connections)
+            peer.arm(name)
+            await call("start_program", fixture["drum"], **fixture["input"])
+            await hass.async_block_till_done()
+            transaction = peer.action_transactions[-1]
+            _require(transaction["status"] == "replied" and peer.armed_case is None,
+                     f"{name}: exact command/confirmation was not exchanged")
+            _require((len(peer.queries) - before[0], peer.connections - before[1]) == (1, 1),
+                     f"{name}: unexpected operation-triggered reads/connections")
+            _require(not peer.rejected, f"{name}: peer rejected unexpected traffic")
+            outcome = c.health.latest_command
+            _require(outcome is not None and outcome.kind == f"{fixture['drum']}_start"
+                     and outcome.outcome == "confirmed" and not outcome.retried,
+                     f"{name}: serialized atomic Start was not confirmed exactly once")
+            target = getattr(c.data, fixture["drum"])
+            _require(target.cycle_active, f"{name}: authoritative confirmation is not active")
+            require_local_unchanged()
+            current.update({
+                "status": "confirmed", "operation_query_count": 1,
+                "operation_connection_count": 1, "transaction": dict(transaction),
+                "command_outcome": asdict(outcome),
+                "authoritative_drum": asdict(target),
+                "drafts_and_profile_identity_unchanged": True,
+            })
+
+        current = receipt["cases"][-1]
+        invalid = {"fabric": "A1", "stains": ["W30"], "delay_hours": 0}
+        current.update({"status": "running", "drum": "upper", "input": invalid})
+        before = (
+            len(peer.queries), peer.connections, len(peer.action_transactions), len(peer.rejected),
+        )
+        authoritative = c.data
+        outcome = c.health.latest_command
+        _require(peer.armed_case is None, "Invalid action must use a query-only peer")
+        try:
+            await call("start_program", "upper", **invalid)
+        except ServiceValidationError as err:
+            current["error"] = {"type": type(err).__name__, "message": str(err)}
+        else:
+            raise RuntimeError("Explicit zero-delay smart override was accepted")
+        await hass.async_block_till_done()
+        _require(before == (
+            len(peer.queries), peer.connections, len(peer.action_transactions), len(peer.rejected),
+        ), "Rejected preparation caused operation-triggered traffic")
+        _require(c.data is authoritative and c.health.latest_command is outcome,
+                 "Rejected preparation entered execution or changed authoritative state")
+        require_local_unchanged()
+        current.update({
+            "status": "rejected", "operation_query_count": 0, "operation_connection_count": 0,
+            "operation_initialization_count": 0, "operation_control_count": 0,
+            "authoritative_state_unchanged": True, "drafts_and_profile_identity_unchanged": True,
+        })
+        _require([row["status"] for row in receipt["cases"]] ==
+                 ["confirmed", "confirmed", "confirmed", "rejected"],
+                 "Programme-intents acceptance has failed or unexecuted cases")
+        receipt["status"] = "passed"
+    except BaseException as err:
+        receipt["status"] = "failed"
+        receipt["error"] = f"{type(err).__name__}: {err}"
+        if current is not None and current["status"] == "running":
+            current["status"] = "failed"
+        raise
+    finally:
+        peer.armed_case = None
+        c.update_interval = poll_interval
+        c.async_set_updated_data(c.data)
 
 
 async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: dict[str, Any], *, restart: bool) -> None:
@@ -709,7 +958,7 @@ async def _exercise(
     from homeassistant.setup import async_setup_component
 
     result["core_version"] = core_version
-    peer = ReadOnlyPeer()
+    peer = ProgrammeIntentPeer() if scenario == "programme-intents" else ReadOnlyPeer()
     hass = HomeAssistant(str(root))
     entry = None
     user = None
@@ -811,7 +1060,11 @@ async def _exercise(
                     version=1, minor_version=1, domain=DOMAIN,
                     title="Uplus isolated smoke", source="user", unique_id=DEVICE_ID,
                     data={"host": "127.0.0.1", "port": peer.port, "device_id": DEVICE_ID},
-                    options={"enable_verified_controls": scenario.startswith("profiles") or scenario == "offline", "poll_interval": 15},
+                    options={
+                        "enable_verified_controls": scenario.startswith("profiles")
+                        or scenario in ("offline", "programme-intents"),
+                        "poll_interval": 15,
+                    },
                     discovery_keys=MappingProxyType({}), subentries_data=(),
                 )
                 await hass.config_entries.async_add(entry)
@@ -936,6 +1189,8 @@ async def _exercise(
                 result["profile_entry_id"] = entry.entry_id
                 await _exercise_profiles(hass, entry, peer, result, restart=scenario == "profiles_restart")
                 coordinator = entry.runtime_data
+            if scenario == "programme-intents":
+                await _exercise_programme_intents(hass, entry, peer, result)
             if serve or scenario == "discovery":
                 # Current Core does not allow removing the first, owner account.
                 await hass.auth.async_create_user("Fixture owner", local_only=True)
@@ -1147,7 +1402,7 @@ def main() -> int:
                         help="New JSON result file (existing files are never overwritten)")
     parser.add_argument(
         "--scenario",
-        choices=("standby", "execution", "profiles", "discovery", "discovery-identification", "offline"),
+        choices=("standby", "execution", "profiles", "programme-intents", "discovery", "discovery-identification", "offline"),
         default="standby",
     )
     parser.add_argument("--discovery-timing", choices=("full", "fast"), default="full")
