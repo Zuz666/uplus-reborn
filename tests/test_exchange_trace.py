@@ -9,6 +9,11 @@ from enum import Enum
 
 import pytest
 
+from custom_components.uplus_reborn.capture_options import (
+    CapturePreferences,
+    capture_preferences,
+    estimated_trace_depth,
+)
 from custom_components.uplus_reborn.exchange_trace import ExchangeTrace
 
 
@@ -16,14 +21,14 @@ def test_capture_preserves_raw_chunks_and_stopped_downloads() -> None:
     """Raw chunks are exact ordered observations, not reconstructed frames."""
     trace = ExchangeTrace()
     assert not trace.active
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("poll", host="192.0.2.10", device_id="SYNTHETIC-DEVICE")
     trace.raw("tx", b"\x00\xff\x7d", stage="write_submitted")
     trace.event("write_drained")
     trace.raw("rx", b"\x7d", stage="read")
     trace.raw("rx", b"\x01\x00\xff\x00", stage="read")
     trace.finish("success")
-    trace.set_enabled(False)
+    trace.stop()
 
     exported = trace.export()
     assert exported["capture_state"] == "stopped"
@@ -97,23 +102,112 @@ def _assert_metadata_bounds(value: object, limits: dict) -> None:
     assert text <= limits["text_chars_per_record"]
 
 
-def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
+@pytest.mark.parametrize(
+    ("preferences", "limits"),
+    [
+        (
+            CapturePreferences(operations=2, events=4, raw_bytes=6),
+            {"operations": 2, "events": 4, "raw_bytes": 6},
+        ),
+        (
+            CapturePreferences(operations=2, events=99, raw_bytes=99),
+            {"operations": 2, "events": 99, "raw_bytes": 99},
+        ),
+        (
+            CapturePreferences(operations=99, events=4, raw_bytes=99),
+            {"operations": 99, "events": 4, "raw_bytes": 99},
+        ),
+        (
+            CapturePreferences(operations=99, events=99, raw_bytes=6),
+            {"operations": 99, "events": 99, "raw_bytes": 6},
+        ),
+    ],
+    ids=("combined", "operations", "events", "raw_bytes"),
+)
+def test_selected_limits_bound_evidence_and_replacement_starts_empty(
+    preferences: CapturePreferences, limits: dict[str, int]
+) -> None:
+    """Selected budgets govern retention; an active restart replaces all evidence."""
+    trace = ExchangeTrace()
+    trace.start(preferences)
+    for number in range(2):
+        trace.begin("poll", number=number)
+        trace.raw("rx", b"abc", stage="read")
+        trace.event("accepted")
+        trace.finish("success")
+    boundary = trace.export()
+    assert boundary["limits"] == limits
+    assert boundary["retained"] == {"operations": 2, "events": 4, "raw_bytes": 6}
+    assert boundary["omitted"] == {
+        "operations": 0, "events": 0, "raw_bytes": 0, "metadata": 0,
+    }
+
+    trace.begin("control", number=2)
+    trace.raw("tx", b"def", stage="write_submitted")
+    trace.event("accepted")
+    trace.finish("confirmed")
+    exported = trace.export()
+    assert [op["context"]["number"] for op in exported["operations"]] == [1, 2]
+    assert exported["retained"] == boundary["retained"]
+    assert exported["omitted"] == {
+        "operations": 1, "events": 2, "raw_bytes": 3, "metadata": 0,
+    }
+    assert all(not operation["partial"] for operation in exported["operations"])
+    _assert_retention_matches_evidence(exported)
+
+    trace.start(CapturePreferences(operations=1, events=1, raw_bytes=2))
+    replacement = trace.export()
+    assert replacement["capture_state"] == "recording"
+    assert replacement["limits"] == {"operations": 1, "events": 1, "raw_bytes": 2}
+    assert replacement["retained"] == {"operations": 0, "events": 0, "raw_bytes": 0}
+    assert replacement["operations"] == []
+    assert replacement["omitted"] == {
+        "operations": 0, "events": 0, "raw_bytes": 0, "metadata": 0,
+    }
+    trace.begin("poll")
+    trace.raw("rx", b"abc", stage="read")
+    trace.event("not_retained")
+    trace.finish("unknown", cause="timeout")
+    operation = trace.export()["operations"][0]
+    assert operation["partial"]
+    assert operation["gaps"] == ["event_limit", "raw_byte_limit"]
+    assert operation["events"][0]["data_hex"] == "6162"
+    assert operation["omitted"] == {"events": 1, "raw_bytes": 1, "metadata": 0}
+    assert operation["result"] == {"outcome": "unknown", "cause": "timeout"}
+    _assert_retention_matches_evidence(trace.export())
+
+
+@pytest.mark.parametrize(
+    ("preferences", "larger_chunks", "retained"),
+    [
+        (
+            CapturePreferences(),
+            4,
+            {"operations": 300, "events": 6000, "raw_bytes": 4194304},
+        ),
+        (
+            CapturePreferences(operations=600, events=12000, raw_bytes=8388608),
+            8,
+            {"operations": 600, "events": 12000, "raw_bytes": 8388608},
+        ),
+    ],
+    ids=("defaults", "maximum"),
+)
+def test_all_three_limits_at_and_beyond_the_same_boundary(
+    preferences: CapturePreferences, larger_chunks: int, retained: dict[str, int]
+) -> None:
     """An added operation evicts the entire oldest one, not arbitrary events."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
-    for number in range(300):
+    trace.start(preferences)
+    for number in range(retained["operations"]):
         trace.begin("poll", number=number)
-        size = 13982 if number < 4 else 13981
+        size = 13982 if number < larger_chunks else 13981
         trace.raw("rx", b"x" * size, stage="read")
         for _ in range(19):
             trace.event("observation")
         trace.finish("success")
     boundary = trace.export()
-    assert boundary["retained"] == {
-        "operations": 300,
-        "events": 6000,
-        "raw_bytes": 4194304,
-    }
+    assert boundary["retained"] == retained
     assert boundary["omitted"] == {
         "operations": 0,
         "events": 0,
@@ -122,7 +216,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
     }
     _assert_retention_matches_evidence(boundary)
 
-    trace.begin("control", number=300)
+    trace.begin("control", number=retained["operations"])
     trace.raw("tx", b"y" * 13982, stage="write_submitted")
     for _ in range(19):
         trace.event("observation")
@@ -130,7 +224,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
     exported = trace.export()
     assert exported["retained"] == boundary["retained"]
     assert [operation["context"]["number"] for operation in exported["operations"]] == list(
-        range(1, 301)
+        range(1, retained["operations"] + 1)
     )
     assert exported["omitted"] == {
         "operations": 1,
@@ -145,7 +239,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary() -> None:
 def test_operation_pressure_alone_preserves_newest_complete_operations() -> None:
     """Small exchanges hit the operation bound without event or byte pressure."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     for number in range(301):
         trace.begin("poll", number=number)
         trace.raw("rx", bytes([number % 256]), stage="read")
@@ -164,7 +258,7 @@ def test_operation_pressure_alone_preserves_newest_complete_operations() -> None
 def test_event_pressure_evicts_oldest_operation_before_current_events() -> None:
     """Event pressure alone applies the same oldest-operation retention rule."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("older")
     trace.event("first")
     trace.event("second")
@@ -186,7 +280,7 @@ def test_event_pressure_evicts_oldest_operation_before_current_events() -> None:
 def test_raw_pressure_evicts_oldest_operation_before_truncating_current() -> None:
     """Byte pressure alone frees an old operation, including all its metadata."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("older", expectation="old")
     trace.raw("rx", b"a" * 2097152, stage="read")
     trace.event("old_decision")
@@ -214,7 +308,7 @@ def test_raw_pressure_evicts_oldest_operation_before_truncating_current() -> Non
 def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> None:
     """A single noisy exchange cannot exceed either global event or byte limit."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("control", requested_intent={"program": "spin"})
     payload = b"\x00\xff" * 2097152 + b"omitted-17-bytes!"
     assert len(payload) == 4194321
@@ -257,7 +351,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
 def test_event_limit_also_accounts_for_unretained_raw_chunk() -> None:
     """Raw loss due to event exhaustion is not falsely called byte exhaustion."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("poll")
     for _ in range(6000):
         trace.event("observed")
@@ -273,7 +367,7 @@ def test_event_limit_also_accounts_for_unretained_raw_chunk() -> None:
 def test_repeated_identical_raw_buffers_each_consume_the_byte_budget() -> None:
     """Identical buffers are separate observations, not free deduplicated bytes."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("poll")
     payload = b"z" * 2097152
     trace.raw("rx", payload, stage="read")
@@ -306,10 +400,10 @@ def test_off_observations_and_late_finish_do_not_change_frozen_capture() -> None
     trace.raw("rx", _DoNotInspect(), stage="read")
     trace.finish("ignored")
     assert trace.export()["operations"] == []
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("control")
     trace.raw("tx", b"sent", stage="write_submitted")
-    trace.set_enabled(False)
+    trace.stop()
     stopped = trace.export()
     assert stopped["operations"][0]["partial"]
     assert stopped["operations"][0]["gaps"] == ["capture_stopped"]
@@ -327,7 +421,7 @@ def test_enable_mid_operation_has_no_fabricated_earlier_bytes() -> None:
     trace = ExchangeTrace()
     trace.begin("control", host="192.0.2.10", requested_intent={"option": "power"})
     trace.raw("tx", b"not captured", stage="write_submitted")
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.raw("rx", b"captured", stage="read")
     trace.finish("confirmed")
     exported = trace.export()
@@ -349,11 +443,11 @@ def test_enable_mid_operation_has_no_fabricated_earlier_bytes() -> None:
 def test_stop_restart_in_same_operation_creates_fresh_partial_segment() -> None:
     """A replacement capture discards the earlier segment, even in one scope."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("control", target="upper")
     trace.raw("tx", b"old", stage="write_submitted")
-    trace.set_enabled(False)
-    trace.set_enabled(True)
+    trace.stop()
+    trace.start(CapturePreferences())
     resumed = trace.export()["operations"][0]
     assert resumed["context"] == {"target": "upper"}
     assert resumed["events"] == []
@@ -370,33 +464,10 @@ def test_stop_restart_in_same_operation_creates_fresh_partial_segment() -> None:
     }
 
 
-def test_transition_only_reset_and_empty_fresh_capture() -> None:
-    """Same-state logger notifications do nothing; OFF/ON always clears."""
-    trace = ExchangeTrace()
-    trace.set_enabled(True)
-    trace.begin("poll")
-    trace.event("observed")
-    trace.finish("success")
-    recording = trace.export()
-    trace.set_enabled(True)
-    assert trace.export() == recording
-    trace.set_enabled(False)
-    stopped = trace.export()
-    trace.set_enabled(False)
-    assert trace.export() == stopped
-    trace.set_enabled(True)
-    assert trace.export()["operations"] == []
-    assert trace.export()["retained"] == {"operations": 0, "events": 0, "raw_bytes": 0}
-    assert not any(trace.export()["omitted"].values())
-    trace.set_enabled(False)
-    trace.set_enabled(True)
-    assert trace.export()["operations"] == []
-
-
 def test_close_clears_permanently_despite_old_callbacks_and_toggles() -> None:
     """No reference to an unloaded store can repopulate or restart its capture."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("control", target="upper")
     trace.raw("tx", b"old", stage="write_submitted")
     trace.close()
@@ -406,12 +477,13 @@ def test_close_clears_permanently_despite_old_callbacks_and_toggles() -> None:
     assert closed["operations"] == []
     assert closed["retained"] == {"operations": 0, "events": 0, "raw_bytes": 0}
     trace.finish("confirmed")
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
+    trace.start(CapturePreferences(operations=1, events=1, raw_bytes=1))
     trace.begin("late", context=_DoNotInspect())
     trace.event("late", context=_DoNotInspect())
     trace.raw("rx", _DoNotInspect(), stage="read")
     trace.finish("late")
-    trace.set_enabled(False)
+    trace.stop()
     trace.close()
     assert trace.export() == closed
 
@@ -420,13 +492,13 @@ def test_entry_captures_have_independent_retention_and_lifecycle() -> None:
     """A domain-wide enable does not share identities, budgets or cleanup."""
     first, second = ExchangeTrace(), ExchangeTrace()
     for trace, device in ((first, "FIRST"), (second, "SECOND")):
-        trace.set_enabled(True)
+        trace.start(CapturePreferences())
         trace.begin("poll", device_id=device)
         trace.raw("rx", device.encode(), stage="read")
         trace.finish("success")
     preserved = second.export()
-    first.set_enabled(False)
-    first.set_enabled(True)
+    first.stop()
+    first.start(CapturePreferences())
     first.close()
     assert second.export() == preserved
     assert preserved["operations"][0]["context"]["device_id"] == "SECOND"
@@ -449,7 +521,7 @@ def test_metadata_normalizes_snapshots_once_and_exports_independent_values() -> 
     trace = ExchangeTrace()
     snapshot = _Snapshot(datetime(2026, 10, 28, 12, tzinfo=UTC), _Target.UPPER, (1, 2))
     intent = {"settings": [1, 2]}
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("control", cached_snapshot=snapshot, requested_intent=intent)
     trace.event("state_observed", decoded_snapshot=snapshot)
     snapshot.settings = (9,)
@@ -493,7 +565,7 @@ def test_metadata_normalizes_snapshots_once_and_exports_independent_values() -> 
 def test_metadata_has_its_own_limits_and_explicit_omissions(value: object) -> None:
     """Metadata pressure never consumes unlimited memory or erases the outcome."""
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin("poll", observed=value)
     trace.event("observed", decoded=value)
     trace.finish("success")
@@ -518,7 +590,7 @@ def test_cyclic_metadata_and_truncated_key_collisions_terminate_honestly() -> No
     cycle = []
     cycle.append(cycle)
     trace = ExchangeTrace()
-    trace.set_enabled(True)
+    trace.start(CapturePreferences())
     trace.begin(
         "k" * 100000,
         cyclic=cycle,
@@ -536,3 +608,156 @@ def test_cyclic_metadata_and_truncated_key_collisions_terminate_honestly() -> No
     assert operation["partial"]
     assert operation["omitted"]["metadata"] >= 6
     assert len(json.dumps(exported, allow_nan=False)) < 10000
+
+
+def test_active_replacement_and_summary_preserve_honest_partial_coverage() -> None:
+    """Replacing in flight keeps only the new segment; status is a detached view."""
+    trace = ExchangeTrace()
+    trace.start(CapturePreferences(operations=2, events=3, raw_bytes=4))
+    trace.begin("control", target="upper")
+    trace.raw("tx", b"old", stage="write_submitted")
+    old_summary = trace.summary()
+    assert old_summary["retained"] == {"operations": 1, "events": 1, "raw_bytes": 3}
+
+    trace.start(CapturePreferences(operations=1, events=2, raw_bytes=1))
+    assert trace.summary()["retained"] == {
+        "operations": 1, "events": 0, "raw_bytes": 0,
+    }
+    trace.raw("rx", b"new", stage="read")
+    trace.finish("unknown", cause="timeout")
+    trace.stop()
+    summary = trace.summary()
+    assert set(summary) == {"capture_state", "limits", "retained", "omitted"}
+    assert summary["capture_state"] == "stopped"
+    assert summary["limits"] == {"operations": 1, "events": 2, "raw_bytes": 1}
+    assert summary["retained"] == {"operations": 1, "events": 1, "raw_bytes": 1}
+    assert summary["omitted"] == {
+        "operations": 0, "events": 0, "raw_bytes": 2, "metadata": 0,
+    }
+    assert old_summary["retained"] == {"operations": 1, "events": 1, "raw_bytes": 3}
+    frozen = trace.export()
+    operation = frozen["operations"][0]
+    assert operation["context"] == {"target": "upper"}
+    assert operation["gaps"] == ["capture_started_mid_operation", "raw_byte_limit"]
+    assert operation["events"][0]["data_hex"] == "6e"
+    assert operation["result"] == {"outcome": "unknown", "cause": "timeout"}
+    summary["limits"]["raw_bytes"] = 100
+    summary["retained"]["raw_bytes"] = 100
+    summary["omitted"]["raw_bytes"] = 100
+    trace.event("late")
+    trace.raw("rx", _DoNotInspect(), stage="read")
+    trace.finish("late")
+    assert trace.export() == frozen
+    _assert_retention_matches_evidence(frozen)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        (
+            "diagnostic_operations",
+            CapturePreferences(operations=300, events=25, raw_bytes=800, duration=1800),
+        ),
+        (
+            "diagnostic_events",
+            CapturePreferences(operations=7, events=6000, raw_bytes=800, duration=1800),
+        ),
+        (
+            "diagnostic_raw_bytes",
+            CapturePreferences(operations=7, events=25, raw_bytes=4194304, duration=1800),
+        ),
+        (
+            "diagnostic_duration",
+            CapturePreferences(operations=7, events=25, raw_bytes=800, duration=3600),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid", [None, True, False, 0, -1, "2", 2.0, float("inf"), float("nan"), {}, 2**100]
+)
+def test_invalid_persisted_preference_defaults_independently(
+    key: str, expected: CapturePreferences, invalid: object
+) -> None:
+    """One malformed field cannot discard other valid choices or be coerced."""
+    options = {
+        "diagnostic_operations": 7,
+        "diagnostic_events": 25,
+        "diagnostic_raw_bytes": 800,
+        "diagnostic_duration": 1800,
+    }
+    options[key] = invalid
+    assert capture_preferences(options) == expected
+    assert options[key] is invalid
+    del options[key]
+    assert capture_preferences(options) == expected
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        (
+            {
+                "diagnostic_operations": 1,
+                "diagnostic_events": 1,
+                "diagnostic_raw_bytes": 1,
+                "diagnostic_duration": 7200,
+            },
+            CapturePreferences(operations=1, events=1, raw_bytes=1, duration=7200),
+        ),
+        (
+            {
+                "diagnostic_operations": 600,
+                "diagnostic_events": 12000,
+                "diagnostic_raw_bytes": 8388608,
+                "diagnostic_duration": 1800,
+            },
+            CapturePreferences(operations=600, events=12000, raw_bytes=8388608, duration=1800),
+        ),
+        (
+            {
+                "diagnostic_operations": 601,
+                "diagnostic_events": 12001,
+                "diagnostic_raw_bytes": 8388609,
+                "diagnostic_duration": 1801,
+            },
+            CapturePreferences(),
+        ),
+    ],
+)
+def test_persisted_preferences_enforce_inclusive_finite_bounds(
+    options: dict[str, object], expected: CapturePreferences
+) -> None:
+    """Smallest and largest budgets work; each immediately larger value defaults."""
+    assert capture_preferences(options) == expected
+
+
+@pytest.mark.parametrize(
+    ("preferences", "interval", "seconds"),
+    [
+        (CapturePreferences(), 15, 4500),
+        (CapturePreferences(), 30, 9000),
+        (CapturePreferences(duration=1800), 15, 4500),
+        (CapturePreferences(operations=3), 15, 45),
+        (CapturePreferences(events=39), 15, 45),
+        (CapturePreferences(raw_bytes=1063), 15, 45),
+        (CapturePreferences(raw_bytes=1064), 15, 60),
+        (CapturePreferences(events=9), 15, 0),
+        (CapturePreferences(raw_bytes=265), 15, 0),
+    ],
+)
+def test_estimated_depth_counts_complete_reference_polls_not_capture_duration(
+    preferences: CapturePreferences, interval: int, seconds: int
+) -> None:
+    """Each budget can limit history; incomplete polls promise no retained depth."""
+    assert estimated_trace_depth(preferences, interval) == seconds
+
+
+@pytest.mark.parametrize("values", [
+    {"operations": 0}, {"operations": 601}, {"operations": True},
+    {"events": 0}, {"events": 12001}, {"raw_bytes": 0},
+    {"raw_bytes": 8388609}, {"duration": 0}, {"duration": 1800.0},
+])
+def test_capture_preferences_cannot_create_an_unbounded_store(values: dict) -> None:
+    """Invalid internal budgets must fail before a store can enter its eviction loop."""
+    with pytest.raises(ValueError):
+        CapturePreferences(**values)

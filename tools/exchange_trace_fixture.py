@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import platform
 import struct
+import sys
+import tracemalloc
+from collections import deque
+from dataclasses import fields, is_dataclass
 from types import MappingProxyType
 from typing import Any
 
@@ -41,6 +47,7 @@ class ExchangeTraceFixture:
         self.message_id = 0
         self.wire: list[dict[str, str]] = []
         self.result = result
+        self.expected_limits: dict[str, dict[str, int]] = {}
         self.receipt: dict[str, Any] = {
             "status": "not_run",
             "scope": "isolated real Core; native logger WebSocket and authenticated diagnostic HTTP download",
@@ -110,7 +117,8 @@ class ExchangeTraceFixture:
                  "Diagnostic download reported a different Core version")
         data = payload["data"]
         trace = data["exchange_trace"]
-        _require(trace["schema"] == 1 and trace["limits"] == LIMITS,
+        _require(trace["schema"] == 1
+                 and trace["limits"] == self.expected_limits.get(entry.entry_id, LIMITS),
                  f"{label}: unexpected trace schema or retention limits")
         self.receipt["downloads"].append({
             "label": label, "http_status": 200, "authenticated": True,
@@ -118,6 +126,46 @@ class ExchangeTraceFixture:
             "capture_state": trace["capture_state"], "retained": trace["retained"],
         })
         return data
+
+    async def _options(
+        self, entry: Any, diagnostics: dict[str, Any], *, start: bool,
+        controls: bool | None = None,
+    ) -> dict[str, Any]:
+        """Drive the native authenticated options HTTP flow, not its callback."""
+        _require(self.session is not None, "Options HTTP session was not opened")
+        before = self._traffic()
+        base = f"{self.url}/api/config/config_entries/options/flow"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        async def post(url: str, body: dict[str, Any]) -> dict[str, Any]:
+            async with self.session.post(url, json=body, headers=headers) as response:
+                _require(response.status == 200, "Native options HTTP request failed")
+                return await response.json()
+
+        initial = await post(base, {"handler": entry.entry_id})
+        _require(initial["type"] == "form" and initial["step_id"] == "init",
+                 "Options did not open the settings form")
+        values = {"diagnostics": diagnostics}
+        if controls is not None:
+            values["enable_verified_controls"] = controls
+        confirmed = await post(f"{base}/{initial['flow_id']}", values)
+        _require(confirmed["type"] == "form" and confirmed["step_id"] == "confirm"
+                 and not confirmed.get("errors"), "Options did not reach confirmation")
+        saved = await post(f"{base}/{initial['flow_id']}", {"start_capture": start})
+        _require(saved["type"] == "create_entry", "Native options did not save/start")
+        await self.hass.async_block_till_done()
+        _require("start_capture" not in entry.options, "Start consent was persisted")
+        if controls is None:
+            _require(self._traffic() == before, "Capture preferences/start generated appliance traffic")
+        if start:
+            self.expected_limits[entry.entry_id] = {
+                name: entry.options[f"diagnostic_{name}"]
+                for name in ("operations", "events", "raw_bytes")
+            }
+            logs = await self._command({"type": "logger/log_info"})
+            _require(any(row["domain"] == DOMAIN and row["level"] == 10 for row in logs),
+                     "Options start did not enable the native DEBUG menu state")
+        return confirmed
 
     async def _reply(
         self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
@@ -235,6 +283,113 @@ class ExchangeTraceFixture:
         await self._level("DEBUG")
         self.peer.query_response_writer = self._reply
 
+    @staticmethod
+    def _store_measurement(trace: Any) -> dict[str, Any]:
+        """Measure retained graph separately from additional export allocations."""
+        seen: set[int] = set()
+        graph_bytes = raw_object_bytes = 0
+        pending = [trace]
+        while pending:
+            value = pending.pop()
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            size = sys.getsizeof(value)
+            graph_bytes += size
+            if isinstance(value, bytes):
+                raw_object_bytes += size
+            if isinstance(value, dict):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple, set, frozenset, deque)):
+                pending.extend(value)
+            elif is_dataclass(value) and not isinstance(value, type):
+                pending.extend(getattr(value, field.name) for field in fields(value))
+            elif hasattr(value, "__dict__"):
+                pending.append(vars(value))
+        del pending, seen
+        gc.collect()
+        tracemalloc.start()
+        try:
+            exported = trace.export()
+            encoded = json.dumps(
+                exported, ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return {
+            "retained": exported["retained"], "omitted": exported["omitted"],
+            "partial_operations": sum(op["partial"] for op in exported["operations"]),
+            "compact_json_bytes": len(encoded),
+            "json_metadata_and_framing_bytes": len(encoded) - exported["retained"]["raw_bytes"] * 2,
+            "python_store_graph_bytes": graph_bytes,
+            "python_raw_object_bytes": raw_object_bytes,
+            "python_metadata_container_bytes": graph_bytes - raw_object_bytes,
+            "additional_export_json_peak_bytes": peak,
+        }
+
+    async def _measure_retention(self) -> dict[str, Any]:
+        """Measure actual polls and label direct store stress as synthetic policy IO."""
+        from custom_components.uplus_reborn.capture_options import CapturePreferences
+        from custom_components.uplus_reborn.exchange_trace import ExchangeTrace
+
+        self.peer.query_response_writer = None
+        await self._options(self.entry, {
+            "diagnostic_operations": 600, "diagnostic_events": 12000,
+            "diagnostic_raw_bytes": 8388608, "diagnostic_duration": "7200",
+        }, start=True)
+        ordinary = {}
+        for number in range(1, 721):
+            await self._poll()
+            if number in (1, 240, 600, 720):
+                ordinary[str(number)] = self._store_measurement(self.entry.runtime_data.trace)
+        retained = ordinary["720"]["retained"]
+        _require(retained == {"operations": 600, "events": 6000, "raw_bytes": 159600}
+                 and ordinary["720"]["omitted"]["operations"] == 120,
+                 "Maximum-budget ordinary history lost depth or oldest-first eviction")
+        await self._level("WARNING")
+        stress = ExchangeTrace()
+        maximum = CapturePreferences(600, 12000, 8388608, 7200)
+        stress.start(maximum)
+        remaining = 8388608
+        for operation in range(600):
+            stress.begin("synthetic_metadata_pressure", sample=operation)
+            for event in range(19):
+                stress.event("metadata", values=[
+                    f"{operation}:{event}:{column}:" + "x" * 500
+                    for column in range(16)
+                ])
+            size = min(remaining, 13982)
+            stress.raw("rx", bytes([operation % 256]) * size, stage="synthetic")
+            remaining -= size
+            stress.finish("synthetic")
+        _require(stress.summary()["retained"] == {
+            "operations": 600, "events": 12000, "raw_bytes": 8388608,
+        }, "Combined maximum stress failed to fill all selected budgets")
+        metadata = self._store_measurement(stress)
+        stress.start(maximum)
+        stress.begin("synthetic_oversized")
+        stress.raw("rx", b"x" * (9 * 1024 * 1024), stage="synthetic")
+        stress.finish("synthetic")
+        oversized = self._store_measurement(stress)
+        _require(oversized["retained"]["raw_bytes"] == 8388608
+                 and oversized["omitted"]["raw_bytes"] == 1048576
+                 and oversized["partial_operations"] == 1,
+                 "One oversized operation escaped the maximum budget or hid loss")
+        stress.close()
+        return {
+            "python_version": platform.python_version(),
+            "method": "deduplicated reachable sys.getsizeof graph, not RSS/exclusive ownership; additional tracemalloc export/compact UTF-8 JSON peak after retained store exists",
+            "raw_limit_is_total_ram_limit": False,
+            "ordinary_real_tcp_polls": ordinary,
+            "nominal_retained_poll_slots_seconds": 9000,
+            "elapsed_hour_verified": False,
+            "synthetic_store_stress_combined_maxima": metadata,
+            "synthetic_store_stress_oversized": oversized,
+        }
+
     async def exercise(self, http_port: int) -> None:
         self.receipt["status"] = "running"
         self.url = f"http://127.0.0.1:{http_port}"
@@ -308,9 +463,12 @@ class ExchangeTraceFixture:
             await self.hass.config_entries.async_add(self.second_entry)
             await self.hass.async_block_till_done()
             _require(self.second_entry.state is ConfigEntryState.LOADED, "Second trace entry failed to load")
+            self._empty((await self._download(self.second_entry, "second_setup_no_resume"))["exchange_trace"], "stopped")
+            await self._options(self.second_entry, {}, start=True)
+            await self.second_entry.runtime_data.async_refresh()
             second = (await self._download(self.second_entry, "second_entry"))["exchange_trace"]
             _require(second["capture_state"] == "recording" and len(second["operations"]) == 1,
-                     "Entry setup while DEBUG enabled did not capture its first poll")
+                     "Explicit second-entry capture did not record its poll")
             self._empty((await self._download(self.entry, "first_entry_isolated"))["exchange_trace"], "recording")
             await self._poll()
             first_data = await self._download(self.entry, "first_entry_own_exchange")
@@ -342,9 +500,10 @@ class ExchangeTraceFixture:
             _require(await self.hass.config_entries.async_setup(self.entry.entry_id), "Trace entry reload failed")
             await self.hass.async_block_till_done()
             reloaded = (await self._download(self.entry, "reloaded_entry"))["exchange_trace"]
-            _require(self.entry.runtime_data is not old_coordinator and len(reloaded["operations"]) == 1
-                     and reloaded["capture_state"] == "recording",
-                     "Reload did not create a fresh capture")
+            _require(self.entry.runtime_data is not old_coordinator
+                     and reloaded["capture_state"] == "stopped"
+                     and not reloaded["operations"],
+                     "Reload resumed capture from existing DEBUG without fresh consent")
             _require(old_coordinator.trace.export()["capture_state"] == "closed"
                      and old_coordinator.trace.export()["operations"] == [],
                      "Reload repopulated the old closed capture")
@@ -353,6 +512,44 @@ class ExchangeTraceFixture:
                 "cached_runtime_retained": cached_runtime_retained,
                 "ordinary_unload_behavior_preserved": True, "fresh_capture": reloaded,
             }
+            await self._options(self.entry, {
+                "diagnostic_operations": 2, "diagnostic_events": 20,
+                "diagnostic_raw_bytes": 532, "diagnostic_duration": "1800",
+            }, start=True)
+            selected = await self._download(self.entry, "selected_limits_start")
+            _require(selected["exchange_trace"]["limits"] == {
+                "operations": 2, "events": 20, "raw_bytes": 532,
+            }, "Explicit limits were not applied")
+            active = selected["diagnostic_capture"]
+            _require(0 < active["remaining_seconds"] <= 1800
+                     and active["started_at"] and active["end_at"],
+                     "New capture lacks its selected finite deadline")
+            current = self.entry.runtime_data
+            await self._options(self.entry, {"diagnostic_operations": 3}, start=False)
+            unchanged = await self._download(self.entry, "preferences_only")
+            _require(self.entry.runtime_data is current
+                     and unchanged["diagnostic_capture"]["end_at"] == active["end_at"]
+                     and unchanged["exchange_trace"] == selected["exchange_trace"],
+                     "Preference-only Save changed active capture or reloaded")
+            await self._level("NOTSET")
+            frozen = (await self._download(self.entry, "native_stop_selected"))["exchange_trace"]
+            _require(frozen["capture_state"] == "stopped",
+                     "Native Disable failed to stop an options capture")
+            await self._options(self.entry, {
+                "diagnostic_operations": 300, "diagnostic_events": 6000,
+                "diagnostic_raw_bytes": 4194304, "diagnostic_duration": "3600",
+            }, start=True, controls=True)
+            _require(self.entry.runtime_data is not current
+                     and self.entry.runtime_data.trace.active,
+                     "Same-save control reload lost explicit capture start")
+            await self._level("WARNING")
+            self.receipt["native_capture_options"] = {
+                "status": "passed", "selected_limits": selected["exchange_trace"]["limits"],
+                "deadline": active["end_at"], "preference_only_preserved": True,
+                "native_stop": True, "same_save_reload_start": True,
+                "setup_reload_no_resume": True, "native_menu_debug": True,
+            }
+            self.receipt["retention_measurements"] = await self._measure_retention()
             self.receipt["status"] = "passed"
         except BaseException as err:
             self.receipt.update(status="failed", error=f"{type(err).__name__}: {err}")

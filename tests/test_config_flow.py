@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -444,26 +445,42 @@ async def test_reconfigure_updates_only_connection_settings(
 async def test_options_flow_requires_explicit_control_opt_in(
     hass: HomeAssistant,
 ) -> None:
-    """The options flow is the only route that exposes live controls."""
+    """Only final confirmation saves preferences and explicit control consent."""
     entry = _entry()
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
+    assert result["last_step"] is False
     assert result["data_schema"]({}) == {
         "connection_status": "unknown",
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: 15,
+        "diagnostics": {
+            "diagnostic_operations": 300,
+            "diagnostic_events": 6000,
+            "diagnostic_raw_bytes": 4194304,
+            "diagnostic_duration": "3600",
+        },
     }
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_ENABLE_VERIFIED_CONTROLS: True}
     )
 
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "confirm"
+    assert result["data_schema"]({}) == {"start_capture": False}
+    assert not entry.options
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {
         CONF_ENABLE_VERIFIED_CONTROLS: True,
         CONF_POLL_INTERVAL: 15,
+        "diagnostic_operations": 300,
+        "diagnostic_events": 6000,
+        "diagnostic_raw_bytes": 4194304,
+        "diagnostic_duration": 3600,
     }
 
 
@@ -526,11 +543,19 @@ async def test_options_store_bounded_integer_seconds(
             result["flow_id"],
             {CONF_ENABLE_VERIFIED_CONTROLS: False, CONF_POLL_INTERVAL: interval},
         )
+        assert result["step_id"] == "confirm"
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {}
+        )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert dict(entry.options) == {
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: interval,
+        "diagnostic_operations": 300,
+        "diagnostic_events": 6000,
+        "diagnostic_raw_bytes": 4194304,
+        "diagnostic_duration": 3600,
     }
     assert type(entry.options[CONF_POLL_INTERVAL]) is int
     assert entry.data[CONF_HOST] == HOST
@@ -701,3 +726,224 @@ async def test_reconfigure_preserves_explicit_entry_disablement(
     start.assert_not_awaited()
     cancel.assert_not_awaited()
     appliance.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("budgets", "interval", "polling_disabled", "expected_depth"),
+    [
+        ({}, 15, False, 4500),
+        ({"diagnostic_operations": 2}, 15, False, 30),
+        ({"diagnostic_events": 19}, 20, False, 20),
+        ({"diagnostic_raw_bytes": 531}, 30, False, 30),
+        ({"diagnostic_raw_bytes": 1}, 15, False, 0),
+        ({
+            "diagnostic_operations": 600,
+            "diagnostic_events": 12000,
+            "diagnostic_raw_bytes": 8388608,
+            "diagnostic_duration": "7200",
+        }, 30, False, 18000),
+        ({}, 15, True, 0),
+    ],
+)
+async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
+    hass: HomeAssistant,
+    budgets: dict[str, object],
+    interval: int,
+    polling_disabled: bool,
+    expected_depth: int,
+) -> None:
+    """All three budgets constrain complete ordinary-poll retained capacity."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry, pref_disable_polling=polling_disabled
+    )
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_POLL_INTERVAL: interval, "diagnostics": budgets},
+    )
+    assert result["step_id"] == "confirm"
+    selected = {
+        "diagnostic_operations": 300,
+        "diagnostic_events": 6000,
+        "diagnostic_raw_bytes": 4194304,
+        "diagnostic_duration": "3600",
+        **budgets,
+    }
+    placeholders = result["description_placeholders"]
+    assert int(placeholders["operations"]) == selected["diagnostic_operations"]
+    assert int(placeholders["events"]) == selected["diagnostic_events"]
+    assert int(placeholders["raw_bytes"]) == selected["diagnostic_raw_bytes"]
+    assert int(placeholders["duration"]) == int(selected["diagnostic_duration"])
+    assert Decimal(placeholders["raw_mib"]) * 1048576 == (
+        selected["diagnostic_raw_bytes"]
+    )
+    assert int(placeholders["estimated_seconds"]) == expected_depth
+    assert result["data_schema"]({}) == {"start_capture": False}
+    assert not entry.options
+    hass.config_entries.options.async_abort(result["flow_id"])
+    assert not entry.options
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("diagnostic_operations", 0),
+        ("diagnostic_operations", 601),
+        ("diagnostic_events", 12001),
+        ("diagnostic_events", 1.5),
+        ("diagnostic_raw_bytes", 8388609),
+        ("diagnostic_raw_bytes", 15.0),
+        ("diagnostic_raw_bytes", "266"),
+        ("diagnostic_raw_bytes", None),
+        ("diagnostic_duration", "0"),
+        ("diagnostic_duration", "3601"),
+        ("diagnostic_duration", 3600),
+        ("diagnostic_duration", True),
+    ],
+)
+async def test_capture_options_reject_invalid_input_without_saving(
+    hass: HomeAssistant, key: str, value: object
+) -> None:
+    """Native validation cannot persist unbounded or noninteger preferences."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], {"diagnostics": {key: value}}
+        )
+    assert not entry.options
+
+
+@pytest.mark.parametrize(
+    "key", ["diagnostic_operations", "diagnostic_events", "diagnostic_raw_bytes"]
+)
+async def test_capture_boolean_budgets_do_not_count_as_one(
+    hass: HomeAssistant, key: str
+) -> None:
+    """Python's bool/int relationship does not turn consent into a budget."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"diagnostics": {key: True}}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "invalid_options"}
+    assert not entry.options
+
+
+async def test_capture_defaults_normalize_persisted_options_without_applying(
+    hass: HomeAssistant,
+) -> None:
+    """An old or malformed entry shows independently safe effective defaults."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    saved = {
+        "diagnostic_operations": 601,
+        "diagnostic_events": 37,
+        "diagnostic_raw_bytes": True,
+        "diagnostic_duration": 0,
+    }
+    hass.config_entries.async_update_entry(entry, options=saved)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["data_schema"]({})["diagnostics"] == {
+        "diagnostic_operations": 300,
+        "diagnostic_events": 37,
+        "diagnostic_raw_bytes": 4194304,
+        "diagnostic_duration": "3600",
+    }
+    hass.config_entries.options.async_abort(result["flow_id"])
+    assert dict(entry.options) == saved
+
+
+async def test_explicit_capture_start_failure_keeps_confirmation_open(
+    hass: HomeAssistant,
+) -> None:
+    """A disabled/unloaded entry cannot report successful capture consent."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=MODEL,
+        data={CONF_HOST: HOST, CONF_PORT: PORT, CONF_DEVICE_ID: DEVICE_ID},
+        unique_id=DEVICE_ID,
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"start_capture": True}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "confirm"
+    assert result["errors"] == {"base": "capture_start_failed"}
+    assert result["data_schema"]({}) == {"start_capture": False}
+    assert entry.disabled_by is ConfigEntryDisabler.USER
+    assert not entry.options
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert "start_capture" not in entry.options
+
+
+async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Checked Save starts once; later unchecked preferences do not replace it."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    with (
+        patch.object(
+            UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+        ) as read_state,
+        patch.object(
+            hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+        ) as reload_entry,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coordinator = entry.runtime_data
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"diagnostics": {
+                "diagnostic_operations": 2,
+                "diagnostic_events": 20,
+                "diagnostic_raw_bytes": 532,
+                "diagnostic_duration": "1800",
+            }},
+        )
+        assert not coordinator.trace.active
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"start_capture": True}
+        )
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert coordinator.trace.active
+        started = coordinator.capture_status
+        assert started["limits"] == {"operations": 2, "events": 20, "raw_bytes": 532}
+        assert started["started_at"] is not None
+        assert started["end_at"] is not None
+        assert 0 < started["remaining_seconds"] <= 1800
+        assert "start_capture" not in entry.options
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"diagnostics": {"diagnostic_operations": 3}}
+        )
+        assert result["data_schema"]({}) == {"start_capture": False}
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {}
+        )
+        await hass.async_block_till_done()
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert entry.runtime_data is coordinator
+        assert coordinator.trace.active
+        after = coordinator.capture_status
+        for key in ("limits", "retained", "started_at", "end_at"):
+            assert after[key] == started[key]
+        assert entry.options["diagnostic_operations"] == 3
+        assert "start_capture" not in entry.options
+        reload_entry.assert_not_awaited()
+        read_state.assert_awaited_once()
+        assert await hass.config_entries.async_unload(entry.entry_id)

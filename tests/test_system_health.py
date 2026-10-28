@@ -17,6 +17,7 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.uplus_reborn.capture_options import CapturePreferences
 from custom_components.uplus_reborn.const import (
     CONF_DEVICE_ID,
     CONF_POLL_INTERVAL,
@@ -204,6 +205,14 @@ async def test_missing_runtime_is_not_a_success(
     assert info["entry_1_freshness"] == freshness
     assert info["entry_1_last_success_age_seconds"] is None
     assert info["entry_1_last_failure_category"] is None
+    assert isinstance(info["entry_1_capture_status_snapshot"], str)
+    assert info["entry_1_capture_snapshot_at"] is not None
+    assert info["entry_1_capture_started_at"] is None
+    assert info["entry_1_capture_end_at"] is None
+    assert info["entry_1_capture_remaining_seconds"] is None
+    for resource in ("operations", "events", "raw_bytes"):
+        for field in ("limit", "retained", "free"):
+            assert info[f"entry_1_capture_{resource}_{field}"] is None
 
 
 @pytest.mark.parametrize(
@@ -259,6 +268,11 @@ async def test_health_query_is_private_and_does_not_probe(
         first = await system_health_info(hass)
         second = await system_health_info(hass)
 
+    assert datetime.fromisoformat(second["entry_1_capture_snapshot_at"]) >= (
+        datetime.fromisoformat(first["entry_1_capture_snapshot_at"])
+    )
+    first.pop("entry_1_capture_snapshot_at")
+    second.pop("entry_1_capture_snapshot_at")
     assert first == second
     assert first["configured_entries"] == 1
     assert first["loaded_entries"] == 0
@@ -295,3 +309,52 @@ async def test_poll_interval_drives_runtime_freshness_and_cached_reports(
             assert diagnostics["health"]["freshness"] == expected
             assert diagnostics["options"][CONF_POLL_INTERVAL] == interval
         read_state.assert_awaited_once_with()
+
+
+async def test_capture_snapshot_uses_effective_store_limits_without_export(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Capacity remains the actual capture's, even after next-start edits."""
+    entry = _entry(hass)
+    coordinator = _coordinator(hass, entry)
+    coordinator.trace.start(
+        CapturePreferences(operations=1, events=10, raw_bytes=266, duration=1800)
+    )
+    with patch.object(
+        UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+    ):
+        await coordinator.async_refresh()
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            **entry.options,
+            "diagnostic_operations": 600,
+            "diagnostic_events": 12000,
+            "diagnostic_raw_bytes": 8388608,
+            "diagnostic_duration": 7200,
+        },
+    )
+    with patch.object(
+        coordinator.trace, "export", side_effect=AssertionError("full export")
+    ):
+        active = await system_health_info(hass)
+        coordinator.trace.stop()
+        stopped = await system_health_info(hass)
+    assert isinstance(active["entry_1_capture_status_snapshot"], str)
+    assert active["entry_1_capture_status_snapshot"] != (
+        stopped["entry_1_capture_status_snapshot"]
+    )
+    assert active["entry_1_capture_operations_limit"] == 1
+    assert active["entry_1_capture_operations_retained"] == 1
+    assert active["entry_1_capture_operations_free"] == 0
+    assert active["entry_1_capture_events_limit"] == 10
+    assert active["entry_1_capture_raw_bytes_limit"] == 266
+    assert active["entry_1_capture_raw_bytes_retained"] == 0
+    assert active["entry_1_capture_raw_bytes_free"] == 266
+    for resource in ("operations", "events", "raw_bytes"):
+        for field in ("limit", "retained", "free"):
+            key = f"entry_1_capture_{resource}_{field}"
+            assert stopped[key] == active[key]
+    assert not any(isinstance(value, dict) for value in active.values())
+
+

@@ -133,6 +133,13 @@
     }
   },
   "selector": {
+    "diagnostic_duration": {
+      "options": {
+        "1800": "30 minutes",
+        "3600": "1 hour",
+        "7200": "2 hours"
+      }
+    },
     "connection_status": {
       "options": {
         "connected": "Connected",
@@ -262,12 +269,13 @@
   },
   "options": {
     "error": {
-      "invalid_options": "Choose whether to enable controls and enter a whole-number polling interval from 15 to 30 seconds."
+      "invalid_options": "Choose whole-number budgets within the displayed bounds, a supported auto-stop duration and a polling interval from 15 to 30 seconds.",
+      "capture_start_failed": "The new diagnostic capture could not be started. Preferences may have been saved; no successful start is confirmed. Check that this integration entry is enabled and loaded, then try again."
     },
     "step": {
       "init": {
-        "title": "Polling and remote controls",
-        "description": "Choose remote controls and how often to refresh the appliance status. Saving these settings sends no appliance command.\n\n[Control help]({control_help_url})",
+        "title": "Integration settings",
+        "description": "Choose remote controls, polling and preferences for the next diagnostic capture. Nothing is applied until the final Save; saving preferences alone does not start or stop capture.\n\n[Control help]({control_help_url})",
         "data": {
           "connection_status": "Appliance connection (when opened)",
           "enable_verified_controls": "Enable remote controls",
@@ -276,6 +284,34 @@
         "data_description": {
           "enable_verified_controls": "Enable programme settings and commands for both drums. Remote Control must also be enabled on the machine. Changing this option clears both unsent programme configurations.",
           "poll_interval": "Refresh appliance status every 15–30 seconds. Default: 15 seconds."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Diagnostics",
+            "description": "Bounded, memory-only integration exchange trace. Budgets and auto-stop are independent: a full store keeps replacing its oldest operations until capture stops. Raw bytes are not a total RAM allowance.",
+            "data": {
+              "diagnostic_operations": "Operation limit",
+              "diagnostic_events": "Event limit",
+              "diagnostic_raw_bytes": "Original raw-byte limit (bytes)",
+              "diagnostic_duration": "Auto-stop duration"
+            },
+            "data_description": {
+              "diagnostic_operations": "1–600 polls or control attempts, including the current operation. Default: 300.",
+              "diagnostic_events": "1–12000 event records across retained operations. Default: 6000.",
+              "diagnostic_raw_bytes": "1–8388608 bytes (maximum 8 MiB). Default: 4194304 bytes (4 MiB). Enter an exact whole number of bytes.",
+              "diagnostic_duration": "A separate finite deadline for every new capture. Default: 1 hour."
+            }
+          }
+        }
+      },
+      "confirm": {
+        "title": "Review integration settings",
+        "description": "Limits for a new capture: **{operations} operations**, **{events} events**, **{raw_bytes} original raw bytes ({raw_mib} MiB)**. Auto-stop: **{duration} seconds**.\n\nApproximate ordinary-poll-only retained trace depth: **{estimated_seconds} seconds**, using a **{poll_interval}-second** cadence (— means automatic polling is disabled and the estimate is 0, not an active observation source). Each reference poll uses 10 events and 266 raw bytes. Commands, unmatched reports, fragmentation and larger exchanges can shorten this estimate. This is retained-history capacity, not a recording deadline or completeness guarantee.\n\nSaving preferences alone leaves any current capture, its effective limits and deadline unchanged. Checking the box starts a fresh capture for this entry and **replaces all previous trace evidence**, even if DEBUG is already enabled. Download useful evidence first.\n\nThe trace may contain original local addresses, MAC/device identifiers and bytes. Review it before sharing publicly. Capture is volatile: stopping preserves evidence for repeated downloads, but unload, reload or restart clears it without automatic resumption.",
+        "data": {
+          "start_capture": "Start a new diagnostic capture and enable DEBUG"
+        },
+        "data_description": {
+          "start_capture": "An external logging change can leave DEBUG enabled after capture stops. Use the integration's native Disable debug logging action to turn it off."
         }
       }
     }

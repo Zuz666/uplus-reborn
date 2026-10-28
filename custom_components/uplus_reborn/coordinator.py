@@ -10,10 +10,10 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_LOGGING_CHANGED
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .capture_lifecycle import DiagnosticCapture
 from .const import (
     CONF_DEVICE_ID,
     CONF_ENABLE_VERIFIED_CONTROLS,
@@ -105,6 +105,7 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             ),
         )
         self.trace = ExchangeTrace()
+        self.capture: DiagnosticCapture | None = None
         self.client = replace(client, observer=self.trace)
         self._connection_lock = asyncio.Lock()
         self._drafts: dict[Drum, ProgramIntent | None] = {"upper": None, "lower": None}
@@ -119,16 +120,23 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
 
     @callback
     def start_trace_listener(self) -> None:
-        """Follow native logger changes before the first entry refresh."""
-        self.config_entry.async_on_unload(
-            self.hass.bus.async_listen(EVENT_LOGGING_CHANGED, self._sync_trace_logging)
-        )
-        self.config_entry.async_on_unload(self.trace.close)
-        self._sync_trace_logging()
+        """Attach volatile capture ownership without resuming from logger state."""
+        if self.capture is None:
+            self.capture = DiagnosticCapture(self)
+            self.config_entry.async_on_unload(self.capture.close)
 
-    @callback
-    def _sync_trace_logging(self, event: Event | None = None) -> None:
-        self.trace.set_enabled(_LOGGER.isEnabledFor(logging.DEBUG))
+    @property
+    def capture_status(self) -> dict[str, object]:
+        """Return lightweight local timing/capacity, without raw trace export."""
+        if self.capture is not None:
+            return self.capture.status
+        return {
+            **self.trace.summary(),
+            "started_at": None,
+            "end_at": None,
+            "remaining_seconds": None,
+            "snapshot_at": datetime.now(UTC).isoformat(),
+        }
 
     @property
     def health(self) -> CoordinatorHealth:

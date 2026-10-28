@@ -65,7 +65,7 @@ CORE_COMPONENTS = (
     "logger",
     "diagnostics",
 )
-BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "dhcp", "sensor", "binary_sensor", "frontend", "lovelace")
+BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "dhcp", "sensor", "binary_sensor", "frontend", "lovelace", "system_health")
 
 
 def _requirements(output: Path) -> None:
@@ -1030,6 +1030,9 @@ async def _exercise(
             for domain in CORE_COMPONENTS:
                 _require(await async_setup_component(hass, domain, config),
                          f"Core component {domain} failed (check fixture requirements)")
+            if scenario == "exchange-trace":
+                _require(await async_setup_component(hass, "system_health", config),
+                         "Native System Health failed to load")
             if serve and importlib.util.find_spec("hass_frontend") is not None:
                 for domain in ("frontend", "lovelace"):
                     _require(await async_setup_component(hass, domain, config),

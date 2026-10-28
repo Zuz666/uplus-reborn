@@ -254,17 +254,32 @@ export size and nominal 15-second poll-slot coverage, not an elapsed-hour claim.
 Autonomous polling is disabled on the disposable fixture entries from creation;
 each explicit refresh still uses the real coordinator/TCP path.
 
-Two entries share native DEBUG activation but retain independent traces and
-fixed limits. Unload clears/closes the old store without changing ordinary
-cached-state behavior: a Core-retained runtime can expose its cached state,
-while a Core-cleared runtime reports no state as before. Logger changes cannot
-revive the old capture, and reload creates a fresh one.
+Two entries share native DEBUG but retain independent stores, selected limits and
+finite deadlines. Setting up/reloading under existing DEBUG does not start capture:
+the fixture explicitly starts the second entry and verifies no automatic resumption.
+Unload clears/closes the old store without changing ordinary cached-state behavior.
+Logger changes cannot revive an unloaded store.
 The fixture revokes its disposable authentication, closes its WebSocket/session,
 unloads its second entry and closes its peer; the existing runner unloads the
 primary entry, stops Core and removes the temporary configuration. Scenario errors
 remain primary if cleanup also fails. Receipts contain only synthetic identities
 and exchanges, never temporary token values; an unrelated synthetic credential
 sentinel must remain absent from diagnostic downloads.
+
+Authenticated native options HTTP calls exercise input → confirmation → final
+Save, selected limits/deadline, preference-only preservation, native global stop,
+the native DEBUG menu state, and explicit start across a control-change reload.
+Capture settings/start/stop and downloads add no appliance traffic; an independently
+required reload still performs its ordinary setup query.
+
+The scenario additionally measures maximum-budget retention with 720 real ordinary
+polls (600 newest polls retained), using saved 600-operation/12000-event/8 MiB limits.
+It separately labels direct store-policy stress: all three maxima filled with
+metadata-heavy observations, and one 9 MiB raw observation truncated to the 8 MiB
+budget with explicit loss. These synthetic pressure records are not wire frames
+or a physical appliance scenario. Receipts distinguish raw payload, Python raw
+objects, metadata/container graph, compact JSON and additional export/JSON peak.
+Native browser inspection remains separate from this HTTP/WebSocket fixture.
 
 The scenario is public software/transport evidence, not physical appliance or
 browser acceptance. Perform independent source review first and run the exact
@@ -280,13 +295,14 @@ and authenticated `/api/diagnostics/config_entry/{entry_id}` download
 The fixture does not read private Core logger storage or invoke diagnostic
 callbacks in place of these native requests.
 
-**Retention sizing: measured coordinator/TCP sample.**
+**Default retention sizing: measured coordinator/TCP sample from #80.**
 
-Fixed budgets are 300 operations, 6000 events and 4,194,304 raw bytes. Operation
-capacity leaves room beyond the required 240 ordinary polls; the event budget also
-fits the measured 240 fragmented/unmatched polls and the mixed poll/control run.
-Raw pressure was far below 4 MiB, so increasing that budget was not justified.
-All three budgets still apply together, including to one oversized operation.
+Default budgets remain 300 operations, 6000 events and 4,194,304 raw bytes; they
+are now configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
+The original default-budget measurements below are retained as historical
+reference, not a claim that the new maxima cost the same RAM. Operation capacity
+leaves room beyond 240 ordinary polls; all three budgets apply together, including
+to one oversized operation. Raw-byte capacity alone never defines total memory.
 
 The following run used Linux Docker, CPython 3.13.15 and actual coordinator
 refresh/Start paths with the existing synthetic TCP fixtures. A normal poll

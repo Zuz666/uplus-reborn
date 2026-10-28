@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, override
 
 import voluptuous as vol
@@ -15,12 +16,27 @@ from homeassistant.const import (
     CONF_PORT,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import section
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.translation import async_get_translations
 
+from .capture_lifecycle import async_save_capture_options
+from .capture_options import (
+    CAPTURE_DURATIONS,
+    CONF_DIAGNOSTIC_DURATION,
+    CONF_DIAGNOSTIC_EVENTS,
+    CONF_DIAGNOSTIC_OPERATIONS,
+    CONF_DIAGNOSTIC_RAW_BYTES,
+    MAX_EVENTS,
+    MAX_OPERATIONS,
+    MAX_RAW_BYTES,
+    capture_preferences,
+    estimated_trace_depth,
+)
 from .cloud import (
     CloudCannotConnect,
     CloudDevice,
@@ -811,7 +827,7 @@ class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> UplusRebornOptionsFlow:
-        """Return the bounded polling and explicit control opt-in flow."""
+        """Return integration settings with explicit capture confirmation."""
         return UplusRebornOptionsFlow()
 
 
@@ -822,12 +838,13 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
         """Capture connectivity once, independently of the form user's locale."""
         super().__init__()
         self._connection_status: str | None = None
+        self._pending_options: dict[str, Any] | None = None
 
     @override
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Save integration settings without issuing an appliance command."""
+        """Collect settings without applying them or probing the appliance."""
         enabled = self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
         coordinator = getattr(self.config_entry, "runtime_data", None)
         if self._connection_status is None:
@@ -842,6 +859,29 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         if self.config_entry.pref_disable_polling
                         else "offline"
                     )
+        preferences = capture_preferences(self.config_entry.options)
+        diagnostic_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_DIAGNOSTIC_OPERATIONS, default=preferences.operations
+                ): vol.All(int, vol.Range(min=1, max=MAX_OPERATIONS)),
+                vol.Required(
+                    CONF_DIAGNOSTIC_EVENTS, default=preferences.events
+                ): vol.All(int, vol.Range(min=1, max=MAX_EVENTS)),
+                vol.Required(
+                    CONF_DIAGNOSTIC_RAW_BYTES, default=preferences.raw_bytes
+                ): vol.All(int, vol.Range(min=1, max=MAX_RAW_BYTES)),
+                vol.Required(
+                    CONF_DIAGNOSTIC_DURATION, default=str(preferences.duration)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[str(value) for value in CAPTURE_DURATIONS],
+                        translation_key="diagnostic_duration",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }
+        )
         schema = vol.Schema(
             {
                 vol.Optional(
@@ -860,6 +900,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 ): vol.All(
                     int, vol.Range(min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL)
                 ),
+                vol.Required("diagnostics", default=dict): section(diagnostic_schema),
             }
         )
         errors: dict[str, str] = {}
@@ -869,20 +910,82 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             except vol.Invalid:
                 errors["base"] = "invalid_options"
             else:
-                options.pop("connection_status", None)
-                # Discard intent before saving, even across rapid off/on saves.
-                if (
-                    options[CONF_ENABLE_VERIFIED_CONTROLS] != enabled
-                    and coordinator is not None
+                diagnostics = options.pop("diagnostics")
+                if any(
+                    type(diagnostics[key]) is not int
+                    for key in (
+                        CONF_DIAGNOSTIC_OPERATIONS,
+                        CONF_DIAGNOSTIC_EVENTS,
+                        CONF_DIAGNOSTIC_RAW_BYTES,
+                    )
                 ):
-                    coordinator.clear_drafts()
-                return self.async_create_entry(title="", data=options)
+                    errors["base"] = "invalid_options"
+                else:
+                    diagnostics[CONF_DIAGNOSTIC_DURATION] = int(
+                        diagnostics[CONF_DIAGNOSTIC_DURATION]
+                    )
+                    options.pop("connection_status", None)
+                    options.update(diagnostics)
+                    self._pending_options = options
+                    return await self.async_step_confirm()
 
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(schema, user_input),
             errors=errors,
+            last_step=False,
             description_placeholders={
                 "control_help_url": "https://github.com/Zuz666/uplus-reborn#control-model",
+            },
+        )
+
+    async def async_step_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Apply preferences and one-shot consent only on the final Save."""
+        if self._pending_options is None:
+            return await self.async_step_init()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            start = user_input.get("start_capture") is True
+            coordinator = getattr(self.config_entry, "runtime_data", None)
+            if (
+                self._pending_options[CONF_ENABLE_VERIFIED_CONTROLS]
+                != (self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True)
+                and coordinator is not None
+            ):
+                coordinator.clear_drafts()
+            try:
+                await async_save_capture_options(
+                    self.hass, self.config_entry, self._pending_options, start
+                )
+            except HomeAssistantError:
+                errors["base"] = "capture_start_failed"
+            else:
+                # Another flow may have saved newer preferences during our reload.
+                return self.async_create_entry(
+                    title="", data=dict(self.config_entry.options)
+                )
+        preferences = capture_preferences(self._pending_options)
+        interval = configured_poll_interval(self._pending_options)
+        polling_disabled = self.config_entry.pref_disable_polling
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema(
+                {vol.Optional("start_capture", default=False): bool}
+            ),
+            errors=errors,
+            last_step=True,
+            description_placeholders={
+                "operations": str(preferences.operations),
+                "events": str(preferences.events),
+                "raw_bytes": str(preferences.raw_bytes),
+                "raw_mib": str(Decimal(preferences.raw_bytes) / Decimal(1048576)),
+                "duration": str(preferences.duration),
+                "estimated_seconds": str(
+                    0 if polling_disabled
+                    else estimated_trace_depth(preferences, interval)
+                ),
+                "poll_interval": "—" if polling_disabled else str(interval),
             },
         )

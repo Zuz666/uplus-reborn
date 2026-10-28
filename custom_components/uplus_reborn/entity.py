@@ -103,4 +103,5 @@ class UplusRebornEntity(CoordinatorEntity[UplusRebornCoordinator]):
             manufacturer=MANUFACTURER,
             model=MODEL,
             name=MODEL,
+            configuration_url="homeassistant://config/repairs?dialog=system-health",
         )

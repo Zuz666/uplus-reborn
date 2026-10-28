@@ -30,8 +30,9 @@ imports, entity domains, or logger names from either.
   typed validation and encoding remain there
 - reported-setting applicability: `reported_settings.py`; status platforms:
   `sensor.py`, `binary_sensor.py`; cached health: `system_health.py`
-- bounded opt-in diagnostic capture: `exchange_trace.py`; protocol observation
-  contract: `protocol/_observation.py`; lifecycle/operation ownership: coordinator
+- bounded opt-in diagnostic storage: `exchange_trace.py`; finite capture/logger
+  ownership: `capture_lifecycle.py`; normalized budgets/depth: `capture_options.py`;
+  protocol observation contract: `protocol/_observation.py`; runtime operations: coordinator
 - native controls: `select.py`, `switch.py`, `button.py`, `text.py`; atomic action: `services.py`
 - saved-profile operation policy/completion: `coordinator.py`; durable store:
   `profiles.py`; native action choices: `profile_choices.py`; consumer contracts:
@@ -345,10 +346,15 @@ diagram rewriting. No fix command is provided; review source edits explicitly.
   snapshot projection and any selected-frame raw inspection. This boundary does
   not change stream queues, report retention, correlation or confirmation proof.
 - Temporary exchange tracing observes only existing runtime entry traffic.
-  The coordinator owns per-entry operation grouping and native DEBUG lifecycle;
-  the protocol emits passive observations without changing validation/proof.
-  `exchange_trace.py` enforces shared operation/event/raw-byte limits and bounded
-  metadata. Keep incoming-envelope processing independent of diagnostic retention.
+  The coordinator owns per-entry operation grouping; `capture_lifecycle.py` owns
+  finite timers, explicit start/reload handoff and domain-wide native DEBUG
+  ownership. Guard synchronous as well as deferred native logger notifications.
+  The protocol emits passive observations without changing validation/proof.
+  `exchange_trace.py` enforces selected operation/event/raw-byte limits and bounded
+  metadata; `capture_options.py` normalizes finite preferences and estimates
+  ordinary-poll depth independently of the deadline. Existing DEBUG at setup is
+  not consent to resume capture. Keep incoming-envelope processing independent
+  of diagnostic retention.
   Ordinary logs/state/config remain redacted; only the explicit opt-in trace
   section may include original local bytes/endpoints/device identifiers.
   Never include onboarding/cloud secrets or unrelated traffic. Use synthetic
