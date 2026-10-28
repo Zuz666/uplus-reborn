@@ -30,6 +30,7 @@ from .capture_options import (
     CONF_DIAGNOSTIC_EVENTS,
     CONF_DIAGNOSTIC_OPERATIONS,
     CONF_DIAGNOSTIC_RAW_BYTES,
+    DEFAULT_CAPTURE_PREFERENCES,
     MAX_EVENTS,
     MAX_OPERATIONS,
     MAX_RAW_BYTES,
@@ -160,6 +161,34 @@ async def _async_validate_connection(data: dict[str, Any]) -> None:
         device_id=data[CONF_DEVICE_ID],
     )
     await client.read_state()
+
+
+_DIAGNOSTIC_ATTRIBUTES = {
+    CONF_DIAGNOSTIC_OPERATIONS: "operations",
+    CONF_DIAGNOSTIC_EVENTS: "events",
+    CONF_DIAGNOSTIC_RAW_BYTES: "raw_bytes",
+    CONF_DIAGNOSTIC_DURATION: "duration",
+}
+
+
+class _DiagnosticSchema(vol.Schema):
+    """Resolve explicit restore before Core validates individual input fields."""
+
+    def __call__(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            data = dict(data)
+            for marker in self.schema:
+                name = marker.schema
+                key = name.partition("__")[0]
+                if key not in _DIAGNOSTIC_ATTRIBUTES:
+                    continue
+                if data.get("restore_defaults") is True:
+                    data[name] = str(getattr(
+                        DEFAULT_CAPTURE_PREFERENCES, _DIAGNOSTIC_ATTRIBUTES[key]
+                    ))
+                elif key != CONF_DIAGNOSTIC_DURATION and type(data.get(name)) is int:
+                    data[name] = str(data[name])
+        return super().__call__(data)
 
 
 class UplusRebornConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -839,13 +868,18 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
         self._connection_status: str | None = None
         self._pending_options: dict[str, Any] | None = None
         self._pending_start_capture = False
+        self._pending_restore_defaults = False
+        self._opening_options: dict[str, Any] | None = None
 
     @override
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Collect settings without applying them or probing the appliance."""
-        enabled = self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
+        if self._opening_options is None:
+            self._opening_options = dict(self.config_entry.options)
+        opening = self._opening_options
+        enabled = opening.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
         coordinator = getattr(self.config_entry, "runtime_data", None)
         if self._connection_status is None:
             self._connection_status = "unknown"
@@ -859,20 +893,33 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         if self.config_entry.pref_disable_polling
                         else "offline"
                     )
-        preferences = capture_preferences(self.config_entry.options)
-        diagnostic_schema = vol.Schema(
+        preferences = capture_preferences(opening)
+        fields = {}
+        placeholders = {
+            "control_help_url": "https://github.com/Zuz666/uplus-reborn#control-model",
+        }
+        for key, attribute in _DIAGNOSTIC_ATTRIBUTES.items():
+            value = getattr(preferences, attribute)
+            default = getattr(DEFAULT_CAPTURE_PREFERENCES, attribute)
+            saved = type(opening.get(key)) is int and opening[key] == value
+            state = "matching" if saved and value == default else "saved" if saved else "default"
+            fields[key] = f"{key}__{state}"
+            # Duration helpers use localized minute units; the dropdown stays localized.
+            placeholders[f"{key}_saved"] = str(value // 60 if key == CONF_DIAGNOSTIC_DURATION else value)
+            placeholders[f"{key}_default"] = str(default // 60 if key == CONF_DIAGNOSTIC_DURATION else default)
+        diagnostic_schema = _DiagnosticSchema(
             {
-                vol.Required(
-                    CONF_DIAGNOSTIC_OPERATIONS, default=preferences.operations
-                ): vol.All(int, vol.Range(min=1, max=MAX_OPERATIONS)),
-                vol.Required(
-                    CONF_DIAGNOSTIC_EVENTS, default=preferences.events
-                ): vol.All(int, vol.Range(min=1, max=MAX_EVENTS)),
-                vol.Required(
-                    CONF_DIAGNOSTIC_RAW_BYTES, default=preferences.raw_bytes
-                ): vol.All(int, vol.Range(min=1, max=MAX_RAW_BYTES)),
-                vol.Required(
-                    CONF_DIAGNOSTIC_DURATION, default=str(preferences.duration)
+                vol.Optional(
+                    fields[CONF_DIAGNOSTIC_OPERATIONS], default=""
+                ): str,
+                vol.Optional(
+                    fields[CONF_DIAGNOSTIC_EVENTS], default=""
+                ): str,
+                vol.Optional(
+                    fields[CONF_DIAGNOSTIC_RAW_BYTES], default=""
+                ): str,
+                vol.Optional(
+                    fields[CONF_DIAGNOSTIC_DURATION], default=""
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[str(value) for value in CAPTURE_DURATIONS],
@@ -880,9 +927,19 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Optional("restore_defaults", default=False): bool,
                 vol.Optional("start_capture", default=False): bool,
             }
         )
+        # Initial presentation is separate from missing submitted fields. Native
+        # optional text controls omit cleared values; those must stay invalid.
+        diagnostic_values = {
+            fields[key]: str(getattr(preferences, attribute))
+            for key, attribute in _DIAGNOSTIC_ATTRIBUTES.items()
+        }
+        diagnostic_values.update({"restore_defaults": False, "start_capture": False})
+        if user_input is not None and "diagnostics" in user_input:
+            diagnostic_values = dict(user_input["diagnostics"])
         schema = vol.Schema(
             {
                 vol.Optional(
@@ -897,12 +954,12 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(CONF_ENABLE_VERIFIED_CONTROLS, default=enabled): bool,
                 vol.Required(
                     CONF_POLL_INTERVAL,
-                    default=configured_poll_interval(self.config_entry.options),
+                    default=configured_poll_interval(opening),
                 ): vol.All(
                     int, vol.Range(min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL)
                 ),
                 vol.Required(
-                    "diagnostics", default=lambda: diagnostic_schema({})
+                    "diagnostics", default=lambda: dict(diagnostic_values)
                 ): section(diagnostic_schema, {"collapsed": True}),
             }
         )
@@ -913,34 +970,48 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             except vol.Invalid:
                 errors["base"] = "invalid_options"
             else:
-                diagnostics = options.pop("diagnostics")
-                if any(
-                    type(diagnostics[key]) is not int
-                    for key in (
-                        CONF_DIAGNOSTIC_OPERATIONS,
-                        CONF_DIAGNOSTIC_EVENTS,
-                        CONF_DIAGNOSTIC_RAW_BYTES,
-                    )
-                ):
-                    errors["base"] = "invalid_options"
-                else:
+                diagnostics = {
+                    name.partition("__")[0]: value
+                    for name, value in options.pop("diagnostics").items()
+                }
+                try:
+                    for key, maximum in (
+                        (CONF_DIAGNOSTIC_OPERATIONS, MAX_OPERATIONS),
+                        (CONF_DIAGNOSTIC_EVENTS, MAX_EVENTS),
+                        (CONF_DIAGNOSTIC_RAW_BYTES, MAX_RAW_BYTES),
+                    ):
+                        value = diagnostics[key]
+                        if not value.isascii() or not value.isdecimal():
+                            raise ValueError
+                        number = int(value)
+                        if not 0 < number <= maximum:
+                            raise ValueError
+                        diagnostics[key] = number
                     diagnostics[CONF_DIAGNOSTIC_DURATION] = int(
                         diagnostics[CONF_DIAGNOSTIC_DURATION]
                     )
+                except ValueError:
+                    errors["base"] = "invalid_options"
+                else:
                     options.pop("connection_status", None)
                     self._pending_start_capture = diagnostics.pop("start_capture")
+                    self._pending_restore_defaults = diagnostics.pop("restore_defaults")
                     options.update(diagnostics)
                     self._pending_options = options
                     return await self.async_step_confirm()
 
+        schema = self.add_suggested_values_to_schema(schema, user_input)
+        # Core copies nested schemas into plain Schema during error redisplay.
+        # Retain restore-before-validation on every subsequent submission.
+        for value in schema.schema.values():
+            if isinstance(value, section):
+                value.schema = _DiagnosticSchema(value.schema.schema)
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(schema, user_input),
+            data_schema=schema,
             errors=errors,
             last_step=False,
-            description_placeholders={
-                "control_help_url": "https://github.com/Zuz666/uplus-reborn#control-model",
-            },
+            description_placeholders=placeholders,
         )
 
     async def async_step_confirm(
@@ -971,7 +1042,8 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                     title="", data=dict(self.config_entry.options)
                 )
         preferences = capture_preferences(self._pending_options)
-        previous = capture_preferences(self.config_entry.options)
+        assert self._opening_options is not None
+        previous = capture_preferences(self._opening_options)
         review: dict[Any, Any] = {}
 
         def information(name: str, value: str, translation_key: str | None = None) -> None:
@@ -980,18 +1052,13 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 config["translation_key"] = translation_key
             review[vol.Optional(name, default=value)] = selector.SelectSelector(config)
 
-        controls_before = self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
+        controls_before = self._opening_options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
         controls_after = self._pending_options[CONF_ENABLE_VERIFIED_CONTROLS]
-        interval_before = configured_poll_interval(self.config_entry.options)
+        interval_before = configured_poll_interval(self._opening_options)
         interval_after = configured_poll_interval(self._pending_options)
         budget_changes = {
             name: (getattr(previous, attribute), getattr(preferences, attribute))
-            for name, attribute in (
-                (CONF_DIAGNOSTIC_OPERATIONS, "operations"),
-                (CONF_DIAGNOSTIC_EVENTS, "events"),
-                (CONF_DIAGNOSTIC_RAW_BYTES, "raw_bytes"),
-                (CONF_DIAGNOSTIC_DURATION, "duration"),
-            )
+            for name, attribute in _DIAGNOSTIC_ATTRIBUTES.items()
         }
         diagnostics_changed = any(before != after for before, after in budget_changes.values())
         changed = (
@@ -1003,16 +1070,27 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             "start" if self._pending_start_capture else "preferences" if changed else "no_changes",
             "diagnostic_review_action",
         )
+        if self._pending_restore_defaults:
+            information(
+                "restore_action",
+                "restore" if diagnostics_changed else "already_default",
+                "diagnostic_restore_action",
+            )
         if controls_before != controls_after:
             information(
                 "controls_change", "enable" if controls_after else "disable",
                 "diagnostic_control_change",
             )
         if interval_before != interval_after:
-            information(CONF_POLL_INTERVAL, f"{interval_before} → {interval_after}")
+            information(f"{CONF_POLL_INTERVAL}__changed", f"{interval_before} → {interval_after}")
         for name, (before, after) in budget_changes.items():
-            if before != after or self._pending_start_capture:
-                information(name, f"{before} → {after}" if before != after else str(after))
+            if before != after or self._pending_start_capture or self._pending_restore_defaults:
+                state = "changed" if before != after else "unchanged"
+                information(
+                    f"{name}__{state}",
+                    f"{before} → {after}" if before != after else str(after),
+                    "diagnostic_duration" if name == CONF_DIAGNOSTIC_DURATION and before == after else None,
+                )
         if diagnostics_changed or self._pending_start_capture:
             information(
                 "estimated_seconds",
@@ -1020,7 +1098,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                     else estimated_trace_depth(preferences, interval_after)),
             )
         if (
-            diagnostics_changed
+            (diagnostics_changed or self._pending_restore_defaults)
             and not self._pending_start_capture
             and controls_before == controls_after
         ):

@@ -133,6 +133,12 @@
     }
   },
   "selector": {
+    "diagnostic_restore_action": {
+      "options": {
+        "restore": "Restore diagnostic defaults on confirmation",
+        "already_default": "Already matches defaults; no diagnostic values will change"
+      }
+    },
     "diagnostic_preferences_effect": {
       "options": {
         "next_capture": "Apply to the next capture only"
@@ -320,17 +326,35 @@
             "name": "Diagnostics",
             "description": "Bounded, memory-only integration exchange trace. Budgets and auto-stop are independent: a full store keeps replacing its oldest operations until capture stops. Raw bytes are not a total RAM allowance.",
             "data": {
-              "diagnostic_operations": "Operation limit",
-              "diagnostic_events": "Event limit",
-              "diagnostic_raw_bytes": "Original raw-byte limit (bytes)",
-              "diagnostic_duration": "Auto-stop duration",
+              "diagnostic_operations__saved": "Operation limit",
+              "diagnostic_operations__matching": "Operation limit",
+              "diagnostic_operations__default": "Operation limit",
+              "diagnostic_events__saved": "Event limit",
+              "diagnostic_events__matching": "Event limit",
+              "diagnostic_events__default": "Event limit",
+              "diagnostic_raw_bytes__saved": "Original raw-byte limit (bytes)",
+              "diagnostic_raw_bytes__matching": "Original raw-byte limit (bytes)",
+              "diagnostic_raw_bytes__default": "Original raw-byte limit (bytes)",
+              "diagnostic_duration__saved": "Auto-stop duration",
+              "diagnostic_duration__matching": "Auto-stop duration",
+              "diagnostic_duration__default": "Auto-stop duration",
+              "restore_defaults": "Restore diagnostic defaults",
               "start_capture": "Start a new diagnostic capture and enable DEBUG"
             },
             "data_description": {
-              "diagnostic_operations": "1–1800 polls or control attempts, including the current operation. Default: 1800.",
-              "diagnostic_events": "1–18000 event records across retained operations. Default: 18000.",
-              "diagnostic_raw_bytes": "1–8388608 bytes (maximum 8 MiB). Default: 4194304 bytes (4 MiB). Enter an exact whole number of bytes.",
-              "diagnostic_duration": "A separate finite deadline for every new capture. Default: 6 hours.",
+              "diagnostic_operations__saved": "Saved: {diagnostic_operations_saved} · Default: {diagnostic_operations_default}. 1–1800 polls or control attempts.",
+              "diagnostic_operations__matching": "Saved: {diagnostic_operations_saved} — matches the default. 1–1800 polls or control attempts.",
+              "diagnostic_operations__default": "Using default: {diagnostic_operations_default} (no valid saved value). 1–1800 polls or control attempts.",
+              "diagnostic_events__saved": "Saved: {diagnostic_events_saved} · Default: {diagnostic_events_default}. 1–18000 event records.",
+              "diagnostic_events__matching": "Saved: {diagnostic_events_saved} — matches the default. 1–18000 event records.",
+              "diagnostic_events__default": "Using default: {diagnostic_events_default} (no valid saved value). 1–18000 event records.",
+              "diagnostic_raw_bytes__saved": "Saved: {diagnostic_raw_bytes_saved} · Default: {diagnostic_raw_bytes_default}. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_raw_bytes__matching": "Saved: {diagnostic_raw_bytes_saved} — matches the default. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_raw_bytes__default": "Using default: {diagnostic_raw_bytes_default} (no valid saved value). 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_duration__saved": "Saved: {diagnostic_duration_saved} · Default: {diagnostic_duration_default}. Separate finite deadline; values below are in minutes.",
+              "diagnostic_duration__matching": "Saved: {diagnostic_duration_saved} — matches the default. Separate finite deadline; values below are in minutes.",
+              "diagnostic_duration__default": "Using default: {diagnostic_duration_default} (no valid saved value). Separate finite deadline; values below are in minutes.",
+              "restore_defaults": "Overrides all four diagnostic inputs, even invalid edits. Next shows the defaults; only final confirmation saves them. Does not start capture unless Start is also selected.",
               "start_capture": "Starts only after final confirmation and replaces the previous trace. Leave unchecked to save preferences only. Trace may include original local addresses, MAC/device identifiers and bytes; review before sharing."
             }
           }
@@ -342,11 +366,16 @@
         "data": {
           "review_action": "Action on confirmation",
           "controls_change": "Remote controls",
-          "poll_interval": "Polling interval (seconds)",
-          "diagnostic_operations": "Operation limit",
-          "diagnostic_events": "Event limit",
-          "diagnostic_raw_bytes": "Original raw-byte limit (bytes)",
-          "diagnostic_duration": "Auto-stop duration (seconds)",
+          "poll_interval__changed": "Polling interval (seconds) — will change",
+          "diagnostic_operations__changed": "Operation limit — will change",
+          "diagnostic_operations__unchanged": "Operation limit — unchanged",
+          "diagnostic_events__changed": "Event limit — will change",
+          "diagnostic_events__unchanged": "Event limit — unchanged",
+          "diagnostic_raw_bytes__changed": "Original raw-byte limit (bytes) — will change",
+          "diagnostic_raw_bytes__unchanged": "Original raw-byte limit (bytes) — unchanged",
+          "diagnostic_duration__changed": "Auto-stop duration (seconds) — will change",
+          "diagnostic_duration__unchanged": "Auto-stop duration — unchanged",
+          "restore_action": "Diagnostic defaults",
           "estimated_seconds": "Approximate ordinary-poll history capacity (seconds)",
           "capture_preferences": "Effect on current capture",
           "capture_replacement": "New capture replaces previous evidence",

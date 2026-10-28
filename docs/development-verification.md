@@ -273,6 +273,18 @@ the native DEBUG menu state, and explicit start across a control-change reload.
 Capture settings/start/stop and downloads add no appliance traffic; an independently
 required reload still performs its ordinary setup query.
 
+For saved/default/restore changes, the native options consumer tests additionally
+exercise schema-advertised field names, saved/matching/fallback provenance and
+the opening baseline across edits/errors. Restore must pass native pre-handler
+validation even when diagnostic input has invalid type/range/duration; unrelated
+settings remain validated. Ordinary submission still rejects invalid limits.
+Verify the actual EN/RU forms on both supported frontends: malformed whole-number
+text, error redisplay, restore override, unchanged/default review, cancellation
+and separate start consent. A direct step-method test does not prove the HTTP
+validation path; HTTP tests alone do not prove browser editability or localization.
+No new traffic, runtime archive or capacity measurement is required for unchanged
+store/protocol code solely because the settings presentation changed.
+
 The scenario retains the previous-limit 720-poll/600-operation measurement for
 comparison. It also executes representative long-session cases: 960 real ordinary
 polls with four-hour 1200/12000/4 MiB settings, and 1440 with six-hour

@@ -145,7 +145,12 @@ class ExchangeTraceFixture:
         initial = await post(base, {"handler": entry.entry_id})
         _require(initial["type"] == "form" and initial["step_id"] == "init",
                  "Options did not open the settings form")
-        values = {"diagnostics": {**diagnostics, "start_capture": start}}
+        group = next(field for field in initial["data_schema"] if field["name"] == "diagnostics")
+        fields = {field["name"].partition("__")[0]: field["name"] for field in group["schema"]}
+        values = {"diagnostics": {
+            **group["default"],
+            **{fields[key]: value for key, value in diagnostics.items()}, "start_capture": start,
+        }}
         if controls is not None:
             values["enable_verified_controls"] = controls
         if poll_interval is not None:

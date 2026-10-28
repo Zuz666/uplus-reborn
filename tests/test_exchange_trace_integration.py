@@ -24,6 +24,7 @@ from custom_components.uplus_reborn.protocol import (
     UwtClient,
 )
 
+from .conftest import capture_options_input
 from .test_integration import _entry
 from .test_protocol import (
     _accept_control_initialization,
@@ -475,7 +476,9 @@ async def _save_capture(
     values = {"diagnostics": {**(diagnostics or {}), "start_capture": start}}
     if controls is not None:
         values["enable_verified_controls"] = controls
-    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], capture_options_input(result, values)
+    )
     return await hass.config_entries.options.async_configure(
         result["flow_id"], {}
     )

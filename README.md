@@ -548,10 +548,16 @@ Expanding or collapsing the group does not save settings or start/stop capture.
 
 Choose a separate auto-stop duration of **30 minutes**, **1 hour**, **2 hours**,
 **4 hours** or **6 hours** (new default). Explicit saved values are preserved.
-After **Next**, a read-only review shows only effective changes.
-If a new capture is selected, it shows all selected limits, the auto-stop duration
-and an **estimated trace depth in seconds**. Budget-only edits show their changes
-and that estimate without a replacement warning. All three budgets constrain the
+Field descriptions distinguish values saved when the dialog opened from current
+defaults, including absent/invalid preferences using defaults. They remain the
+opening baseline while editing, not a live change indicator. Diagnostic limits
+accept whole-number text; invalid edits are rejected unless explicitly replaced
+by **Restore diagnostic defaults**.
+
+After **Next**, a read-only review labels effective changes **will change**.
+If a new capture is selected, it also shows **unchanged** limits, the auto-stop
+duration and an **estimated trace depth in seconds**. Budget-only edits show
+their changes and that estimate without a replacement warning. All three budgets constrain the
 estimate; commands, unmatched reports, fragmentation or larger exchanges can
 shorten it. Defaults at a 15-second interval estimate about 27000 seconds of poll
 slots, independently of the 21600-second deadline. Disabled automatic polling
@@ -576,6 +582,17 @@ nothing. If a simultaneous control change requires reload, the new capture start
 on the resulting coordinator. An ordinary unchanged save shows no diagnostics
 warning; a control-consent change explicitly shows draft clearing and loaded-entry
 reload.
+
+**Restore diagnostic defaults** is a separate, initially unchecked one-shot
+checkbox inside Diagnostics. It overrides all four diagnostic inputs, even
+invalid edits, with the defaults above and the six-hour duration. Next shows all
+resulting values; already-matching values are labelled unchanged. Only final
+confirmation saves them. It does not reset polling or remote-control consent,
+start/stop capture, erase evidence, change DEBUG or resize an active capture.
+Select the separate start checkbox as well to replace the trace using the
+restored settings, with the normal replacement warning. Cancellation saves
+nothing; both checkboxes are unchecked on a fresh opening. Independently selected
+control changes still have their disclosed reload consequences.
 
 All editable integration settings are UI-only. There are no duplicate integration
 YAML options; existing YAML automations invoking integration actions are unchanged.

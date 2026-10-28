@@ -133,6 +133,12 @@
     }
   },
   "selector": {
+    "diagnostic_restore_action": {
+      "options": {
+        "restore": "Восстановить настройки диагностики после подтверждения",
+        "already_default": "Уже соответствуют значениям по умолчанию; диагностические значения не изменятся"
+      }
+    },
     "diagnostic_preferences_effect": {
       "options": {
         "next_capture": "Применить только к следующей записи"
@@ -320,17 +326,35 @@
             "name": "Диагностика",
             "description": "Ограниченная трасса обмена интеграции, только в памяти. Лимиты и автоостановка независимы: заполненное хранилище заменяет старейшие операции до остановки записи. Лимит исходных байтов не является лимитом всей оперативной памяти.",
             "data": {
-              "diagnostic_operations": "Лимит операций",
-              "diagnostic_events": "Лимит событий",
-              "diagnostic_raw_bytes": "Лимит исходных данных (байты)",
-              "diagnostic_duration": "Время до автоостановки",
+              "diagnostic_operations__saved": "Лимит операций",
+              "diagnostic_operations__matching": "Лимит операций",
+              "diagnostic_operations__default": "Лимит операций",
+              "diagnostic_events__saved": "Лимит событий",
+              "diagnostic_events__matching": "Лимит событий",
+              "diagnostic_events__default": "Лимит событий",
+              "diagnostic_raw_bytes__saved": "Лимит исходных данных (байты)",
+              "diagnostic_raw_bytes__matching": "Лимит исходных данных (байты)",
+              "diagnostic_raw_bytes__default": "Лимит исходных данных (байты)",
+              "diagnostic_duration__saved": "Время до автоостановки",
+              "diagnostic_duration__matching": "Время до автоостановки",
+              "diagnostic_duration__default": "Время до автоостановки",
+              "restore_defaults": "Восстановить настройки диагностики по умолчанию",
               "start_capture": "Начать новую диагностическую запись и включить DEBUG"
             },
             "data_description": {
-              "diagnostic_operations": "1–1800 опросов или попыток управления, включая текущую операцию. По умолчанию — 1800.",
-              "diagnostic_events": "1–18000 событий во всех сохранённых операциях. По умолчанию — 18000.",
-              "diagnostic_raw_bytes": "1–8388608 байт (максимум 8 МиБ). По умолчанию — 4194304 байта (4 МиБ). Введите точное целое число байтов.",
-              "diagnostic_duration": "Отдельный конечный срок для каждой новой записи. По умолчанию — 6 часов.",
+              "diagnostic_operations__saved": "Сохранено: {diagnostic_operations_saved} · По умолчанию: {diagnostic_operations_default}. 1–1800 опросов или попыток управления.",
+              "diagnostic_operations__matching": "Сохранено: {diagnostic_operations_saved} — соответствует значению по умолчанию. 1–1800 опросов или попыток управления.",
+              "diagnostic_operations__default": "Используется значение по умолчанию: {diagnostic_operations_default} (нет корректного сохранённого значения). 1–1800 опросов или попыток управления.",
+              "diagnostic_events__saved": "Сохранено: {diagnostic_events_saved} · По умолчанию: {diagnostic_events_default}. 1–18000 событий.",
+              "diagnostic_events__matching": "Сохранено: {diagnostic_events_saved} — соответствует значению по умолчанию. 1–18000 событий.",
+              "diagnostic_events__default": "Используется значение по умолчанию: {diagnostic_events_default} (нет корректного сохранённого значения). 1–18000 событий.",
+              "diagnostic_raw_bytes__saved": "Сохранено: {diagnostic_raw_bytes_saved} · По умолчанию: {diagnostic_raw_bytes_default}. 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
+              "diagnostic_raw_bytes__matching": "Сохранено: {diagnostic_raw_bytes_saved} — соответствует значению по умолчанию. 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
+              "diagnostic_raw_bytes__default": "Используется значение по умолчанию: {diagnostic_raw_bytes_default} (нет корректного сохранённого значения). 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
+              "diagnostic_duration__saved": "Сохранено: {diagnostic_duration_saved} · По умолчанию: {diagnostic_duration_default}. Отдельный конечный срок; значения ниже — в минутах.",
+              "diagnostic_duration__matching": "Сохранено: {diagnostic_duration_saved} — соответствует значению по умолчанию. Отдельный конечный срок; значения ниже — в минутах.",
+              "diagnostic_duration__default": "Используется значение по умолчанию: {diagnostic_duration_default} (нет корректного сохранённого значения). Отдельный конечный срок; значения ниже — в минутах.",
+              "restore_defaults": "Заменяет все четыре введённых значения, включая ошибочные. Далее будут показаны значения по умолчанию; они сохранятся только после подтверждения. Без отдельной галочки запуска запись не начнётся.",
               "start_capture": "Запуск произойдёт только после окончательного подтверждения и заменит прежнюю трассу. Не отмечайте для сохранения только параметров. Трасса может содержать исходные локальные адреса, MAC-адреса, идентификаторы и байты; проверьте перед передачей."
             }
           }
@@ -342,11 +366,16 @@
         "data": {
           "review_action": "Действие при подтверждении",
           "controls_change": "Дистанционные команды",
-          "poll_interval": "Интервал опроса (секунды)",
-          "diagnostic_operations": "Лимит операций",
-          "diagnostic_events": "Лимит событий",
-          "diagnostic_raw_bytes": "Лимит исходных данных (байты)",
-          "diagnostic_duration": "Время до автоостановки (секунды)",
+          "poll_interval__changed": "Интервал опроса (секунды) — будет изменено",
+          "diagnostic_operations__changed": "Лимит операций — будет изменено",
+          "diagnostic_operations__unchanged": "Лимит операций — без изменений",
+          "diagnostic_events__changed": "Лимит событий — будет изменено",
+          "diagnostic_events__unchanged": "Лимит событий — без изменений",
+          "diagnostic_raw_bytes__changed": "Лимит исходных данных (байты) — будет изменено",
+          "diagnostic_raw_bytes__unchanged": "Лимит исходных данных (байты) — без изменений",
+          "diagnostic_duration__changed": "Время до автоостановки (секунды) — будет изменено",
+          "diagnostic_duration__unchanged": "Время до автоостановки — без изменений",
+          "restore_action": "Настройки диагностики по умолчанию",
           "estimated_seconds": "Приблизительная ёмкость истории обычного опроса (секунды)",
           "capture_preferences": "Влияние на текущую запись",
           "capture_replacement": "Новая запись заменит прежние данные",
