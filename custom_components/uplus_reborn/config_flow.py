@@ -902,7 +902,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 ),
                 vol.Required(
                     "diagnostics", default=lambda: diagnostic_schema({})
-                ): section(diagnostic_schema),
+                ): section(diagnostic_schema, {"collapsed": True}),
             }
         )
         errors: dict[str, str] = {}

@@ -536,7 +536,9 @@ user names, hidden flags, and explicitly disabled entities are retained.
 
 #### Diagnostic capture preferences
 
-The **Diagnostics** group sets preferences for the next capture:
+The **Diagnostics** group starts collapsed whenever Integration settings is opened.
+Expand its heading to view the description and preferences for the next capture.
+Expanding or collapsing the group does not save settings or start/stop capture.
 
 | Resource | Default | Editable range |
 | --- | ---: | ---: |

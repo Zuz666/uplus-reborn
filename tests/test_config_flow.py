@@ -887,6 +887,7 @@ async def test_native_options_section_displays_saved_capture_preferences(
     group = next(
         field for field in result["data_schema"] if field["name"] == "diagnostics"
     )
+    assert group["expanded"] is False
     assert group["default"] == {**saved, "diagnostic_duration": "7200"}
     assert dict(entry.options) == saved
     hass.config_entries.options.async_abort(result["flow_id"])
