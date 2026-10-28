@@ -210,6 +210,13 @@ async def test_missing_runtime_is_not_a_success(
     assert info["entry_1_capture_started_at"] is None
     assert info["entry_1_capture_end_at"] is None
     assert info["entry_1_capture_remaining_seconds"] is None
+    for field in (
+        "stopped_at", "stop_reason", "debug_enabled", "first_retained_at",
+        "last_recorded_at", "partial_operations",
+    ):
+        assert info[f"entry_1_capture_{field}"] is None
+    for field in ("stage", "request_id", "session_id", "elapsed_ms"):
+        assert info[f"entry_1_last_failure_{field}"] is None
     for resource in ("operations", "events", "raw_bytes"):
         for field in ("limit", "retained", "free"):
             assert info[f"entry_1_capture_{resource}_{field}"] is None
@@ -324,14 +331,15 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
         UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
     ):
         await coordinator.async_refresh()
+        await coordinator.async_refresh()
     hass.config_entries.async_update_entry(
         entry,
         options={
             **entry.options,
-            "diagnostic_operations": 600,
-            "diagnostic_events": 12000,
+            "diagnostic_operations": 1800,
+            "diagnostic_events": 18000,
             "diagnostic_raw_bytes": 8388608,
-            "diagnostic_duration": 7200,
+            "diagnostic_duration": 21600,
         },
     )
     with patch.object(
@@ -351,6 +359,15 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
     assert active["entry_1_capture_raw_bytes_limit"] == 266
     assert active["entry_1_capture_raw_bytes_retained"] == 0
     assert active["entry_1_capture_raw_bytes_free"] == 266
+    assert active["entry_1_capture_first_retained_at"] is not None
+    assert active["entry_1_capture_last_recorded_at"] is not None
+    assert active["entry_1_capture_partial_operations"] == 0
+    for resource in ("operations", "events", "raw_bytes"):
+        assert active[f"entry_1_capture_evicted_operations_by_{resource}_limit"] == (
+            int(resource == "operations")
+        )
+        assert active[f"entry_1_capture_omitted_{resource}"] == int(resource == "operations")
+    assert active["entry_1_capture_omitted_metadata"] == 0
     for resource in ("operations", "events", "raw_bytes"):
         for field in ("limit", "retained", "free"):
             key = f"entry_1_capture_{resource}_{field}"
@@ -358,3 +375,25 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
     assert not any(isinstance(value, dict) for value in active.values())
 
 
+async def test_health_projects_known_failure_correlation_without_private_context(
+    hass: HomeAssistant,
+) -> None:
+    """Failure scalars remain useful without DEBUG, raw bytes or device identity."""
+    entry = _entry(hass)
+    coordinator = _coordinator(hass, entry)
+    error = CannotConnect(
+        PRIVATE_REASON, stage="response", session_id=47, elapsed_ms=1250.5
+    )
+    error.__cause__ = TimeoutError()
+    with patch.object(UwtClient, "read_state", AsyncMock(side_effect=error)):
+        await coordinator.async_refresh()
+    with patch("asyncio.open_connection", side_effect=AssertionError("network")):
+        info = await system_health_info(hass)
+    assert info["entry_1_last_failure_category"] == "timeout"
+    assert info["entry_1_last_failure_stage"] == "response"
+    assert isinstance(info["entry_1_last_failure_request_id"], int)
+    assert info["entry_1_last_failure_session_id"] == 47
+    assert info["entry_1_last_failure_elapsed_ms"] == 1250.5
+    serialized = json.dumps(info)
+    for private in (HOST, DEVICE_ID, PRIVATE_TITLE, PRIVATE_REASON, entry.entry_id):
+        assert private not in serialized

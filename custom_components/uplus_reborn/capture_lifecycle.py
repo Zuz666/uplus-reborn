@@ -66,6 +66,8 @@ class DiagnosticCapture:
         self.hass = coordinator.hass
         self.started_at: datetime | None = None
         self.end_at: datetime | None = None
+        self.stopped_at: datetime | None = None
+        self.stop_reason: str | None = None
         self._deadline: float | None = None
         self._cancel_timer: Callable[[], None] | None = None
         self._generation = 0
@@ -86,13 +88,15 @@ class DiagnosticCapture:
         generation = self._generation
         self.started_at = datetime.now(UTC)
         self.end_at = self.started_at + timedelta(seconds=preferences.duration)
+        self.stopped_at = None
+        self.stop_reason = None
         self._deadline = self.hass.loop.time() + preferences.duration
         self.coordinator.trace.start(preferences)
 
         @callback
         def expire(_now: datetime) -> None:
             if not self._closed and generation == self._generation:
-                self.stop()
+                self.stop(reason="deadline")
 
         self._cancel_timer = async_call_later(self.hass, preferences.duration, expire)
 
@@ -103,8 +107,12 @@ class DiagnosticCapture:
             self._cancel_timer = None
 
     @callback
-    def stop(self) -> None:
-        """Freeze data, allowing later downloads without changing the trace."""
+    def stop(self, *, reason: str | None = None) -> None:
+        """Freeze data and the first actual stop, without guessing its origin."""
+        if self._closed or not self.coordinator.trace.active:
+            return
+        self.stopped_at = datetime.now(UTC)
+        self.stop_reason = reason
         self._cancel_deadline()
         self._generation += 1
         self.coordinator.trace.stop()
@@ -119,6 +127,11 @@ class DiagnosticCapture:
         self._cancel_deadline()
         self._generation += 1
         self.coordinator.trace.close()
+        self.started_at = None
+        self.end_at = None
+        self.stopped_at = None
+        self.stop_reason = None
+        self._deadline = None
         entry_id = self.coordinator.config_entry.entry_id
         if self.manager.captures.get(entry_id) is self:
             self.manager.captures.pop(entry_id)
@@ -138,6 +151,9 @@ class DiagnosticCapture:
             **self.coordinator.trace.summary(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "end_at": self.end_at.isoformat() if self.end_at else None,
+            "stopped_at": self.stopped_at.isoformat() if self.stopped_at else None,
+            "stop_reason": self.stop_reason,
+            "debug_enabled": self.coordinator.logger.isEnabledFor(logging.DEBUG),
             "remaining_seconds": remaining,
             "snapshot_at": datetime.now(UTC).isoformat(),
         }
@@ -255,7 +271,7 @@ class CaptureManager:
         ):
             self._stop_revision += 1
             for capture in tuple(self.captures.values()):
-                capture.stop()
+                capture.stop(reason="debug_disabled")
         elif (
             (current.package_level != logging.NOTSET and current.package_debug)
             or (current.menu_level != logging.NOTSET and current.menu_debug)

@@ -63,6 +63,9 @@ def _assert_retention_matches_evidence(exported: dict) -> None:
     operations = exported["operations"]
     events = [event for operation in operations for event in operation["events"]]
     raw = [event for event in events if event["event"] == "raw"]
+    assert exported["partial_operations"] == sum(
+        operation["partial"] for operation in operations
+    )
     assert exported["retained"] == {
         "operations": len(operations),
         "events": len(events),
@@ -178,32 +181,152 @@ def test_selected_limits_bound_evidence_and_replacement_starts_empty(
 
 
 @pytest.mark.parametrize(
-    ("preferences", "larger_chunks", "retained"),
+    ("preferences", "trigger"),
+    [
+        (CapturePreferences(operations=2, events=99, raw_bytes=99), "operations"),
+        (CapturePreferences(operations=99, events=4, raw_bytes=99), "events"),
+        (CapturePreferences(operations=99, events=99, raw_bytes=6), "raw_bytes"),
+        (CapturePreferences(operations=2, events=4, raw_bytes=6), "operations"),
+    ],
+)
+def test_summary_reports_actual_eviction_trigger_after_capacity_is_freed(
+    preferences: CapturePreferences, trigger: str
+) -> None:
+    """Historical pressure remains visible after FIFO eviction frees capacity."""
+    trace = ExchangeTrace()
+    trace.start(preferences)
+    for number in range(3):
+        trace.begin("poll", number=number)
+        trace.raw("rx", b"abc", stage="read")
+        trace.event("accepted")
+        trace.finish("success")
+
+    summary = trace.summary()
+    assert summary["evicted_operations_by_limit"] == {
+        "operations": int(trigger == "operations"),
+        "events": int(trigger == "events"),
+        "raw_bytes": int(trigger == "raw_bytes"),
+    }
+    assert [op["context"]["number"] for op in trace.export()["operations"]] == [1, 2]
+
+
+def test_raw_pressure_counts_each_whole_operation_actually_evicted() -> None:
+    """A single large observation can evict several old operations for one limit."""
+    trace = ExchangeTrace()
+    trace.start(CapturePreferences(operations=99, events=99, raw_bytes=3))
+    for number in range(3):
+        trace.begin("old", number=number)
+        trace.raw("rx", b"x", stage="read")
+        trace.finish("success")
+    trace.begin("current")
+    trace.raw("rx", b"abc", stage="read")
+    trace.finish("success")
+    exported = trace.export()
+    assert [op["kind"] for op in exported["operations"]] == ["current"]
+    assert exported["evicted_operations_by_limit"] == {
+        "operations": 0, "events": 0, "raw_bytes": 3,
+    }
+    assert exported["omitted"] == {
+        "operations": 3, "events": 3, "raw_bytes": 3, "metadata": 0,
+    }
+    _assert_retention_matches_evidence(exported)
+
+
+def test_observation_range_is_recorded_time_not_download_time(freezer) -> None:
+    """Range follows retained FIFO evidence and freezes even during an operation."""
+    freezer.move_to("2026-10-29 12:00:00+00:00")
+    trace = ExchangeTrace()
+    trace.start(CapturePreferences(operations=1, events=1, raw_bytes=2))
+    empty = trace.summary()
+    assert empty["first_retained_at"] is None
+    assert empty["last_recorded_at"] is None
+    assert empty["partial_operations"] == 0
+    trace.begin("old")
+    freezer.tick(1)
+    trace.finish("success")
+    trace.begin("current")
+    assert trace.summary()["first_retained_at"] == "2026-10-29T12:00:01+00:00"
+    freezer.tick(1)
+    trace.raw("rx", b"abc", stage="read")
+    recorded = trace.summary()
+    assert recorded["last_recorded_at"] == "2026-10-29T12:00:02+00:00"
+    assert recorded["partial_operations"] == 1
+    freezer.tick(1)
+    trace.event("omitted")
+    assert trace.summary()["last_recorded_at"] == recorded["last_recorded_at"]
+    trace.stop()
+    stopped = trace.export()
+    freezer.tick(60)
+    trace.finish("late")
+    trace.stop()
+    assert trace.export() == stopped
+    assert stopped["partial_operations"] == 1
+    assert stopped["first_retained_at"] == stopped["operations"][0]["started_at"]
+    assert stopped["evicted_operations_by_limit"] == {
+        "operations": 1, "events": 0, "raw_bytes": 0,
+    }
+    trace.start(CapturePreferences())
+    restarted = trace.summary()
+    assert restarted["first_retained_at"] is None
+    assert restarted["last_recorded_at"] is None
+    assert restarted["partial_operations"] == 0
+    assert restarted["evicted_operations_by_limit"] == {
+        "operations": 0, "events": 0, "raw_bytes": 0,
+    }
+    trace.begin("discarded")
+    trace.close()
+    assert trace.summary()["first_retained_at"] is None
+    assert trace.summary()["last_recorded_at"] is None
+    assert trace.summary()["partial_operations"] == 0
+
+
+def test_partial_count_tracks_retained_operations_not_historical_gaps() -> None:
+    """A partial operation is counted once and disappears from the count on eviction."""
+    trace = ExchangeTrace()
+    trace.start(CapturePreferences(operations=1, events=1, raw_bytes=1))
+    trace.begin("partial")
+    trace.raw("rx", b"abc", stage="read")
+    trace.event("omitted")
+    trace.finish("success")
+    assert trace.summary()["partial_operations"] == 1
+    trace.begin("complete")
+    trace.finish("success")
+    assert trace.summary()["partial_operations"] == 0
+    assert trace.summary()["omitted"]["operations"] == 1
+    assert trace.summary()["omitted"]["raw_bytes"] == 3
+    _assert_retention_matches_evidence(trace.export())
+
+
+@pytest.mark.parametrize(
+    ("preferences", "larger_chunks", "chunk_size", "retained"),
     [
         (
             CapturePreferences(),
-            4,
-            {"operations": 300, "events": 6000, "raw_bytes": 4194304},
+            304,
+            2330,
+            {"operations": 1800, "events": 18000, "raw_bytes": 4194304},
         ),
         (
-            CapturePreferences(operations=600, events=12000, raw_bytes=8388608),
-            8,
-            {"operations": 600, "events": 12000, "raw_bytes": 8388608},
+            CapturePreferences(operations=1800, events=18000, raw_bytes=8388608),
+            608,
+            4660,
+            {"operations": 1800, "events": 18000, "raw_bytes": 8388608},
         ),
     ],
     ids=("defaults", "maximum"),
 )
 def test_all_three_limits_at_and_beyond_the_same_boundary(
-    preferences: CapturePreferences, larger_chunks: int, retained: dict[str, int]
+    preferences: CapturePreferences, larger_chunks: int, chunk_size: int,
+    retained: dict[str, int],
 ) -> None:
     """An added operation evicts the entire oldest one, not arbitrary events."""
     trace = ExchangeTrace()
     trace.start(preferences)
     for number in range(retained["operations"]):
         trace.begin("poll", number=number)
-        size = 13982 if number < larger_chunks else 13981
+        size = chunk_size + 1 if number < larger_chunks else chunk_size
         trace.raw("rx", b"x" * size, stage="read")
-        for _ in range(19):
+        for _ in range(9):
             trace.event("observation")
         trace.finish("success")
     boundary = trace.export()
@@ -217,8 +340,8 @@ def test_all_three_limits_at_and_beyond_the_same_boundary(
     _assert_retention_matches_evidence(boundary)
 
     trace.begin("control", number=retained["operations"])
-    trace.raw("tx", b"y" * 13982, stage="write_submitted")
-    for _ in range(19):
+    trace.raw("tx", b"y" * (chunk_size + 1), stage="write_submitted")
+    for _ in range(9):
         trace.event("observation")
     trace.finish("confirmed")
     exported = trace.export()
@@ -228,8 +351,8 @@ def test_all_three_limits_at_and_beyond_the_same_boundary(
     )
     assert exported["omitted"] == {
         "operations": 1,
-        "events": 20,
-        "raw_bytes": 13982,
+        "events": 10,
+        "raw_bytes": chunk_size + 1,
         "metadata": 0,
     }
     assert all(not operation["partial"] for operation in exported["operations"])
@@ -240,13 +363,13 @@ def test_operation_pressure_alone_preserves_newest_complete_operations() -> None
     """Small exchanges hit the operation bound without event or byte pressure."""
     trace = ExchangeTrace()
     trace.start(CapturePreferences())
-    for number in range(301):
+    for number in range(1801):
         trace.begin("poll", number=number)
         trace.raw("rx", bytes([number % 256]), stage="read")
         trace.finish("received")
     exported = trace.export()
-    assert [op["context"]["number"] for op in exported["operations"]] == list(range(1, 301))
-    assert exported["retained"] == {"operations": 300, "events": 300, "raw_bytes": 300}
+    assert [op["context"]["number"] for op in exported["operations"]] == list(range(1, 1801))
+    assert exported["retained"] == {"operations": 1800, "events": 1800, "raw_bytes": 1800}
     assert exported["omitted"] == {
         "operations": 1, "events": 1, "raw_bytes": 1, "metadata": 0,
     }
@@ -264,12 +387,12 @@ def test_event_pressure_evicts_oldest_operation_before_current_events() -> None:
     trace.event("second")
     trace.finish("success")
     trace.begin("current")
-    for index in range(5999):
+    for index in range(17999):
         trace.event("observed", index=index)
     trace.finish("success")
     exported = trace.export()
     assert [operation["kind"] for operation in exported["operations"]] == ["current"]
-    assert exported["retained"]["events"] == 5999
+    assert exported["retained"]["events"] == 17999
     assert exported["omitted"]["operations"] == 1
     assert exported["omitted"]["events"] == 2
     assert not exported["operations"][0]["partial"]
@@ -314,7 +437,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     assert len(payload) == 4194321
     trace.raw("rx", payload, stage="read")
     trace.raw("rx", b"missing", stage="read")
-    for _ in range(5998):
+    for _ in range(17998):
         trace.event("confirmation_pending")
     trace.event("not_retained")
     trace.raw("rx", b"end", stage="read")
@@ -322,7 +445,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     exported = trace.export()
     assert exported["retained"] == {
         "operations": 1,
-        "events": 6000,
+        "events": 18000,
         "raw_bytes": 4194304,
     }
     operation = exported["operations"][0]
@@ -353,7 +476,7 @@ def test_event_limit_also_accounts_for_unretained_raw_chunk() -> None:
     trace = ExchangeTrace()
     trace.start(CapturePreferences())
     trace.begin("poll")
-    for _ in range(6000):
+    for _ in range(18000):
         trace.event("observed")
     trace.raw("rx", b"unretained", stage="read")
     trace.finish("success")
@@ -627,7 +750,11 @@ def test_active_replacement_and_summary_preserve_honest_partial_coverage() -> No
     trace.finish("unknown", cause="timeout")
     trace.stop()
     summary = trace.summary()
-    assert set(summary) == {"capture_state", "limits", "retained", "omitted"}
+    assert set(summary) == {
+        "capture_state", "limits", "retained", "omitted",
+        "first_retained_at", "last_recorded_at", "partial_operations",
+        "evicted_operations_by_limit",
+    }
     assert summary["capture_state"] == "stopped"
     assert summary["limits"] == {"operations": 1, "events": 2, "raw_bytes": 1}
     assert summary["retained"] == {"operations": 1, "events": 1, "raw_bytes": 1}
@@ -656,11 +783,11 @@ def test_active_replacement_and_summary_preserve_honest_partial_coverage() -> No
     [
         (
             "diagnostic_operations",
-            CapturePreferences(operations=300, events=25, raw_bytes=800, duration=1800),
+            CapturePreferences(operations=1800, events=25, raw_bytes=800, duration=1800),
         ),
         (
             "diagnostic_events",
-            CapturePreferences(operations=7, events=6000, raw_bytes=800, duration=1800),
+            CapturePreferences(operations=7, events=18000, raw_bytes=800, duration=1800),
         ),
         (
             "diagnostic_raw_bytes",
@@ -668,7 +795,7 @@ def test_active_replacement_and_summary_preserve_honest_partial_coverage() -> No
         ),
         (
             "diagnostic_duration",
-            CapturePreferences(operations=7, events=25, raw_bytes=800, duration=3600),
+            CapturePreferences(operations=7, events=25, raw_bytes=800, duration=21600),
         ),
     ],
 )
@@ -706,17 +833,17 @@ def test_invalid_persisted_preference_defaults_independently(
         ),
         (
             {
-                "diagnostic_operations": 600,
-                "diagnostic_events": 12000,
+                "diagnostic_operations": 1800,
+                "diagnostic_events": 18000,
                 "diagnostic_raw_bytes": 8388608,
                 "diagnostic_duration": 1800,
             },
-            CapturePreferences(operations=600, events=12000, raw_bytes=8388608, duration=1800),
+            CapturePreferences(operations=1800, events=18000, raw_bytes=8388608, duration=1800),
         ),
         (
             {
-                "diagnostic_operations": 601,
-                "diagnostic_events": 12001,
+                "diagnostic_operations": 1801,
+                "diagnostic_events": 18001,
                 "diagnostic_raw_bytes": 8388609,
                 "diagnostic_duration": 1801,
             },
@@ -734,9 +861,9 @@ def test_persisted_preferences_enforce_inclusive_finite_bounds(
 @pytest.mark.parametrize(
     ("preferences", "interval", "seconds"),
     [
-        (CapturePreferences(), 15, 4500),
-        (CapturePreferences(), 30, 9000),
-        (CapturePreferences(duration=1800), 15, 4500),
+        (CapturePreferences(), 15, 27000),
+        (CapturePreferences(), 30, 54000),
+        (CapturePreferences(duration=1800), 15, 27000),
         (CapturePreferences(operations=3), 15, 45),
         (CapturePreferences(events=39), 15, 45),
         (CapturePreferences(raw_bytes=1063), 15, 45),
@@ -753,8 +880,8 @@ def test_estimated_depth_counts_complete_reference_polls_not_capture_duration(
 
 
 @pytest.mark.parametrize("values", [
-    {"operations": 0}, {"operations": 601}, {"operations": True},
-    {"events": 0}, {"events": 12001}, {"raw_bytes": 0},
+    {"operations": 0}, {"operations": 1801}, {"operations": True},
+    {"events": 0}, {"events": 18001}, {"raw_bytes": 0},
     {"raw_bytes": 8388609}, {"duration": 0}, {"duration": 1800.0},
 ])
 def test_capture_preferences_cannot_create_an_unbounded_store(values: dict) -> None:

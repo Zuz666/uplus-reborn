@@ -48,11 +48,15 @@ _REQUEST_IDS = count(1)
 
 @dataclass(frozen=True, slots=True)
 class ClassifiedError:
-    """One bounded, identifier-free failure record."""
+    """One bounded failure record with local operation/session correlations."""
 
     at: datetime
     cause: str
     context: tuple[tuple[str, int], ...] = ()
+    stage: str | None = None
+    request_id: int | None = None
+    session_id: int | None = None
+    elapsed_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +138,9 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             **self.trace.summary(),
             "started_at": None,
             "end_at": None,
+            "stopped_at": None,
+            "stop_reason": None,
+            "debug_enabled": _LOGGER.isEnabledFor(logging.DEBUG),
             "remaining_seconds": None,
             "snapshot_at": datetime.now(UTC).isoformat(),
         }
@@ -218,6 +225,10 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             datetime.now(UTC),
             cause,
             error.context if isinstance(error, ProtocolError) else (),
+            stage=getattr(error, "stage", None),
+            request_id=request,
+            session_id=getattr(error, "session_id", None),
+            elapsed_ms=getattr(error, "elapsed_ms", None),
         )
         self._read_available = False
         _LOGGER.debug(
@@ -227,6 +238,17 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             self._last_success,
         )
         return cause
+
+    def _failure_message(self, message: str) -> str:
+        """Enrich DUC's existing suppressed ERROR, never log a parallel failure."""
+        error = self._last_error
+        assert error is not None
+        details = [error.cause]
+        for key in ("stage", "request_id", "session_id", "elapsed_ms"):
+            value = getattr(error, key)
+            if value is not None:
+                details.append(f"{key}={value}")
+        return f"{message} ({'; '.join(details)})"
 
     @property
     def device_id(self) -> str:
@@ -379,7 +401,7 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                 except ProtocolError as error:
                     outcome, cause = "failed", self._record_failure(error, request)
                     raise UpdateFailed(
-                        f"Unable to read appliance state ({cause})"
+                        self._failure_message("Unable to read appliance state")
                     ) from None
                 except asyncio.CancelledError:
                     cause = "cancelled"
@@ -489,7 +511,9 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                     if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
                         self._record_failure(error, request)
                         self.async_set_update_error(
-                            UpdateFailed(f"Authoritative state unavailable ({cause})")
+                            UpdateFailed(
+                                self._failure_message("Authoritative state unavailable")
+                            )
                         )
                     raise
                 self._latest_command = CommandOutcome(

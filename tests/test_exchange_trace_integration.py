@@ -238,9 +238,16 @@ async def test_native_capture_start_and_stop_mid_poll_are_partial_not_poll_failu
             await _level(hass, "debug")
             active = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
             assert active["operations"][-1]["partial"]
+            assert active["partial_operations"] == 1
             await _level(hass, "info")
             stopped = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
             assert stopped["operations"][-1]["partial"]
+            status = coordinator.capture_status
+            assert stopped["partial_operations"] == 1
+            assert status["stop_reason"] == "debug_disabled"
+            assert status["stopped_at"] is not None
+            assert status["debug_enabled"] is False
+            assert stopped["last_recorded_at"] == active["last_recorded_at"]
         finally:
             release.set()
             await asyncio.wait_for(refresh, 2)
@@ -390,7 +397,7 @@ async def test_setup_and_reload_do_not_resume_capture_under_existing_debug(
             assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.parametrize("duration", [1800, 3600, 7200])
+@pytest.mark.parametrize("duration", [1800, 3600, 7200, 14400, 21600])
 async def test_native_capture_deadline_freezes_evidence_without_disabling_user_debug(
     hass: HomeAssistant, standby_snapshot: DeviceSnapshot,
     caplog: pytest.LogCaptureFixture, freezer, duration: int,
@@ -409,6 +416,12 @@ async def test_native_capture_deadline_freezes_evidence_without_disabling_user_d
         assert await hass.config_entries.async_setup(entry.entry_id)
         try:
             await _level(hass, "debug")
+            active_status = entry.runtime_data.capture_status
+            assert active_status["stopped_at"] is None
+            assert active_status["stop_reason"] is None
+            assert active_status["debug_enabled"] is True
+            assert active_status["first_retained_at"] is None
+            assert active_status["last_recorded_at"] is None
             with pytest.raises(UnsafeState):
                 await entry.runtime_data.async_start_program("upper")
             freezer.tick(timedelta(seconds=duration - 1))
@@ -423,7 +436,30 @@ async def test_native_capture_deadline_freezes_evidence_without_disabling_user_d
             assert frozen["operations"][0]["result"]["cause"] == "program_not_staged"
             assert entry.runtime_data.capture_status["remaining_seconds"] == 0
             assert logging.getLogger(LOGGER).isEnabledFor(logging.DEBUG)
+            status = entry.runtime_data.capture_status
+            assert status["stopped_at"] is not None
+            assert status["stopped_at"] != status["end_at"]
+            assert status["stop_reason"] == "deadline"
+            assert status["debug_enabled"] is True
+            assert status["first_retained_at"] == frozen["operations"][0]["started_at"]
+            assert status["last_recorded_at"] == frozen["operations"][0]["finished_at"]
             await _level(hass, "debug")
+            assert not entry.runtime_data.trace.active
+            freezer.tick(timedelta(seconds=10))
+            entry.runtime_data.capture.stop()
+            await _level(hass, "info")
+            repeated = entry.runtime_data.capture_status
+            assert repeated["stopped_at"] == status["stopped_at"]
+            assert repeated["stop_reason"] == "deadline"
+            assert repeated["debug_enabled"] is False
+            await _level(hass, "debug")
+            replacement = entry.runtime_data.capture_status
+            assert replacement["stopped_at"] is None
+            assert replacement["stop_reason"] is None
+            assert replacement["first_retained_at"] is None
+            assert replacement["last_recorded_at"] is None
+            await _level(hass, "info")
+            frozen = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
             assert not entry.runtime_data.trace.active
             assert (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"] == frozen
         finally:
@@ -483,11 +519,18 @@ async def test_options_captures_isolate_deadlines_and_restore_only_owned_logging
             assert not first.runtime_data.trace.active
             assert second.runtime_data.trace.active
             assert logging.getLogger(LOGGER).isEnabledFor(logging.DEBUG)
+            first_stop = first.runtime_data.capture_status
+            assert first_stop["stop_reason"] == "deadline"
+            assert first_stop["debug_enabled"] is True
             freezer.tick(timedelta(seconds=1800))
             async_fire_time_changed(hass)
             await hass.async_block_till_done()
             assert not second.runtime_data.trace.active
             assert not logging.getLogger(LOGGER).isEnabledFor(logging.DEBUG)
+            assert first.runtime_data.capture_status["stopped_at"] == first_stop["stopped_at"]
+            assert first.runtime_data.capture_status["stop_reason"] == "deadline"
+            assert second.runtime_data.capture_status["stop_reason"] == "deadline"
+            assert second.runtime_data.capture_status["debug_enabled"] is False
         finally:
             await _level(hass, "info")
             for entry in entries:
@@ -792,6 +835,8 @@ async def test_native_notset_stops_capture_when_debug_is_inherited_from_root(
             await hass.async_block_till_done()
             assert logging.getLogger(LOGGER).isEnabledFor(logging.DEBUG)
             assert not entry.runtime_data.trace.active
+            assert entry.runtime_data.capture_status["stop_reason"] == "debug_disabled"
+            assert entry.runtime_data.capture_status["debug_enabled"] is True
             await hass.services.async_call(
                 "logger", "set_level",
                 {LOGGER: "debug", native_logger: "debug"}, blocking=True,
@@ -848,3 +893,56 @@ async def test_disabling_entry_during_checked_reload_returns_truthful_start_erro
             finally:
                 release.set()
                 await asyncio.gather(save, *([disable] if disable is not None else []))
+
+
+async def test_stale_deadline_callbacks_cannot_rewrite_replaced_or_closed_capture(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot,
+    caplog: pytest.LogCaptureFixture, freezer,
+) -> None:
+    """Even a delivered cancelled callback cannot stop a replacement or keep an archive."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    assert await async_setup_component(hass, "logger", {})
+    await _level(hass, "info")
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(entry, pref_disable_polling=True)
+    with patch.object(UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    coordinator = entry.runtime_data
+    try:
+        with patch(
+            "custom_components.uplus_reborn.capture_lifecycle.async_call_later",
+            return_value=lambda: None,
+        ) as timer:
+            await _save_capture(hass, entry)
+            old_expiry = timer.call_args.args[2]
+            freezer.tick(timedelta(seconds=30))
+            await _save_capture(hass, entry)
+            replacement_expiry = timer.call_args.args[2]
+            replaced = coordinator.capture_status
+            old_expiry(None)
+            assert coordinator.trace.active
+            assert coordinator.capture_status["started_at"] == replaced["started_at"]
+            assert coordinator.capture_status["stopped_at"] is None
+            assert coordinator.capture_status["stop_reason"] is None
+            await _level(hass, "info")
+            stopped = coordinator.capture_status
+            freezer.tick(timedelta(seconds=30))
+            replacement_expiry(None)
+            assert coordinator.capture_status["stopped_at"] == stopped["stopped_at"]
+            assert coordinator.capture_status["stop_reason"] == "debug_disabled"
+            assert await hass.config_entries.async_unload(entry.entry_id)
+            old_expiry(None)
+            replacement_expiry(None)
+            closed = coordinator.capture_status
+            assert closed["capture_state"] == "closed"
+            for key in (
+                "started_at", "end_at", "stopped_at", "stop_reason",
+                "remaining_seconds", "first_retained_at", "last_recorded_at",
+            ):
+                assert closed[key] is None
+            assert coordinator.trace.export()["operations"] == []
+    finally:
+        await _level(hass, "info")
+        if coordinator.trace.summary()["capture_state"] != "closed":
+            assert await hass.config_entries.async_unload(entry.entry_id)

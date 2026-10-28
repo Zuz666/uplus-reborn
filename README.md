@@ -542,19 +542,27 @@ Expanding or collapsing the group does not save settings or start/stop capture.
 
 | Resource | Default | Editable range |
 | --- | ---: | ---: |
-| Operations, including the current one | 300 | 1–600 |
-| Event records across operations | 6000 | 1–12000 |
+| Operations, including the current one | 1800 | 1–1800 |
+| Event records across operations | 18000 | 1–18000 |
 | Original raw bytes | 4 MiB (4194304 bytes) | 1–8388608 bytes (8 MiB) |
 
-Choose a separate auto-stop duration of **30 minutes**, **1 hour** (default) or
-**2 hours**. After **Next**, a read-only review shows only effective changes.
+Choose a separate auto-stop duration of **30 minutes**, **1 hour**, **2 hours**,
+**4 hours** or **6 hours** (new default). Explicit saved values are preserved.
+After **Next**, a read-only review shows only effective changes.
 If a new capture is selected, it shows all selected limits, the auto-stop duration
 and an **estimated trace depth in seconds**. Budget-only edits show their changes
 and that estimate without a replacement warning. All three budgets constrain the
 estimate; commands, unmatched reports, fragmentation or larger exchanges can
-shorten it. Defaults at a 15-second interval estimate about 4500 seconds of poll
-slots, not a guaranteed history or the stop deadline. Disabled automatic polling
-gives an estimate of 0.
+shorten it. Defaults at a 15-second interval estimate about 27000 seconds of poll
+slots, independently of the 21600-second deadline. Disabled automatic polling
+gives an estimate of 0, not a forecast for command-only traffic.
+
+For a four-hour investigation, 1200 operations / 12000 events / 4 MiB leave
+ordinary-poll headroom above 960 polls; six-hour defaults leave headroom above
+1440. These are suggested combinations, not profiles or automatic budget coupling.
+When start is selected, a short non-blocking warning appears if enabled-poll
+reference capacity is shorter than the chosen duration. No warning guarantees
+complete history: actual commands, fragmentation and additional reports cost more.
 
 Saving with **Start a new diagnostic capture and enable DEBUG** unchecked only
 saves preferences. It does not stop, reset or resize an active capture, change
@@ -945,8 +953,10 @@ or an alternative source of authoritative state.
 
 Capture is memory-only, with independently bounded metadata and all three
 [selected per-entry budgets](#diagnostic-capture-preferences) enforced together.
-Defaults retain at least 240 consecutive ordinary polls with headroom for controls
-in the synthetic reference scenario; bursts can shorten the retained history.
+New defaults accommodate 1440 ordinary polls plus control evidence in the
+representative synthetic scenario; a four-hour 1200/12000/4 MiB combination
+accommodates 960. These accelerated capacity observations are not real elapsed
+hours or guarantees under arbitrary traffic.
 Raw bytes are hex-encoded on download: the raw-byte limit is **not a total RAM
 or JSON limit**. Oldest operations are evicted first. A full buffer continues
 recording until stopped; partial captures, omitted events/bytes and overflow are
@@ -959,6 +969,11 @@ stop for every entry, including captures started from options. Downloads are
 nondestructive and network-free. A fresh start replaces the old trace even
 without an intervening appliance event; start/stop mid-operation is explicitly
 partial. Unchecking the options checkbox is not a stop action.
+Diagnostics distinguish the planned deadline from actual stop time/reason.
+Retained-range endpoints describe recorded observations, not uninterrupted
+coverage; partial operations, omissions and actual eviction-trigger counters
+explain loss. Repeated stop/download preserves this metadata. DEBUG state is
+reported separately: frozen evidence can coexist with independently enabled DEBUG.
 
 Entries have separate stores, limits and deadlines despite sharing native DEBUG.
 One expiry does not stop the others. The last active capture restores logging
@@ -981,6 +996,10 @@ U+ Reborn's native System Health section. It reports the integration version,
 configured/loaded/available entry counts, local polling mode, and anonymous
 per-entry lifecycle, configured polling interval, freshness, age of the last
 successful observation, and last sanitized failure category.
+Known transport failure stage (`connect` or `response`), independently assigned
+request/session correlations and measured duration survive in health/diagnostics
+and ordinary error reporting even without DEBUG. Missing evidence stays absent;
+this does not add requests, alter timeouts or retry commands.
 
 Capture fields show a colored Unicode/text status marker, snapshot timestamp,
 end timestamp and remaining seconds **when the report was collected**, plus each

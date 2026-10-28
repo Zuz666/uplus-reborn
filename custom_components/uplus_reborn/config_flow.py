@@ -1029,6 +1029,15 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             )
         if self._pending_start_capture:
             information("capture_replacement", "replace", "diagnostic_capture_replacement")
+            if (
+                not self.config_entry.pref_disable_polling
+                and estimated_trace_depth(preferences, interval_after) < preferences.duration
+            ):
+                information(
+                    "capture_capacity_warning",
+                    "shorter_than_duration",
+                    "diagnostic_capture_capacity_warning",
+                )
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema(review),

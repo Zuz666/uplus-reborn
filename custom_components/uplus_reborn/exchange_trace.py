@@ -165,6 +165,9 @@ class ExchangeTrace:
         self._raw_bytes = 0
         self._operation_id = 0
         self._omitted = self._empty_omissions()
+        self._evicted_by_limit = {"operations": 0, "events": 0, "raw_bytes": 0}
+        self._partial_operations = 0
+        self._last_recorded_at: str | None = None
 
     @staticmethod
     def _empty_omissions() -> dict[str, int]:
@@ -191,7 +194,7 @@ class ExchangeTrace:
             return
         self._enabled = False
         if self._current is not None:
-            self._current.partial = True
+            self._mark_partial(self._current)
             self._current.gaps.add("capture_stopped")
             self._current = None
 
@@ -200,7 +203,7 @@ class ExchangeTrace:
         if self._closed:
             return
         if self._current is not None:
-            self._current.partial = True
+            self._mark_partial(self._current)
             self._current.gaps.add("operation_replaced")
         self._scope_kind = kind[:_STRING_LIMIT]
         self._scope_context = dict(islice(context.items(), _COLLECTION_LIMIT))
@@ -220,13 +223,14 @@ class ExchangeTrace:
         self._operation_id = _add(self._operation_id)
         operation = _Operation(self._scope_kind or "", context, self._operation_id)
         if partial_start:
-            operation.partial = True
+            self._mark_partial(operation)
             operation.gaps.add("capture_started_mid_operation")
         self._current = operation
         self._operations.append(operation)
+        self._last_recorded_at = operation.started_at
         self._metadata_gap(operation, self._scope_omitted)
         while len(self._operations) > self._preferences.operations:
-            self._evict_oldest()
+            self._evict_oldest("operations")
 
     def finish(self, outcome: str, *, cause: str | None = None) -> None:
         """Record the real result only if this scope is still being captured."""
@@ -240,6 +244,7 @@ class ExchangeTrace:
             }
             self._metadata_gap(self._current, normalizer.omitted)
             self._current.finished_at = datetime.now(UTC).isoformat()
+            self._last_recorded_at = self._current.finished_at
             self._current.elapsed_ms = self._elapsed(self._current)
         self._current = None
         self._scope_kind = None
@@ -263,6 +268,7 @@ class ExchangeTrace:
         self._metadata_gap(operation, normalizer.omitted)
         operation.events.append(record)
         self._events += 1
+        self._last_recorded_at = datetime.now(UTC).isoformat()
 
     def raw(self, direction: str, data: bytes, *, stage: str) -> None:
         """Retain an exact chunk prefix; explicitly account for every lost byte."""
@@ -275,7 +281,7 @@ class ExchangeTrace:
             return
         while (
             self._raw_bytes + size > self._preferences.raw_bytes
-            and self._evict_oldest()
+            and self._evict_oldest("raw_bytes")
         ):
             pass
         retained = min(size, self._preferences.raw_bytes - self._raw_bytes)
@@ -297,14 +303,15 @@ class ExchangeTrace:
         operation.raw_bytes += retained
         self._raw_bytes += retained
         self._events += 1
+        self._last_recorded_at = datetime.now(UTC).isoformat()
 
     def _event_slot(self, operation: _Operation) -> bool:
         operation.sequence = _add(operation.sequence)
-        while self._events >= self._preferences.events and self._evict_oldest():
+        while self._events >= self._preferences.events and self._evict_oldest("events"):
             pass
         if self._events < self._preferences.events:
             return True
-        operation.partial = True
+        self._mark_partial(operation)
         operation.gaps.add("event_limit")
         operation.omitted_events = _add(operation.omitted_events)
         self._omitted["events"] = _add(self._omitted["events"])
@@ -314,22 +321,29 @@ class ExchangeTrace:
         self, operation: _Operation, size: int, *, reason: str = "raw_byte_limit"
     ) -> None:
         if size:
-            operation.partial = True
+            self._mark_partial(operation)
             operation.gaps.add(reason)
             operation.omitted_bytes = _add(operation.omitted_bytes, size)
             self._omitted["raw_bytes"] = _add(self._omitted["raw_bytes"], size)
 
     def _metadata_gap(self, operation: _Operation, size: int) -> None:
         if size:
-            operation.partial = True
+            self._mark_partial(operation)
             operation.gaps.add("metadata_limit")
             operation.omitted_metadata = _add(operation.omitted_metadata, size)
             self._omitted["metadata"] = _add(self._omitted["metadata"], size)
 
-    def _evict_oldest(self) -> bool:
+    def _mark_partial(self, operation: _Operation) -> None:
+        if not operation.partial:
+            operation.partial = True
+            self._partial_operations += 1
+
+    def _evict_oldest(self, trigger: str) -> bool:
         if not self._operations or self._operations[0] is self._current:
             return False
         operation = self._operations.popleft()
+        self._partial_operations -= int(operation.partial)
+        self._evicted_by_limit[trigger] = _add(self._evicted_by_limit[trigger])
         self._events -= len(operation.events)
         self._raw_bytes -= operation.raw_bytes
         self._omitted["operations"] = _add(self._omitted["operations"])
@@ -350,6 +364,9 @@ class ExchangeTrace:
         self._raw_bytes = 0
         self._operation_id = 0
         self._omitted = self._empty_omissions()
+        self._evicted_by_limit = {"operations": 0, "events": 0, "raw_bytes": 0}
+        self._partial_operations = 0
+        self._last_recorded_at = None
 
     def close(self) -> None:
         """Permanently discard this entry's evidence, including late callbacks."""
@@ -377,6 +394,12 @@ class ExchangeTrace:
                 "raw_bytes": self._raw_bytes,
             },
             "omitted": dict(self._omitted),
+            "evicted_operations_by_limit": dict(self._evicted_by_limit),
+            "first_retained_at": (
+                self._operations[0].started_at if self._operations else None
+            ),
+            "last_recorded_at": self._last_recorded_at,
+            "partial_operations": self._partial_operations,
         }
 
     def export(self) -> dict[str, object]:

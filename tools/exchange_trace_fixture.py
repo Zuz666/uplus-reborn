@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 DOMAIN = "uplus_reborn"
 SECOND_DEVICE_ID = "020000000002"
 HEADER = struct.Struct(">II32s32sII")
-LIMITS = {"operations": 300, "events": 6000, "raw_bytes": 4194304}
+LIMITS = {"operations": 1800, "events": 18000, "raw_bytes": 4194304}
 SYNTHETIC_SECRET = "fixture-unrelated-cloud-secret-not-for-trace"
 
 
@@ -30,7 +30,7 @@ def _require(condition: bool, message: str) -> None:
 
 
 class ExchangeTraceFixture:
-    """Use real authenticated Core APIs and query-only synthetic appliance peers."""
+    """Use actual Core APIs with bounded, explicitly armed synthetic Start cases."""
 
     def __init__(self, hass: Any, entry: Any, peer: Any, result: dict[str, Any]) -> None:
         self.hass = hass
@@ -129,7 +129,7 @@ class ExchangeTraceFixture:
 
     async def _options(
         self, entry: Any, diagnostics: dict[str, Any], *, start: bool,
-        controls: bool | None = None,
+        controls: bool | None = None, poll_interval: int | None = None,
     ) -> dict[str, Any]:
         """Drive the native authenticated options HTTP flow, not its callback."""
         _require(self.session is not None, "Options HTTP session was not opened")
@@ -148,6 +148,8 @@ class ExchangeTraceFixture:
         values = {"diagnostics": {**diagnostics, "start_capture": start}}
         if controls is not None:
             values["enable_verified_controls"] = controls
+        if poll_interval is not None:
+            values["poll_interval"] = poll_interval
         confirmed = await post(f"{base}/{initial['flow_id']}", values)
         _require(confirmed["type"] == "form" and confirmed["step_id"] == "confirm"
                  and not confirmed.get("errors"), "Options did not reach confirmation")
@@ -250,6 +252,10 @@ class ExchangeTraceFixture:
     async def _history_depth(self) -> None:
         """Exercise capacity with accelerated real polls, not an elapsed-hour claim."""
         self.peer.query_response_writer = None
+        await self._options(self.entry, {
+            "diagnostic_operations": 300, "diagnostic_events": 6000,
+            "diagnostic_duration": "3600",
+        }, start=True)
         for number in range(1, 361):
             await self._poll()
             if number == 240:
@@ -330,6 +336,89 @@ class ExchangeTraceFixture:
             "additional_export_json_peak_bytes": peak,
         }
 
+    async def _long_history(self) -> dict[str, Any]:
+        """Retain initial real Start proof plus accelerated long-session traffic."""
+        from homeassistant.helpers import device_registry as dr
+
+        devices = dr.async_entries_for_config_entry(dr.async_get(self.hass), self.entry.entry_id)
+        _require(len(devices) == 1, "Long capture must own exactly one synthetic device")
+        initial_words = self.peer.words
+        cases = {}
+        for name, hours, polls, operations, events, raw_bytes in (
+            ("4", 4, 960, 1200, 12000, 4194304),
+            ("6", 6, 1440, 1800, 18000, 4194304),
+            ("6_low_raw", 6, 1440, 1800, 18000, 385000),
+        ):
+            self.peer.query_response_writer = None
+            self.peer.words = initial_words
+            await self._poll()
+            if name == "6_low_raw":
+                self.hass.config_entries.async_update_entry(
+                    self.entry, pref_disable_polling=False,
+                )
+            review = await self._options(self.entry, {
+                "diagnostic_operations": operations, "diagnostic_events": events,
+                "diagnostic_raw_bytes": raw_bytes, "diagnostic_duration": str(hours * 3600),
+            }, start=True, controls=True, poll_interval=15 if name == "6_low_raw" else None)
+            if name == "6_low_raw":
+                fields = {field["name"]: field for field in review["data_schema"]}
+                _require(fields["estimated_seconds"]["default"] == "21705"
+                         and "capture_capacity_warning" not in fields,
+                         "Adequate reference unexpectedly warned about capacity")
+                # Keep the fixture accelerated and deterministic, not wall-clock polling.
+                self.entry.runtime_data.update_interval = None
+            before = len(self.peer.profile_controls)
+            self.peer.allow_profile_start = True
+            await self.hass.services.async_call(
+                DOMAIN, "start_program",
+                {"device_id": devices[0].id, "drum": "upper", "program": "spin", "spin_rpm": 400},
+                blocking=True,
+            )
+            _require(len(self.peer.profile_controls) == before + 1
+                     and self.entry.runtime_data.health.latest_command.outcome == "confirmed",
+                     "Long capture Start was not independently sent once and confirmed")
+            for ordinal in range(1, polls + 1):
+                self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
+                await self._poll()
+            await self._level("WARNING")
+            data = await self._download(self.entry, f"long_history_{name}h")
+            trace = data["exchange_trace"]
+            retained = trace["operations"]
+            if name == "6_low_raw":
+                _require(retained and all(op["kind"] == "poll" for op in retained)
+                         and trace["omitted"]["operations"] > 0
+                         and trace["evicted_operations_by_limit"]["raw_bytes"] > 0
+                         and trace["evicted_operations_by_limit"]["operations"] == 0
+                         and trace["evicted_operations_by_limit"]["events"] == 0
+                         and trace["first_retained_at"] == retained[0]["started_at"]
+                         and trace["last_recorded_at"] == retained[-1]["finished_at"],
+                         "Low raw capacity did not honestly evict Start despite adequate reference")
+            else:
+                _require(len(retained) == polls + 1
+                         and retained[0]["kind"] == "upper_start"
+                         and retained[0]["result"]["outcome"] == "confirmed"
+                         and all(op["result"]["outcome"] == "received" for op in retained[1:])
+                         and not any(trace["omitted"].values())
+                         and not any(op["partial"] for op in retained),
+                         "Long-session history lost Start, ordinary polls or complete evidence")
+            cases[name] = {
+                "status": "passed", "ordinary_polls": polls, "control_operations": 1,
+                "extra_report_polls": polls // 37, "retained": trace["retained"],
+                "omitted": trace["omitted"], "first_operation": retained[0]["kind"],
+                "reference_warning_absent": "capture_capacity_warning" not in {
+                    field["name"] for field in review["data_schema"]
+                },
+                "evicted_operations_by_limit": trace["evicted_operations_by_limit"],
+                "first_retained_at": trace["first_retained_at"],
+                "last_recorded_at": trace["last_recorded_at"],
+                "capture": data["diagnostic_capture"],
+                "memory": self._store_measurement(self.entry.runtime_data.trace),
+                "elapsed_hours_verified": False,
+            }
+        self.peer.words = initial_words
+        self.peer.query_response_writer = None
+        return cases
+
     async def _measure_retention(self) -> dict[str, Any]:
         """Measure actual polls and label direct store stress as synthetic policy IO."""
         from custom_components.uplus_reborn.capture_options import CapturePreferences
@@ -348,27 +437,30 @@ class ExchangeTraceFixture:
         retained = ordinary["720"]["retained"]
         _require(retained == {"operations": 600, "events": 6000, "raw_bytes": 159600}
                  and ordinary["720"]["omitted"]["operations"] == 120,
-                 "Maximum-budget ordinary history lost depth or oldest-first eviction")
+                 "Previous-limit ordinary history lost depth or oldest-first eviction")
         await self._level("WARNING")
         stress = ExchangeTrace()
-        maximum = CapturePreferences(600, 12000, 8388608, 7200)
-        stress.start(maximum)
-        remaining = 8388608
-        for operation in range(600):
-            stress.begin("synthetic_metadata_pressure", sample=operation)
-            for event in range(19):
-                stress.event("metadata", values=[
-                    f"{operation}:{event}:{column}:" + "x" * 500
-                    for column in range(16)
-                ])
-            size = min(remaining, 13982)
-            stress.raw("rx", bytes([operation % 256]) * size, stage="synthetic")
-            remaining -= size
-            stress.finish("synthetic")
-        _require(stress.summary()["retained"] == {
-            "operations": 600, "events": 12000, "raw_bytes": 8388608,
-        }, "Combined maximum stress failed to fill all selected budgets")
-        metadata = self._store_measurement(stress)
+        stress_results = {}
+        for operation_limit, event_limit in ((600, 12000), (1800, 18000)):
+            maximum = CapturePreferences(operation_limit, event_limit, 8388608, 21600)
+            stress.start(maximum)
+            remaining = 8388608
+            chunk_size = (remaining + operation_limit - 1) // operation_limit
+            for operation in range(operation_limit):
+                stress.begin("synthetic_metadata_pressure", sample=operation)
+                for event in range(event_limit // operation_limit - 1):
+                    stress.event("metadata", values=[
+                        f"{operation}:{event}:{column}:" + "x" * 500
+                        for column in range(16)
+                    ])
+                size = min(remaining, chunk_size)
+                stress.raw("rx", bytes([operation % 256]) * size, stage="synthetic")
+                remaining -= size
+                stress.finish("synthetic")
+            _require(stress.summary()["retained"] == {
+                "operations": operation_limit, "events": event_limit, "raw_bytes": 8388608,
+            }, "Combined maximum stress failed to fill all selected budgets")
+            stress_results[str(operation_limit)] = self._store_measurement(stress)
         stress.start(maximum)
         stress.begin("synthetic_oversized")
         stress.raw("rx", b"x" * (9 * 1024 * 1024), stage="synthetic")
@@ -384,9 +476,11 @@ class ExchangeTraceFixture:
             "method": "deduplicated reachable sys.getsizeof graph, not RSS/exclusive ownership; additional tracemalloc export/compact UTF-8 JSON peak after retained store exists",
             "raw_limit_is_total_ram_limit": False,
             "ordinary_real_tcp_polls": ordinary,
-            "nominal_retained_poll_slots_seconds": 9000,
+            "previous_limit_nominal_retained_poll_slots_seconds": 9000,
             "elapsed_hour_verified": False,
-            "synthetic_store_stress_combined_maxima": metadata,
+            "synthetic_store_stress_previous_maxima": stress_results["600"],
+            "synthetic_store_stress_combined_maxima": stress_results["1800"],
+            "long_session_history": await self._long_history(),
             "synthetic_store_stress_oversized": oversized,
         }
 
@@ -483,9 +577,11 @@ class ExchangeTraceFixture:
             self.receipt["isolated_entries"] = {"status": "passed", "second_trace": second}
             old_coordinator = self.entry.runtime_data
             _require(await self.hass.config_entries.async_unload(self.entry.entry_id), "Trace entry unload failed")
+            cached_runtime_retained = getattr(self.entry, "runtime_data", None) is old_coordinator
+            if not cached_runtime_retained:
+                self.expected_limits.pop(self.entry.entry_id, None)
             unloaded = await self._download(self.entry, "unloaded_entry")
             self._empty(unloaded["exchange_trace"], "closed")
-            cached_runtime_retained = getattr(self.entry, "runtime_data", None) is old_coordinator
             if cached_runtime_retained:
                 _require(unloaded["device"]["state"] == first_data["device"]["state"],
                          "Trace unload changed attached cached non-trace state")
@@ -497,6 +593,7 @@ class ExchangeTraceFixture:
             await self._level("WARNING")
             await self._level("DEBUG")
             self._empty((await self._download(self.entry, "unloaded_logger_change"))["exchange_trace"], "closed")
+            self.expected_limits.pop(self.entry.entry_id, None)
             _require(await self.hass.config_entries.async_setup(self.entry.entry_id), "Trace entry reload failed")
             await self.hass.async_block_till_done()
             reloaded = (await self._download(self.entry, "reloaded_entry"))["exchange_trace"]

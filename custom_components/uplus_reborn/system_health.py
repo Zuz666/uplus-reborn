@@ -1,4 +1,4 @@
-"""Expose cached, identifier-free information through native System Health."""
+"""Expose cached, device-identifier-free information through native System Health."""
 
 from __future__ import annotations
 
@@ -81,6 +81,11 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
             if health is not None and health.last_error is not None
             else None
         )
+        failure = health.last_error if health is not None else None
+        for key in ("stage", "request_id", "session_id", "elapsed_ms"):
+            info[f"{prefix}_last_failure_{key}"] = (
+                getattr(failure, key, None) if failure is not None else None
+            )
         capture = (
             coordinator.capture_status
             if loaded and not disabled and coordinator is not None
@@ -109,9 +114,13 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
             capture["snapshot_at"] if capture is not None
             else dt_util.utcnow().isoformat()
         )
-        for key in ("started_at", "end_at", "remaining_seconds"):
+        for key in (
+            "started_at", "end_at", "stopped_at", "stop_reason",
+            "remaining_seconds", "debug_enabled", "first_retained_at",
+            "last_recorded_at", "partial_operations",
+        ):
             info[f"{prefix}_capture_{key}"] = (
-                capture[key] if capture is not None else None
+                capture.get(key) if capture is not None else None
             )
         for resource in ("operations", "events", "raw_bytes"):
             limit = capture["limits"][resource] if capture is not None else None
@@ -121,5 +130,13 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
             info[f"{prefix}_capture_{resource}_free"] = (
                 max(0, limit - retained)
                 if limit is not None and retained is not None else None
+            )
+            info[f"{prefix}_capture_evicted_operations_by_{resource}_limit"] = (
+                capture.get("evicted_operations_by_limit", {}).get(resource)
+                if capture is not None else None
+            )
+        for resource in ("operations", "events", "raw_bytes", "metadata"):
+            info[f"{prefix}_capture_omitted_{resource}"] = (
+                capture["omitted"][resource] if capture is not None else None
             )
     return info

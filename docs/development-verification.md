@@ -237,7 +237,7 @@ uv run --no-project --python 3.13 python tools/delivery.py docker --target test 
 uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- python3 tools/ha_smoke.py --bundle build/delivery-candidate --output build/exchange-trace-current.json --scenario exchange-trace
 ```
 
-The synthetic peer remains query-only. It splits an unmatched state frame across
+The initial parity peer is query-only. It splits an unmatched state frame across
 writes, then coalesces the remainder with the correlated reply. Acceptance compares
 downloaded TX/RX bytes with the actual peer buffers, verifies the observed read
 boundaries and unmatched/correlated chronology, and retains authoritative standby
@@ -247,8 +247,9 @@ frozen repeated downloads, no appliance network activity during downloads,
 capture-OFF activity without retained events, and OFF/ON reset with no intervening
 appliance event.
 
-The same scenario then executes 360 accelerated ordinary polls: a native download
-after 240 must retain all 240, and after 360 it must retain exactly the newest 300
+The same scenario selects explicit legacy 300-operation/6000-event preferences
+and executes 360 accelerated ordinary polls: a native download after 240 retains
+all 240, and after 360 it retains exactly the newest 300
 with the oldest 60 reported as omitted. The receipt records events/raw bytes,
 export size and nominal 15-second poll-slot coverage, not an elapsed-hour claim.
 Autonomous polling is disabled on the disposable fixture entries from creation;
@@ -272,14 +273,28 @@ the native DEBUG menu state, and explicit start across a control-change reload.
 Capture settings/start/stop and downloads add no appliance traffic; an independently
 required reload still performs its ordinary setup query.
 
-The scenario additionally measures maximum-budget retention with 720 real ordinary
-polls (600 newest polls retained), using saved 600-operation/12000-event/8 MiB limits.
-It separately labels direct store-policy stress: all three maxima filled with
-metadata-heavy observations, and one 9 MiB raw observation truncated to the 8 MiB
-budget with explicit loss. These synthetic pressure records are not wire frames
-or a physical appliance scenario. Receipts distinguish raw payload, Python raw
-objects, metadata/container graph, compact JSON and additional export/JSON peak.
-Native browser inspection remains separate from this HTTP/WebSocket fixture.
+The scenario retains the previous-limit 720-poll/600-operation measurement for
+comparison. It also executes representative long-session cases: 960 real ordinary
+polls with four-hour 1200/12000/4 MiB settings, and 1440 with six-hour
+1800/18000/4 MiB defaults. Each includes one explicitly armed exact synthetic
+Spin/400 Start through the registered native action and occasional fragmented,
+additional reports. Initial Start proof and every poll must remain complete.
+These are accelerated capacity observations, not elapsed hours or physical
+appliance actions; isolated peers reject unarmed or unsupported commands.
+A separate six-hour case keeps 1800/18000 but selects 385000 raw bytes: native
+review with polling enabled estimates 21705 seconds without a capacity warning,
+yet actual traffic must evict the initial Start under raw pressure. It records loss and
+the retained observation range. Autonomous scheduling is suppressed for this
+accelerated fixture after selecting the 15-second reference; no wall-clock
+six-hour claim or absence-of-warning completeness claim follows.
+
+Separate direct store-policy stress fills both previous and new simultaneous
+operation/event/raw maxima with metadata-heavy observations, and truncates a
+9 MiB observation to the 8 MiB raw maximum with explicit loss. These records are
+not wire frames. Receipts distinguish raw payload, Python raw objects,
+metadata/container graph, compact JSON and additional export/JSON peak. New-limit
+acceptance requires those measurements; old measurements do not establish new
+costs. Native browser inspection remains separate from this HTTP/WebSocket fixture.
 
 The scenario is public software/transport evidence, not physical appliance or
 browser acceptance. Perform independent source review first and run the exact
@@ -297,11 +312,11 @@ callbacks in place of these native requests.
 
 **Default retention sizing: measured coordinator/TCP sample from #80.**
 
-Default budgets remain 300 operations, 6000 events and 4,194,304 raw bytes; they
-are now configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
-The original default-budget measurements below are retained as historical
-reference, not a claim that the new maxima cost the same RAM. Operation capacity
-leaves room beyond 240 ordinary polls; all three budgets apply together, including
+New/default budgets are 1800 operations, 18000 events and 4,194,304 raw bytes,
+with a separate six-hour finite deadline; explicitly saved values remain.
+They are configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
+The original 300/6000 sample below is historical reference, not current defaults
+or evidence of new maximum RAM costs. All three budgets apply together, including
 to one oversized operation. Raw-byte capacity alone never defines total memory.
 
 The following run used Linux Docker, CPython 3.13.15 and actual coordinator

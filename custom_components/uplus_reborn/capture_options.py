@@ -11,20 +11,20 @@ CONF_DIAGNOSTIC_EVENTS: Final = "diagnostic_events"
 CONF_DIAGNOSTIC_RAW_BYTES: Final = "diagnostic_raw_bytes"
 CONF_DIAGNOSTIC_DURATION: Final = "diagnostic_duration"
 
-MAX_OPERATIONS: Final = 600
-MAX_EVENTS: Final = 12000
+MAX_OPERATIONS: Final = 1800
+MAX_EVENTS: Final = 18000
 MAX_RAW_BYTES: Final = 8388608
-CAPTURE_DURATIONS: Final = (1800, 3600, 7200)
+CAPTURE_DURATIONS: Final = (1800, 3600, 7200, 14400, 21600)
 
 
 @dataclass(frozen=True, slots=True)
 class CapturePreferences:
     """Budgets for one new capture, not mutable settings for a running trace."""
 
-    operations: int = 300
-    events: int = 6000
+    operations: int = 1800
+    events: int = 18000
     raw_bytes: int = 4194304
-    duration: int = 3600
+    duration: int = 21600
 
     def __post_init__(self) -> None:
         """Keep every store caller inside finite positive budgets."""
