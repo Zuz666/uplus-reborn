@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -463,6 +462,7 @@ async def test_options_flow_requires_explicit_control_opt_in(
             "diagnostic_events": 6000,
             "diagnostic_raw_bytes": 4194304,
             "diagnostic_duration": "3600",
+            "start_capture": False,
         },
     }
 
@@ -472,7 +472,6 @@ async def test_options_flow_requires_explicit_control_opt_in(
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "confirm"
-    assert result["data_schema"]({}) == {"start_capture": False}
     assert not entry.options
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -763,7 +762,7 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_POLL_INTERVAL: interval, "diagnostics": budgets},
+        {CONF_POLL_INTERVAL: interval, "diagnostics": {**budgets, "start_capture": True}},
     )
     assert result["step_id"] == "confirm"
     selected = {
@@ -773,16 +772,13 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
         "diagnostic_duration": "3600",
         **budgets,
     }
-    placeholders = result["description_placeholders"]
-    assert int(placeholders["operations"]) == selected["diagnostic_operations"]
-    assert int(placeholders["events"]) == selected["diagnostic_events"]
-    assert int(placeholders["raw_bytes"]) == selected["diagnostic_raw_bytes"]
-    assert int(placeholders["duration"]) == int(selected["diagnostic_duration"])
-    assert Decimal(placeholders["raw_mib"]) * 1048576 == (
-        selected["diagnostic_raw_bytes"]
-    )
-    assert int(placeholders["estimated_seconds"]) == expected_depth
-    assert result["data_schema"]({}) == {"start_capture": False}
+    displayed = result["data_schema"]({})
+    for key, value in selected.items():
+        assert int(displayed[key].split(" → ")[-1]) == int(value)
+    assert int(displayed["estimated_seconds"]) == expected_depth
+    assert displayed["review_action"] == "start"
+    assert displayed["capture_replacement"] == "replace"
+    assert "start_capture" not in displayed
     assert not entry.options
     hass.config_entries.options.async_abort(result["flow_id"])
     assert not entry.options
@@ -857,6 +853,7 @@ async def test_capture_defaults_normalize_persisted_options_without_applying(
         "diagnostic_events": 37,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": "3600",
+        "start_capture": False,
     }
     hass.config_entries.options.async_abort(result["flow_id"])
     assert dict(entry.options) == saved
@@ -888,7 +885,9 @@ async def test_native_options_section_displays_saved_capture_preferences(
         field for field in result["data_schema"] if field["name"] == "diagnostics"
     )
     assert group["expanded"] is False
-    assert group["default"] == {**saved, "diagnostic_duration": "7200"}
+    assert group["default"] == {
+        **saved, "diagnostic_duration": "7200", "start_capture": False
+    }
     assert dict(entry.options) == saved
     hass.config_entries.options.async_abort(result["flow_id"])
 
@@ -906,16 +905,20 @@ async def test_explicit_capture_start_failure_keeps_confirmation_open(
     )
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"start_capture": True}
+        result["flow_id"], {"diagnostics": {"start_capture": True}}
     )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "confirm"
     assert result["errors"] == {"base": "capture_start_failed"}
-    assert result["data_schema"]({}) == {"start_capture": False}
+    assert result["data_schema"]({})["review_action"] == "start"
     assert entry.disabled_by is ConfigEntryDisabler.USER
     assert not entry.options
+    hass.config_entries.options.async_abort(result["flow_id"])
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["data_schema"]({})["diagnostics"]["start_capture"] is False
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert "start_capture" not in entry.options
@@ -946,11 +949,12 @@ async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
                 "diagnostic_events": 20,
                 "diagnostic_raw_bytes": 532,
                 "diagnostic_duration": "1800",
+                "start_capture": True,
             }},
         )
         assert not coordinator.trace.active
         result = await hass.config_entries.options.async_configure(
-            result["flow_id"], {"start_capture": True}
+            result["flow_id"], {}
         )
         assert result["type"] is FlowResultType.CREATE_ENTRY
         assert coordinator.trace.active
@@ -964,7 +968,11 @@ async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {"diagnostics": {"diagnostic_operations": 3}}
         )
-        assert result["data_schema"]({}) == {"start_capture": False}
+        displayed = result["data_schema"]({})
+        assert displayed["diagnostic_operations"] == "2 → 3"
+        assert displayed["review_action"] == "preferences"
+        assert displayed["capture_preferences"] == "next_capture"
+        assert "capture_replacement" not in displayed
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {}
         )
@@ -979,4 +987,88 @@ async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
         assert "start_capture" not in entry.options
         reload_entry.assert_not_awaited()
         read_state.assert_awaited_once()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({}, {"review_action": "no_changes"}),
+        (
+            {CONF_POLL_INTERVAL: 20},
+            {"review_action": "preferences", "poll_interval": "15 → 20"},
+        ),
+        (
+            {"diagnostics": {"diagnostic_operations": 2}},
+            {
+                "review_action": "preferences",
+                "diagnostic_operations": "300 → 2",
+                "estimated_seconds": "30",
+                "capture_preferences": "next_capture",
+            },
+        ),
+        (
+            {CONF_ENABLE_VERIFIED_CONTROLS: True},
+            {"review_action": "preferences", "controls_change": "enable"},
+        ),
+        (
+            {
+                CONF_ENABLE_VERIFIED_CONTROLS: True,
+                "diagnostics": {"diagnostic_operations": 2},
+            },
+            {
+                "review_action": "preferences",
+                "controls_change": "enable",
+                "diagnostic_operations": "300 → 2",
+                "estimated_seconds": "30",
+            },
+        ),
+        (
+            {"diagnostics": {"start_capture": True}},
+            {
+                "review_action": "start",
+                "diagnostic_operations": "300",
+                "diagnostic_events": "6000",
+                "diagnostic_raw_bytes": "4194304",
+                "diagnostic_duration": "3600",
+                "estimated_seconds": "4500",
+                "capture_replacement": "replace",
+            },
+        ),
+    ],
+)
+async def test_review_contains_only_effective_changes_and_selected_actions(
+    hass: HomeAssistant, values: dict, expected: dict,
+) -> None:
+    """Default normalization is not a change; starting is an explicit separate action."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["data_schema"]({}) == expected
+    assert not entry.options
+    hass.config_entries.options.async_abort(result["flow_id"])
+    assert not entry.options
+
+
+async def test_review_cannot_inject_start_consent(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot,
+) -> None:
+    """The final informational form cannot acquire a start choice absent on Next."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    with patch.object(UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+        with pytest.raises(InvalidData):
+            await hass.config_entries.options.async_configure(
+                result["flow_id"], {"start_capture": True}
+            )
+        assert not entry.runtime_data.trace.active
+        assert not entry.options
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert not entry.runtime_data.trace.active
+        assert "start_capture" not in entry.options
         assert await hass.config_entries.async_unload(entry.entry_id)

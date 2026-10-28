@@ -547,20 +547,27 @@ Expanding or collapsing the group does not save settings or start/stop capture.
 | Original raw bytes | 4 MiB (4194304 bytes) | 1–8388608 bytes (8 MiB) |
 
 Choose a separate auto-stop duration of **30 minutes**, **1 hour** (default) or
-**2 hours**. The confirmation shows exact limits and an **estimated trace depth
-in seconds** for ordinary polls at the configured interval. All three budgets
-constrain that estimate; commands, unmatched reports, fragmentation or larger
-exchanges can shorten it. Defaults at a 15-second interval estimate about
-4500 seconds of poll slots, not a guaranteed history or the stop deadline.
-When automatic polling is disabled, the confirmation does not imply active polls.
+**2 hours**. After **Next**, a read-only review shows only effective changes.
+If a new capture is selected, it shows all selected limits, the auto-stop duration
+and an **estimated trace depth in seconds**. Budget-only edits show their changes
+and that estimate without a replacement warning. All three budgets constrain the
+estimate; commands, unmatched reports, fragmentation or larger exchanges can
+shorten it. Defaults at a 15-second interval estimate about 4500 seconds of poll
+slots, not a guaranteed history or the stop deadline. Disabled automatic polling
+gives an estimate of 0.
 
 Saving with **Start a new diagnostic capture and enable DEBUG** unchecked only
 saves preferences. It does not stop, reset or resize an active capture, change
 its deadline, enable DEBUG or reload the entry for capture-only edits. The
-checkbox is an unchecked, one-time action on each new confirmation, not a saved
-on/off switch. Checking it starts a fresh capture for this entry and replaces
-previous evidence; download useful evidence first. If a simultaneous control
-change requires reload, the new capture starts on the resulting coordinator.
+checkbox is inside the collapsed **Diagnostics** group, unchecked on each fresh
+settings flow, and is not a saved on/off switch. **Next** only prepares the review:
+checking the box starts nothing until final confirmation. The review warns about
+replacing previous evidence whenever start is selected, even without changed
+limits; download useful evidence first. Closing before final confirmation applies
+nothing. If a simultaneous control change requires reload, the new capture starts
+on the resulting coordinator. An ordinary unchanged save shows no diagnostics
+warning; a control-consent change explicitly shows draft clearing and loaded-entry
+reload.
 
 All editable integration settings are UI-only. There are no duplicate integration
 YAML options; existing YAML automations invoking integration actions are unchanged.
@@ -920,8 +927,9 @@ for private diagnosis; the integration never uploads them automatically.
 
 ### Temporary exchange tracing
 
-Start from **Integration settings → Diagnostics**, confirm the selected budgets
-and check **Start a new diagnostic capture and enable DEBUG** on the final step.
+Start from **Integration settings → Diagnostics**, check **Start a new diagnostic
+capture and enable DEBUG**, then review the selected budgets and replacement
+warning after **Next**. Final confirmation starts the capture.
 Alternatively, the integration entry's native **Enable debug logging** action
 starts finite captures on loaded entries using each entry's saved preferences.
 Capture observes only existing polls and control attempts; it opens no extra

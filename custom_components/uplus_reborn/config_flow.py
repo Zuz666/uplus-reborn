@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any, override
 
 import voluptuous as vol
@@ -839,6 +838,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
         super().__init__()
         self._connection_status: str | None = None
         self._pending_options: dict[str, Any] | None = None
+        self._pending_start_capture = False
 
     @override
     async def async_step_init(
@@ -880,6 +880,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Optional("start_capture", default=False): bool,
             }
         )
         schema = vol.Schema(
@@ -927,6 +928,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                         diagnostics[CONF_DIAGNOSTIC_DURATION]
                     )
                     options.pop("connection_status", None)
+                    self._pending_start_capture = diagnostics.pop("start_capture")
                     options.update(diagnostics)
                     self._pending_options = options
                     return await self.async_step_confirm()
@@ -949,7 +951,7 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_init()
         errors: dict[str, str] = {}
         if user_input is not None:
-            start = user_input.get("start_capture") is True
+            start = self._pending_start_capture
             coordinator = getattr(self.config_entry, "runtime_data", None)
             if (
                 self._pending_options[CONF_ENABLE_VERIFIED_CONTROLS]
@@ -969,25 +971,67 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                     title="", data=dict(self.config_entry.options)
                 )
         preferences = capture_preferences(self._pending_options)
-        interval = configured_poll_interval(self._pending_options)
-        polling_disabled = self.config_entry.pref_disable_polling
+        previous = capture_preferences(self.config_entry.options)
+        review: dict[Any, Any] = {}
+
+        def information(name: str, value: str, translation_key: str | None = None) -> None:
+            config = selector.SelectSelectorConfig(options=[value], read_only=True)
+            if translation_key:
+                config["translation_key"] = translation_key
+            review[vol.Optional(name, default=value)] = selector.SelectSelector(config)
+
+        controls_before = self.config_entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
+        controls_after = self._pending_options[CONF_ENABLE_VERIFIED_CONTROLS]
+        interval_before = configured_poll_interval(self.config_entry.options)
+        interval_after = configured_poll_interval(self._pending_options)
+        budget_changes = {
+            name: (getattr(previous, attribute), getattr(preferences, attribute))
+            for name, attribute in (
+                (CONF_DIAGNOSTIC_OPERATIONS, "operations"),
+                (CONF_DIAGNOSTIC_EVENTS, "events"),
+                (CONF_DIAGNOSTIC_RAW_BYTES, "raw_bytes"),
+                (CONF_DIAGNOSTIC_DURATION, "duration"),
+            )
+        }
+        diagnostics_changed = any(before != after for before, after in budget_changes.values())
+        changed = (
+            controls_before != controls_after or interval_before != interval_after
+            or diagnostics_changed
+        )
+        information(
+            "review_action",
+            "start" if self._pending_start_capture else "preferences" if changed else "no_changes",
+            "diagnostic_review_action",
+        )
+        if controls_before != controls_after:
+            information(
+                "controls_change", "enable" if controls_after else "disable",
+                "diagnostic_control_change",
+            )
+        if interval_before != interval_after:
+            information(CONF_POLL_INTERVAL, f"{interval_before} → {interval_after}")
+        for name, (before, after) in budget_changes.items():
+            if before != after or self._pending_start_capture:
+                information(name, f"{before} → {after}" if before != after else str(after))
+        if diagnostics_changed or self._pending_start_capture:
+            information(
+                "estimated_seconds",
+                str(0 if self.config_entry.pref_disable_polling
+                    else estimated_trace_depth(preferences, interval_after)),
+            )
+        if (
+            diagnostics_changed
+            and not self._pending_start_capture
+            and controls_before == controls_after
+        ):
+            information(
+                "capture_preferences", "next_capture", "diagnostic_preferences_effect"
+            )
+        if self._pending_start_capture:
+            information("capture_replacement", "replace", "diagnostic_capture_replacement")
         return self.async_show_form(
             step_id="confirm",
-            data_schema=vol.Schema(
-                {vol.Optional("start_capture", default=False): bool}
-            ),
+            data_schema=vol.Schema(review),
             errors=errors,
             last_step=True,
-            description_placeholders={
-                "operations": str(preferences.operations),
-                "events": str(preferences.events),
-                "raw_bytes": str(preferences.raw_bytes),
-                "raw_mib": str(Decimal(preferences.raw_bytes) / Decimal(1048576)),
-                "duration": str(preferences.duration),
-                "estimated_seconds": str(
-                    0 if polling_disabled
-                    else estimated_trace_depth(preferences, interval)
-                ),
-                "poll_interval": "—" if polling_disabled else str(interval),
-            },
         )

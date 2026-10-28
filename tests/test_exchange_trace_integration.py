@@ -436,12 +436,12 @@ async def _save_capture(
     diagnostics: dict | None = None, controls: bool | None = None,
 ) -> dict:
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    values = {"diagnostics": diagnostics or {}}
+    values = {"diagnostics": {**(diagnostics or {}), "start_capture": start}}
     if controls is not None:
         values["enable_verified_controls"] = controls
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     return await hass.config_entries.options.async_configure(
-        result["flow_id"], {"start_capture": start}
+        result["flow_id"], {}
     )
 
 

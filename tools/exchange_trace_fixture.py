@@ -145,13 +145,13 @@ class ExchangeTraceFixture:
         initial = await post(base, {"handler": entry.entry_id})
         _require(initial["type"] == "form" and initial["step_id"] == "init",
                  "Options did not open the settings form")
-        values = {"diagnostics": diagnostics}
+        values = {"diagnostics": {**diagnostics, "start_capture": start}}
         if controls is not None:
             values["enable_verified_controls"] = controls
         confirmed = await post(f"{base}/{initial['flow_id']}", values)
         _require(confirmed["type"] == "form" and confirmed["step_id"] == "confirm"
                  and not confirmed.get("errors"), "Options did not reach confirmation")
-        saved = await post(f"{base}/{initial['flow_id']}", {"start_capture": start})
+        saved = await post(f"{base}/{initial['flow_id']}", {})
         _require(saved["type"] == "create_entry", "Native options did not save/start")
         await self.hass.async_block_till_done()
         _require("start_capture" not in entry.options, "Start consent was persisted")

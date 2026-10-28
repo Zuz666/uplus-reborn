@@ -133,6 +133,29 @@
     }
   },
   "selector": {
+    "diagnostic_preferences_effect": {
+      "options": {
+        "next_capture": "Apply to the next capture only"
+      }
+    },
+    "diagnostic_review_action": {
+      "options": {
+        "no_changes": "No settings changes; no capture will start",
+        "preferences": "Save selected settings without starting a new capture",
+        "start": "Start a new diagnostic capture after confirmation"
+      }
+    },
+    "diagnostic_control_change": {
+      "options": {
+        "enable": "Enable remote controls",
+        "disable": "Disable remote controls"
+      }
+    },
+    "diagnostic_capture_replacement": {
+      "options": {
+        "replace": "Previous trace will be deleted; DEBUG will be enabled"
+      }
+    },
     "diagnostic_duration": {
       "options": {
         "1800": "30 minutes",
@@ -270,7 +293,7 @@
   "options": {
     "error": {
       "invalid_options": "Choose whole-number budgets within the displayed bounds, a supported auto-stop duration and a polling interval from 15 to 30 seconds.",
-      "capture_start_failed": "The new diagnostic capture could not be started. Preferences may have been saved; no successful start is confirmed. Check that this integration entry is enabled and loaded, then try again."
+      "capture_start_failed": "The new diagnostic capture could not be started. Preferences may have been saved; successful recording is not confirmed. Close and reopen settings to change the start choice. Check that this entry is enabled and loaded before requesting another start."
     },
     "step": {
       "init": {
@@ -293,25 +316,39 @@
               "diagnostic_operations": "Operation limit",
               "diagnostic_events": "Event limit",
               "diagnostic_raw_bytes": "Original raw-byte limit (bytes)",
-              "diagnostic_duration": "Auto-stop duration"
+              "diagnostic_duration": "Auto-stop duration",
+              "start_capture": "Start a new diagnostic capture and enable DEBUG"
             },
             "data_description": {
               "diagnostic_operations": "1–600 polls or control attempts, including the current operation. Default: 300.",
               "diagnostic_events": "1–12000 event records across retained operations. Default: 6000.",
               "diagnostic_raw_bytes": "1–8388608 bytes (maximum 8 MiB). Default: 4194304 bytes (4 MiB). Enter an exact whole number of bytes.",
-              "diagnostic_duration": "A separate finite deadline for every new capture. Default: 1 hour."
+              "diagnostic_duration": "A separate finite deadline for every new capture. Default: 1 hour.",
+              "start_capture": "Starts only after final confirmation and replaces the previous trace. Leave unchecked to save preferences only. Trace may include original local addresses, MAC/device identifiers and bytes; review before sharing."
             }
           }
         }
       },
       "confirm": {
         "title": "Review integration settings",
-        "description": "Limits for a new capture: **{operations} operations**, **{events} events**, **{raw_bytes} original raw bytes ({raw_mib} MiB)**. Auto-stop: **{duration} seconds**.\n\nApproximate ordinary-poll-only retained trace depth: **{estimated_seconds} seconds**, using a **{poll_interval}-second** cadence (— means automatic polling is disabled and the estimate is 0, not an active observation source). Each reference poll uses 10 events and 266 raw bytes. Commands, unmatched reports, fragmentation and larger exchanges can shorten this estimate. This is retained-history capacity, not a recording deadline or completeness guarantee.\n\nSaving preferences alone leaves any current capture, its effective limits and deadline unchanged. Checking the box starts a fresh capture for this entry and **replaces all previous trace evidence**, even if DEBUG is already enabled. Download useful evidence first.\n\nThe trace may contain original local addresses, MAC/device identifiers and bytes. Review it before sharing publicly. Capture is volatile: stopping preserves evidence for repeated downloads, but unload, reload or restart clears it without automatic resumption.",
+        "description": "Review the changes and selected action below. Nothing is applied before final confirmation.",
         "data": {
-          "start_capture": "Start a new diagnostic capture and enable DEBUG"
+          "review_action": "Action on confirmation",
+          "controls_change": "Remote controls",
+          "poll_interval": "Polling interval (seconds)",
+          "diagnostic_operations": "Operation limit",
+          "diagnostic_events": "Event limit",
+          "diagnostic_raw_bytes": "Original raw-byte limit (bytes)",
+          "diagnostic_duration": "Auto-stop duration (seconds)",
+          "estimated_seconds": "Approximate ordinary-poll history capacity (seconds)",
+          "capture_preferences": "Effect on current capture",
+          "capture_replacement": "New capture replaces previous evidence"
         },
         "data_description": {
-          "start_capture": "An external logging change can leave DEBUG enabled after capture stops. Use the integration's native Disable debug logging action to turn it off."
+          "controls_change": "Clears both unsent programme configurations and reloads a loaded integration entry.",
+          "estimated_seconds": "Uses 10 events and 266 raw bytes per reference poll at the selected interval. Disabled automatic polling gives 0. Larger exchanges and commands shorten this estimate; capacity is not the auto-stop deadline or a guarantee.",
+          "capture_preferences": "Any current capture keeps its recorded data, effective limits and deadline unchanged.",
+          "capture_replacement": "Download useful evidence first. Trace may contain original addresses, identifiers and bytes: review before sharing. An external logging change can leave DEBUG enabled after capture stops; use native Disable debug logging to turn it off."
         }
       }
     }
