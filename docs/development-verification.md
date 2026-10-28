@@ -310,6 +310,45 @@ and authenticated `/api/diagnostics/config_entry/{entry_id}` download
 The fixture does not read private Core logger storage or invoke diagnostic
 callbacks in place of these native requests.
 
+**Revised retention sizing: measured exact-package #81 continuation.**
+
+The committed integration `275d515` was exercised in isolated Core 2026.2.3,
+CPython 3.13.15. Counts below include 25/38 additional-report polls in the
+four-/six-hour workloads. The original confirmed Start remains in the first two
+cases. Their durations are selected deadlines; execution is accelerated, not
+four/six elapsed hours.
+
+| Selected budgets and duration | Executed polls + Start | Retained operations | Retained events | Raw bytes | Omitted operations |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1200 / 12000 / 4 MiB, 4 hours | 960 + 1 | 961 | 9734 | 260703 | 0 |
+| 1800 / 18000 / 4 MiB, 6 hours | 1440 + 1 | 1441 | 14586 | 390632 | 0 |
+| 1800 / 18000 / 385000 bytes, 6 hours | 1440 + 1 | 1422 | 14372 | 384826 | 19 |
+
+The last case's native enabled-poll review estimates 21705 seconds without a
+capacity warning. Actual additional reports nevertheless evict Start: all 19
+whole-operation evictions are raw-triggered, with 5806 omitted raw bytes and no
+retained partial operation. This demonstrates why no warning is not a completeness
+claim. Matching counts were observed under Core 2026.10.4 / CPython 3.14.9.
+
+Memory is a deduplicated reachable `sys.getsizeof` graph, not RSS or exclusive
+ownership. The additional `tracemalloc` peak starts after the retained store
+already exists and covers export plus compact UTF-8 JSON. Values below use MiB
+(1048576 bytes). Both maximum-pressure cases fill 8 MiB raw and all simultaneous
+operation/event slots with bounded metadata-heavy observations, not wire frames.
+
+| Workload | Python raw objects | Python metadata/containers | Total store graph | Compact JSON | Additional export/JSON peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Four-hour representative case | 0.31 | 9.93 | 10.24 | 4.64 | 19.12 |
+| Six-hour representative case | 0.46 | 14.88 | 15.35 | 6.95 | 28.66 |
+| Previous maxima: 600 / 12000 / 8 MiB | 8.02 | 102.79 | 110.81 | 106.12 | 235.18 |
+| New maxima: 1800 / 18000 / 8 MiB | 8.06 | 147.43 | 155.49 | 144.52 | 316.28 |
+
+An 8 MiB raw limit is therefore **not** an 8 MiB memory allowance; diagnostic
+export can allocate substantially more memory temporarily. These are measured
+fixtures, not a formal process-memory ceiling or a guarantee for arbitrary traffic.
+The separate oversized case retains 8 MiB of a 9 MiB observation, marks its
+operation partial and reports the omitted 1 MiB.
+
 **Default retention sizing: measured coordinator/TCP sample from #80.**
 
 New/default budgets are 1800 operations, 18000 events and 4,194,304 raw bytes,
