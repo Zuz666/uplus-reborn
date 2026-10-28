@@ -15,10 +15,10 @@ research = [
 ]
 test = [
     "pytest-homeassistant-custom-component==0.13.316",
-    "ruff==0.17.1",
-    "aiodhcpwatcher==1.2.1",
+    "ruff==0.17.2",
+    "aiodhcpwatcher==1.2.7",
     "aiodiscover==2.7.1",
-    "cached-ipaddress==1.0.1",
+    "cached-ipaddress==1.1.2",
     "home-assistant-frontend==20260128.6",
     "ifaddr==0.2.0",
 ]
