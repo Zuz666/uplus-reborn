@@ -21,7 +21,9 @@ from homeassistant.const import CONF_EMAIL, CONF_HOST, CONF_PASSWORD, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 from custom_components.uplus_reborn.cloud import (
     CloudDevice,
@@ -858,6 +860,36 @@ async def test_capture_defaults_normalize_persisted_options_without_applying(
     }
     hass.config_entries.options.async_abort(result["flow_id"])
     assert dict(entry.options) == saved
+
+
+async def test_native_options_section_displays_saved_capture_preferences(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The native frontend receives populated section values, not an empty group."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    saved = {
+        "diagnostic_operations": 417,
+        "diagnostic_events": 8220,
+        "diagnostic_raw_bytes": 750000,
+        "diagnostic_duration": 7200,
+    }
+    hass.config_entries.async_update_entry(entry, options=saved)
+    assert await async_setup_component(hass, "config", {})
+    client = await hass_client()
+    response = await client.post(
+        "/api/config/config_entries/options/flow",
+        json={"handler": entry.entry_id},
+    )
+    assert response.status == 200
+    result = await response.json()
+    group = next(
+        field for field in result["data_schema"] if field["name"] == "diagnostics"
+    )
+    assert group["default"] == {**saved, "diagnostic_duration": "7200"}
+    assert dict(entry.options) == saved
+    hass.config_entries.options.async_abort(result["flow_id"])
 
 
 async def test_explicit_capture_start_failure_keeps_confirmation_open(

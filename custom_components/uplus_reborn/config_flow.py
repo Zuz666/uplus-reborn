@@ -900,7 +900,9 @@ class UplusRebornOptionsFlow(config_entries.OptionsFlow):
                 ): vol.All(
                     int, vol.Range(min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL)
                 ),
-                vol.Required("diagnostics", default=dict): section(diagnostic_schema),
+                vol.Required(
+                    "diagnostics", default=lambda: diagnostic_schema({})
+                ): section(diagnostic_schema),
             }
         )
         errors: dict[str, str] = {}
