@@ -118,3 +118,26 @@ def cancelled_snapshot(active_snapshot: DeviceSnapshot) -> DeviceSnapshot:
         current_electricity_raw=active_snapshot.current_electricity_raw,
         total_electricity_raw=active_snapshot.total_electricity_raw,
     )
+
+
+def capture_options_input(opened: dict, values: dict) -> dict:
+    """Fill the native field names advertised by this options form."""
+    if "diagnostics" not in values:
+        return values
+    schema = opened["data_schema"]
+    if isinstance(schema, list):
+        group = next(field for field in schema if field["name"] == "diagnostics")
+        initial = group["default"]
+        names = [field["name"] for field in group["schema"]]
+    else:
+        group = next(value for key, value in schema.schema.items() if key == "diagnostics")
+        initial = next(key.default() for key in schema.schema if key == "diagnostics")
+        names = [str(key) for key in group.schema.schema]
+    field_names = {name.partition("__")[0]: name for name in names}
+    return {
+        **values,
+        "diagnostics": {
+            **initial,
+            **{field_names[key]: value for key, value in values["diagnostics"].items()},
+        },
+    }

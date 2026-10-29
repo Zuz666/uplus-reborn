@@ -89,6 +89,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: UplusRebornConfigEntry) 
             ConfigEntryState.LOADED,
         ):
             return
+        consent = (
+            coordinator.capture.manager.saving_options.get(updated_entry.entry_id)
+            if coordinator.capture is not None else None
+        )
+        if consent is not None and consent.owner is coordinator.capture:
+            consent.reload_required |= (
+                updated_entry.data != connection_data
+                or coordinator.controls_enabled != controls_enabled
+            )
+            return
         coordinator.update_interval = timedelta(
             seconds=configured_poll_interval(updated_entry.options)
         )
@@ -101,7 +111,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: UplusRebornConfigEntry) 
         routing_changed = updated_entry.data != connection_data
         if routing_changed or control_surface_changed:
             coordinator.clear_drafts()
-            if not reload_scheduled and (routing_changed or setup_complete):
+            if consent is not None:
+                consent.reload_required = True
+            elif not reload_scheduled and (routing_changed or setup_complete):
                 reload_scheduled = True
                 hass.config_entries.async_schedule_reload(updated_entry.entry_id)
 
@@ -137,7 +149,8 @@ async def async_unload_entry(
     """Unload an appliance entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        entry.runtime_data.trace.close()
+        if entry.runtime_data.capture is not None:
+            entry.runtime_data.capture.close()
         await async_refresh_profile_actions(hass)
     return unloaded
 

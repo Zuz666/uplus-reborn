@@ -8,6 +8,7 @@ import logging
 import socket
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
+from itertools import count
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -190,8 +191,207 @@ async def test_no_data_and_exception_privacy_are_available_without_setup(
     assert result["device"]["state"] is None
     assert result["health"]["last_error"]["cause"] == "connection_error"
     assert result["health"]["last_error"]["context"] == {"inner_offset": 7}
+    assert result["health"]["last_error"]["stage"] is None
+    assert result["health"]["last_error"]["session_id"] is None
+    assert result["health"]["last_error"]["elapsed_ms"] is None
+    assert isinstance(result["health"]["last_error"]["request_id"], int)
+    ordinary_errors = [
+        record for record in caplog.records if record.levelno == logging.ERROR
+    ]
+    assert len(ordinary_errors) == 1
+    assert all(
+        f"{key}=" not in ordinary_errors[0].message
+        for key in ("stage", "session_id", "elapsed_ms")
+    )
     _assert_private(_ordinary_diagnostics_json(result) + caplog.text + str(coordinator.last_exception))
     assert classify_error(UnsafeState(TOKEN, reason=TOKEN)) == "unsafe_state"
+
+
+@pytest.mark.usefixtures("loopback_socket")
+@pytest.mark.parametrize("stage", ["connect", "response"])
+async def test_debug_off_timeout_preserves_failure_evidence_without_repeated_errors(
+    hass: HomeAssistant,
+    standby_snapshot: DeviceSnapshot,
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+) -> None:
+    """Real timed sessions retain stage/correlation through DUC and diagnostics."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    queries = []
+    closed = asyncio.Event()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            queries.append(await _read_request(reader))
+            await reader.read()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            closed.set()
+
+    async def pending_connect(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    async with server:
+        entry, coordinator = _coordinator(hass)
+        coordinator.client = UwtClient(
+            "127.0.0.1",
+            DEVICE_ID,
+            port=server.sockets[0].getsockname()[1],
+            timeout=0.02,
+        )
+        # Independent assigned counters must not be silently conflated.
+        with (
+            patch("custom_components.uplus_reborn.coordinator._REQUEST_IDS", count(201)),
+            patch(
+                "custom_components.uplus_reborn.protocol._protocol._SESSION_IDS",
+                count(701),
+            ),
+        ):
+            if stage == "connect":
+                with patch("asyncio.open_connection", side_effect=pending_connect):
+                    await coordinator.async_refresh()
+                    first_error = coordinator.health.last_error
+                    await coordinator.async_refresh()
+            else:
+                await coordinator.async_refresh()
+                first_error = coordinator.health.last_error
+                await coordinator.async_refresh()
+                await asyncio.wait_for(closed.wait(), 1)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+        failure = result["health"]["last_error"]
+        assert failure["cause"] == "timeout"
+        assert failure["stage"] == stage
+        assert failure["request_id"] == 202
+        assert failure["session_id"] == 702
+        assert failure["elapsed_ms"] > 0
+        assert first_error.request_id == 201
+        assert first_error.session_id == 701
+        errors = [
+            record
+            for record in caplog.records
+            if record.name == f"{LOGGER}.coordinator"
+            and record.levelno == logging.ERROR
+        ]
+        assert len(errors) == 1
+        assert f"stage={stage}" in errors[0].message
+        assert "request_id=201" in errors[0].message
+        assert "session_id=701" in errors[0].message
+        assert "elapsed_ms=" in errors[0].message
+        assert errors[0].exc_info is None
+        assert len(queries) == (2 if stage == "response" else 0)
+        with patch.object(
+            UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+        ):
+            await coordinator.async_refresh()
+        recovered = await async_get_config_entry_diagnostics(hass, entry)
+        assert recovered["health"]["last_error"] == failure
+        assert coordinator.health.available
+        _assert_private(caplog.text + _ordinary_diagnostics_json(result))
+
+
+@pytest.mark.usefixtures("loopback_socket")
+@pytest.mark.parametrize("failure", ["timeout", "malformed"])
+async def test_debug_off_dispatched_failure_keeps_original_evidence_without_retry(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    """Unknown-outcome wrapping retains measured transport evidence and context."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    requests = []
+    closed = asyncio.Event()
+    malformed = _frame_response(0x03, b"\x00\x00", sequence=2)
+    malformed = malformed[:-1] + bytes((malformed[-1] ^ 1,))
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            requests.append(await _read_request(reader))
+            writer.write(_state_response(_standby_words(), frame_type=0x02))
+            await writer.drain()
+            requests.append(await _read_request(reader))
+            writer.write(_frame_response(0x74, b"", sequence=1))
+            await writer.drain()
+            requests.append(await _read_request(reader))
+            if failure == "malformed":
+                writer.write(malformed)
+                await writer.drain()
+            await reader.read()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            closed.set()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    async with server:
+        entry, coordinator = _coordinator(hass, controls=True)
+        coordinator.client = UwtClient(
+            "127.0.0.1",
+            DEVICE_ID,
+            port=server.sockets[0].getsockname()[1],
+            control_timeout=0.1,
+        )
+        coordinator.async_set_updated_data(_snapshot(_standby_words()))
+        coordinator.stage_program("upper", "spin")
+        coordinator.stage_settings("upper", spin_rpm=400)
+        with (
+            patch("custom_components.uplus_reborn.coordinator._REQUEST_IDS", count(301)),
+            patch(
+                "custom_components.uplus_reborn.protocol._protocol._SESSION_IDS",
+                count(901),
+            ),
+            pytest.raises(OutcomeUnknown) as caught,
+        ):
+            await coordinator.async_start_program("upper")
+        await asyncio.wait_for(closed.wait(), 1)
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+    original = caught.value
+    error = result["health"]["last_error"]
+    assert error["cause"] == "outcome_unknown"
+    assert error["stage"] == original.stage == "response"
+    assert error["request_id"] == 301
+    assert error["session_id"] == original.session_id == 901
+    assert error["elapsed_ms"] == original.elapsed_ms
+    assert error["elapsed_ms"] > 0
+    assert error["context"] == dict(original.context)
+    if failure == "malformed":
+        assert error["context"]["inner_received_length"] == len(malformed) - 80
+    else:
+        assert not error["context"]
+    assert result["health"]["latest_command"]["outcome"] == "unknown"
+    assert not result["health"]["latest_command"]["retried"]
+    assert len(requests) == 3
+    assert sum(packet[9] == 0x60 for _, packet in requests) == 1
+    ordinary_errors = [
+        record for record in caplog.records
+        if record.name == f"{LOGGER}.coordinator" and record.levelno == logging.ERROR
+    ]
+    assert len(ordinary_errors) == 1
+    assert "stage=response" in ordinary_errors[0].message
+    assert "request_id=301" in ordinary_errors[0].message
+    assert "session_id=901" in ordinary_errors[0].message
+    assert "elapsed_ms=" in ordinary_errors[0].message
+    assert ordinary_errors[0].exc_info is None
+    assert malformed.hex() not in caplog.text
+    _assert_private(caplog.text + _ordinary_diagnostics_json(result))
+
+
+async def test_capture_status_without_listener_reports_actual_debug_not_inferred_timing(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No capture metadata is invented when only logger state is known."""
+    _, coordinator = _coordinator(hass)
+    for level, enabled in ((logging.INFO, False), (logging.DEBUG, True)):
+        caplog.set_level(level, logger=LOGGER)
+        status = coordinator.capture_status
+        assert status["debug_enabled"] is enabled
+        for key in ("started_at", "end_at", "stopped_at", "stop_reason"):
+            assert status[key] is None
+        assert status["snapshot_at"] is not None
 
 
 async def test_unloaded_diagnostics_allowlist_configuration(
@@ -681,6 +881,11 @@ async def test_cleanup_cancellation_preserves_dispatched_outcome(
     assert outcome["outcome"] == "unknown"
     assert outcome["cause"] == "cancelled"
     assert not outcome["retried"]
+    error = diagnostics["health"]["last_error"]
+    assert error["stage"] == "response"
+    assert isinstance(error["request_id"], int)
+    assert isinstance(error["session_id"], int)
+    assert error["elapsed_ms"] > 0
     assert len(requests) == 3
     _assert_private(caplog.text + _ordinary_diagnostics_json(diagnostics))
 

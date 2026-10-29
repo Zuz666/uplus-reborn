@@ -883,6 +883,7 @@ async def test_polling_only_options_preserve_runtime_and_staged_intent(
                 result["flow_id"],
                 {CONF_ENABLE_VERIFIED_CONTROLS: True, CONF_POLL_INTERVAL: interval},
             )
+            result = await hass.config_entries.options.async_configure(result["flow_id"], {})
             await hass.async_block_till_done()
 
         assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -951,6 +952,7 @@ async def test_control_option_toggles_clear_intent_and_retain_user_preferences(
                 result["flow_id"],
                 {CONF_ENABLE_VERIFIED_CONTROLS: enabled, CONF_POLL_INTERVAL: 30},
             )
+            result = await hass.config_entries.options.async_configure(result["flow_id"], {})
             assert result["type"] is FlowResultType.CREATE_ENTRY
             # Clearing happens in the save path, not only after a reload finishes.
             assert coordinator.draft("upper") is None
@@ -1149,6 +1151,7 @@ async def test_setup_keeps_configuration_updates_received_while_awaiting(
                             CONF_POLL_INTERVAL: 30,
                         },
                     )
+                    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
                     assert result["type"] is FlowResultType.CREATE_ENTRY
                 elif change == "reconfigure":
                     result = await hass.config_entries.flow.async_init(
@@ -1257,6 +1260,7 @@ async def test_setup_reconciles_opt_in_across_partial_control_platforms(
             result["flow_id"],
             {CONF_ENABLE_VERIFIED_CONTROLS: enabled, CONF_POLL_INTERVAL: 15},
         )
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
         assert result["type"] is FlowResultType.CREATE_ENTRY
         await asyncio.wait_for(update_seen.wait(), 5)
 

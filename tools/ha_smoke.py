@@ -65,7 +65,7 @@ CORE_COMPONENTS = (
     "logger",
     "diagnostics",
 )
-BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "dhcp", "sensor", "binary_sensor", "frontend", "lovelace")
+BOOTSTRAP_COMPONENTS = (*CORE_COMPONENTS, "dhcp", "sensor", "binary_sensor", "frontend", "lovelace", "system_health")
 
 
 def _requirements(output: Path) -> None:
@@ -206,6 +206,7 @@ class ReadOnlyPeer:
         self.allow_profile_start = False
         self.profile_controls: list[str] = []
         self.profile_initializations = 0
+        self.profile_initialization_pending = False
         self.query_response_writer: (
             Callable[[asyncio.StreamWriter, bytes, bytes], Awaitable[None]] | None
         ) = None
@@ -280,17 +281,19 @@ class ReadOnlyPeer:
         return self.allow_profile_start
 
     def _control_reply(self, payload: bytes, sequence: int) -> bytes:
-        """Accept only the one independently specified synthetic Spin/400 Start."""
+        """Accept one exact synthetic Spin/400 Start per explicit fixture arming."""
         if not self.allow_profile_start:
             raise ValueError("non-query payload or invalid checksum")
-        if payload == _inner(0x73, b"") and self.profile_initializations == 0:
+        if payload == _inner(0x73, b"") and not self.profile_initialization_pending:
             self.profile_initializations += 1
+            self.profile_initialization_pending = True
             inner = _inner(0x74, bytes.fromhex("0f5a0000000000000000000000000000"))
         elif payload == _inner(0x60, bytes.fromhex(
             "00011c000000000000000190000200000000000000000000"
-        )) and self.profile_initializations == 1 and not self.profile_controls:
+        )) and self.profile_initialization_pending:
             self.profile_controls.append(payload.hex())
             self.allow_profile_start = False
+            self.profile_initialization_pending = False
             words = list(self.words)
             words[1], words[3], words[5], words[15] = 0x1C00, 0x0BA3, 0x0600, 2
             self.words = tuple(words)
@@ -1030,6 +1033,9 @@ async def _exercise(
             for domain in CORE_COMPONENTS:
                 _require(await async_setup_component(hass, domain, config),
                          f"Core component {domain} failed (check fixture requirements)")
+            if scenario == "exchange-trace":
+                _require(await async_setup_component(hass, "system_health", config),
+                         "Native System Health failed to load")
             if serve and importlib.util.find_spec("hass_frontend") is not None:
                 for domain in ("frontend", "lovelace"):
                     _require(await async_setup_component(hass, domain, config),

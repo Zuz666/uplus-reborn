@@ -147,9 +147,15 @@ class ProtocolError(Exception):
         *,
         reason: str | None = None,
         context: tuple[tuple[str, int], ...] = (),
+        stage: Literal["connect", "response"] | None = None,
+        session_id: int | None = None,
+        elapsed_ms: float | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.stage = stage
+        self.session_id = session_id
+        self.elapsed_ms = elapsed_ms
         # Only bounded structural integers may reach exception-derived diagnostics.
         self.context = tuple(
             (key, value)
@@ -1518,24 +1524,30 @@ class UwtClient:
                     self.observer.event("session_connected", session=correlation)
                 yield session
         except (TimeoutError, OSError, ProtocolError, asyncio.CancelledError) as error:
+            stage = "response" if session is not None else "connect"
+            elapsed_ms = (monotonic() - started_at) * 1000
+            if isinstance(error, (ProtocolError, asyncio.CancelledError)):
+                error.stage = stage
+                error.session_id = correlation
+                error.elapsed_ms = elapsed_ms
             dispatched = session is not None and session.control_name is not None
             if self.observer is not None and self.observer.active:
                 self.observer.event(
                     "outcome_unknown" if dispatched else "failed",
                     session=correlation,
                     cause=classify_error(error),
-                    stage="response" if session is not None else "connect",
+                    stage=stage,
                     incomplete_bytes=session.decoder.buffered_bytes if session else 0,
                     context=error.context if isinstance(error, ProtocolError) else (),
                 )
             _LOGGER.debug(
                 "session=%s elapsed=%.3f event=%s cause=%s incomplete_bytes=%s stage=%s context=%s",
                 correlation,
-                monotonic() - started_at,
+                elapsed_ms / 1000,
                 "outcome_unknown" if dispatched else "failed",
                 classify_error(error),
                 session.decoder.buffered_bytes if session else 0,
-                "response" if session is not None else "connect",
+                stage,
                 error.context if isinstance(error, ProtocolError) else (),
             )
             if dispatched:
@@ -1551,14 +1563,27 @@ class UwtClient:
                 raise OutcomeUnknown(
                     "Control was sent exactly once; outcome unknown; not retried",
                     context=error.context if isinstance(error, ProtocolError) else (),
+                    stage=stage,
+                    session_id=correlation,
+                    elapsed_ms=elapsed_ms,
                 ) from error
             if isinstance(error, TimeoutError):
-                stage = (
+                waiting_for = (
                     "a state report" if session is not None else "the local connection"
                 )
-                raise CannotConnect(f"Timed out waiting for {stage}") from error
+                raise CannotConnect(
+                    f"Timed out waiting for {waiting_for}",
+                    stage=stage,
+                    session_id=correlation,
+                    elapsed_ms=elapsed_ms,
+                ) from error
             if isinstance(error, OSError):
-                raise CannotConnect("Local connection failed") from error
+                raise CannotConnect(
+                    "Local connection failed",
+                    stage=stage,
+                    session_id=correlation,
+                    elapsed_ms=elapsed_ms,
+                ) from error
             raise
         finally:
             if writer is not None:
@@ -1567,6 +1592,9 @@ class UwtClient:
                     with suppress(OSError):
                         await writer.wait_closed()
                 except asyncio.CancelledError as error:
+                    error.stage = "response" if session is not None else "connect"
+                    error.session_id = correlation
+                    error.elapsed_ms = (monotonic() - started_at) * 1000
                     # Cleanup can replace a pending result/error after dispatch.
                     # Preserve that boundary while propagating cancellation.
                     if session is not None and session.control_name is not None:

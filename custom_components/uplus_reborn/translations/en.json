@@ -133,6 +133,49 @@
     }
   },
   "selector": {
+    "diagnostic_restore_action": {
+      "options": {
+        "restore": "Restore diagnostic defaults on confirmation",
+        "already_default": "Already matches defaults; no diagnostic values will change"
+      }
+    },
+    "diagnostic_preferences_effect": {
+      "options": {
+        "next_capture": "Apply to the next capture only"
+      }
+    },
+    "diagnostic_review_action": {
+      "options": {
+        "no_changes": "No settings changes; no capture will start",
+        "preferences": "Save selected settings without starting a new capture",
+        "start": "Start a new diagnostic capture after confirmation"
+      }
+    },
+    "diagnostic_control_change": {
+      "options": {
+        "enable": "Enable remote controls",
+        "disable": "Disable remote controls"
+      }
+    },
+    "diagnostic_capture_replacement": {
+      "options": {
+        "replace": "Previous trace will be deleted; DEBUG will be enabled"
+      }
+    },
+    "diagnostic_capture_capacity_warning": {
+      "options": {
+        "shorter_than_duration": "The timer can outlast retained history; the beginning may be evicted"
+      }
+    },
+    "diagnostic_duration": {
+      "options": {
+        "1800": "30 minutes",
+        "3600": "1 hour",
+        "7200": "2 hours",
+        "14400": "4 hours",
+        "21600": "6 hours"
+      }
+    },
     "connection_status": {
       "options": {
         "connected": "Connected",
@@ -262,12 +305,13 @@
   },
   "options": {
     "error": {
-      "invalid_options": "Choose whether to enable controls and enter a whole-number polling interval from 15 to 30 seconds."
+      "invalid_options": "Choose whole-number budgets within the displayed bounds, a supported auto-stop duration and a polling interval from 15 to 30 seconds.",
+      "capture_start_failed": "The new diagnostic capture could not be started. Preferences may have been saved; successful recording is not confirmed. Close and reopen settings to change the start choice. Check that this entry is enabled and loaded before requesting another start."
     },
     "step": {
       "init": {
-        "title": "Polling and remote controls",
-        "description": "Choose remote controls and how often to refresh the appliance status. Saving these settings sends no appliance command.\n\n[Control help]({control_help_url})",
+        "title": "Integration settings",
+        "description": "Choose remote controls, polling and preferences for the next diagnostic capture. Nothing is applied until the final Save; saving preferences alone does not start or stop capture.\n\n[Control help]({control_help_url})",
         "data": {
           "connection_status": "Appliance connection (when opened)",
           "enable_verified_controls": "Enable remote controls",
@@ -276,6 +320,72 @@
         "data_description": {
           "enable_verified_controls": "Enable programme settings and commands for both drums. Remote Control must also be enabled on the machine. Changing this option clears both unsent programme configurations.",
           "poll_interval": "Refresh appliance status every 15–30 seconds. Default: 15 seconds."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Diagnostics",
+            "description": "Bounded, memory-only integration exchange trace. Budgets and auto-stop are independent: a full store keeps replacing its oldest operations until capture stops. Raw bytes are not a total RAM allowance.",
+            "data": {
+              "diagnostic_operations__saved": "Operation limit",
+              "diagnostic_operations__matching": "Operation limit",
+              "diagnostic_operations__default": "Operation limit",
+              "diagnostic_events__saved": "Event limit",
+              "diagnostic_events__matching": "Event limit",
+              "diagnostic_events__default": "Event limit",
+              "diagnostic_raw_bytes__saved": "Original raw-byte limit (bytes)",
+              "diagnostic_raw_bytes__matching": "Original raw-byte limit (bytes)",
+              "diagnostic_raw_bytes__default": "Original raw-byte limit (bytes)",
+              "diagnostic_duration__saved": "Auto-stop duration",
+              "diagnostic_duration__matching": "Auto-stop duration",
+              "diagnostic_duration__default": "Auto-stop duration",
+              "restore_defaults": "Restore diagnostic defaults",
+              "start_capture": "Start a new diagnostic capture and enable DEBUG"
+            },
+            "data_description": {
+              "diagnostic_operations__saved": "Saved: {diagnostic_operations_saved} · Default: {diagnostic_operations_default}. 1–1800 polls or control attempts.",
+              "diagnostic_operations__matching": "Saved: {diagnostic_operations_saved} — matches the default. 1–1800 polls or control attempts.",
+              "diagnostic_operations__default": "Using default: {diagnostic_operations_default} (no valid saved value). 1–1800 polls or control attempts.",
+              "diagnostic_events__saved": "Saved: {diagnostic_events_saved} · Default: {diagnostic_events_default}. 1–18000 event records.",
+              "diagnostic_events__matching": "Saved: {diagnostic_events_saved} — matches the default. 1–18000 event records.",
+              "diagnostic_events__default": "Using default: {diagnostic_events_default} (no valid saved value). 1–18000 event records.",
+              "diagnostic_raw_bytes__saved": "Saved: {diagnostic_raw_bytes_saved} · Default: {diagnostic_raw_bytes_default}. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_raw_bytes__matching": "Saved: {diagnostic_raw_bytes_saved} — matches the default. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_raw_bytes__default": "Using default: {diagnostic_raw_bytes_default} (no valid saved value). 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
+              "diagnostic_duration__saved": "Saved: {diagnostic_duration_saved} min · Default: {diagnostic_duration_default} min. Separate finite deadline.",
+              "diagnostic_duration__matching": "Saved: {diagnostic_duration_saved} min — matches the default. Separate finite deadline.",
+              "diagnostic_duration__default": "Using default: {diagnostic_duration_default} min (no valid saved value). Separate finite deadline.",
+              "restore_defaults": "Overrides all four diagnostic inputs, even invalid edits. Next shows the defaults; only final confirmation saves them. Does not start capture unless Start is also selected.",
+              "start_capture": "Starts only after final confirmation and replaces the previous trace. Leave unchecked to save preferences only. Trace may include original local addresses, MAC/device identifiers and bytes; review before sharing."
+            }
+          }
+        }
+      },
+      "confirm": {
+        "title": "Review integration settings",
+        "description": "Review the changes and selected action below. Nothing is applied before final confirmation.",
+        "data": {
+          "review_action": "Action on confirmation",
+          "controls_change": "Remote controls",
+          "poll_interval__changed": "Polling interval (seconds) — will change",
+          "diagnostic_operations__changed": "Operation limit — will change",
+          "diagnostic_operations__unchanged": "Operation limit — unchanged",
+          "diagnostic_events__changed": "Event limit — will change",
+          "diagnostic_events__unchanged": "Event limit — unchanged",
+          "diagnostic_raw_bytes__changed": "Original raw-byte limit (bytes) — will change",
+          "diagnostic_raw_bytes__unchanged": "Original raw-byte limit (bytes) — unchanged",
+          "diagnostic_duration__changed": "Auto-stop duration (seconds) — will change",
+          "diagnostic_duration__unchanged": "Auto-stop duration — unchanged",
+          "restore_action": "Diagnostic defaults",
+          "estimated_seconds": "Approximate ordinary-poll history capacity (seconds)",
+          "capture_preferences": "Effect on current capture",
+          "capture_replacement": "New capture replaces previous evidence",
+          "capture_capacity_warning": "Retention capacity warning"
+        },
+        "data_description": {
+          "controls_change": "Clears both unsent programme configurations and reloads a loaded integration entry.",
+          "estimated_seconds": "Uses 10 events and 266 raw bytes per reference poll at the selected interval. Disabled automatic polling gives 0: there is no active poll source, not a forecast for control-only traffic. Larger exchanges and commands shorten this estimate; capacity is not the auto-stop deadline or a guarantee.",
+          "capture_preferences": "Any current capture keeps its recorded data, effective limits and deadline unchanged.",
+          "capture_replacement": "Download useful evidence first. Trace may contain original addresses, identifiers and bytes: review before sharing. An external logging change can leave DEBUG enabled after capture stops; use native Disable debug logging to turn it off."
         }
       }
     }

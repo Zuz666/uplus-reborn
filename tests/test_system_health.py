@@ -17,6 +17,7 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.uplus_reborn.capture_options import CapturePreferences
 from custom_components.uplus_reborn.const import (
     CONF_DEVICE_ID,
     CONF_POLL_INTERVAL,
@@ -204,6 +205,21 @@ async def test_missing_runtime_is_not_a_success(
     assert info["entry_1_freshness"] == freshness
     assert info["entry_1_last_success_age_seconds"] is None
     assert info["entry_1_last_failure_category"] is None
+    assert isinstance(info["entry_1_capture_status_snapshot"], str)
+    assert info["entry_1_capture_snapshot_at"] is not None
+    assert info["entry_1_capture_started_at"] is None
+    assert info["entry_1_capture_end_at"] is None
+    assert info["entry_1_capture_remaining_seconds"] is None
+    for field in (
+        "stopped_at", "stop_reason", "debug_enabled", "first_retained_at",
+        "last_recorded_at", "partial_operations",
+    ):
+        assert info[f"entry_1_capture_{field}"] is None
+    for field in ("stage", "request_id", "session_id", "elapsed_ms"):
+        assert info[f"entry_1_last_failure_{field}"] is None
+    for resource in ("operations", "events", "raw_bytes"):
+        for field in ("limit", "retained", "free"):
+            assert info[f"entry_1_capture_{resource}_{field}"] is None
 
 
 @pytest.mark.parametrize(
@@ -259,6 +275,11 @@ async def test_health_query_is_private_and_does_not_probe(
         first = await system_health_info(hass)
         second = await system_health_info(hass)
 
+    assert datetime.fromisoformat(second["entry_1_capture_snapshot_at"]) >= (
+        datetime.fromisoformat(first["entry_1_capture_snapshot_at"])
+    )
+    first.pop("entry_1_capture_snapshot_at")
+    second.pop("entry_1_capture_snapshot_at")
     assert first == second
     assert first["configured_entries"] == 1
     assert first["loaded_entries"] == 0
@@ -295,3 +316,84 @@ async def test_poll_interval_drives_runtime_freshness_and_cached_reports(
             assert diagnostics["health"]["freshness"] == expected
             assert diagnostics["options"][CONF_POLL_INTERVAL] == interval
         read_state.assert_awaited_once_with()
+
+
+async def test_capture_snapshot_uses_effective_store_limits_without_export(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Capacity remains the actual capture's, even after next-start edits."""
+    entry = _entry(hass)
+    coordinator = _coordinator(hass, entry)
+    coordinator.trace.start(
+        CapturePreferences(operations=1, events=10, raw_bytes=266, duration=1800)
+    )
+    with patch.object(
+        UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+    ):
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            **entry.options,
+            "diagnostic_operations": 1800,
+            "diagnostic_events": 18000,
+            "diagnostic_raw_bytes": 8388608,
+            "diagnostic_duration": 21600,
+        },
+    )
+    with patch.object(
+        coordinator.trace, "export", side_effect=AssertionError("full export")
+    ):
+        active = await system_health_info(hass)
+        coordinator.trace.stop()
+        stopped = await system_health_info(hass)
+    assert isinstance(active["entry_1_capture_status_snapshot"], str)
+    assert active["entry_1_capture_status_snapshot"] != (
+        stopped["entry_1_capture_status_snapshot"]
+    )
+    assert active["entry_1_capture_operations_limit"] == 1
+    assert active["entry_1_capture_operations_retained"] == 1
+    assert active["entry_1_capture_operations_free"] == 0
+    assert active["entry_1_capture_events_limit"] == 10
+    assert active["entry_1_capture_raw_bytes_limit"] == 266
+    assert active["entry_1_capture_raw_bytes_retained"] == 0
+    assert active["entry_1_capture_raw_bytes_free"] == 266
+    assert active["entry_1_capture_first_retained_at"] is not None
+    assert active["entry_1_capture_last_recorded_at"] is not None
+    assert active["entry_1_capture_partial_operations"] == 0
+    for resource in ("operations", "events", "raw_bytes"):
+        assert active[f"entry_1_capture_evicted_operations_by_{resource}_limit"] == (
+            int(resource == "operations")
+        )
+        assert active[f"entry_1_capture_omitted_{resource}"] == int(resource == "operations")
+    assert active["entry_1_capture_omitted_metadata"] == 0
+    for resource in ("operations", "events", "raw_bytes"):
+        for field in ("limit", "retained", "free"):
+            key = f"entry_1_capture_{resource}_{field}"
+            assert stopped[key] == active[key]
+    assert not any(isinstance(value, dict) for value in active.values())
+
+
+async def test_health_projects_known_failure_correlation_without_private_context(
+    hass: HomeAssistant,
+) -> None:
+    """Failure scalars remain useful without DEBUG, raw bytes or device identity."""
+    entry = _entry(hass)
+    coordinator = _coordinator(hass, entry)
+    error = CannotConnect(
+        PRIVATE_REASON, stage="response", session_id=47, elapsed_ms=1250.5
+    )
+    error.__cause__ = TimeoutError()
+    with patch.object(UwtClient, "read_state", AsyncMock(side_effect=error)):
+        await coordinator.async_refresh()
+    with patch("asyncio.open_connection", side_effect=AssertionError("network")):
+        info = await system_health_info(hass)
+    assert info["entry_1_last_failure_category"] == "timeout"
+    assert info["entry_1_last_failure_stage"] == "response"
+    assert isinstance(info["entry_1_last_failure_request_id"], int)
+    assert info["entry_1_last_failure_session_id"] == 47
+    assert info["entry_1_last_failure_elapsed_ms"] == 1250.5
+    serialized = json.dumps(info)
+    for private in (HOST, DEVICE_ID, PRIVATE_TITLE, PRIVATE_REASON, entry.entry_id):
+        assert private not in serialized

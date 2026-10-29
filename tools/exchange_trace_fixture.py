@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import platform
 import struct
+import sys
+import tracemalloc
+from collections import deque
+from dataclasses import fields, is_dataclass
 from types import MappingProxyType
 from typing import Any
 
@@ -14,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 DOMAIN = "uplus_reborn"
 SECOND_DEVICE_ID = "020000000002"
 HEADER = struct.Struct(">II32s32sII")
-LIMITS = {"operations": 300, "events": 6000, "raw_bytes": 4194304}
+LIMITS = {"operations": 1800, "events": 18000, "raw_bytes": 4194304}
 SYNTHETIC_SECRET = "fixture-unrelated-cloud-secret-not-for-trace"
 
 
@@ -24,7 +30,7 @@ def _require(condition: bool, message: str) -> None:
 
 
 class ExchangeTraceFixture:
-    """Use real authenticated Core APIs and query-only synthetic appliance peers."""
+    """Use actual Core APIs with bounded, explicitly armed synthetic Start cases."""
 
     def __init__(self, hass: Any, entry: Any, peer: Any, result: dict[str, Any]) -> None:
         self.hass = hass
@@ -41,6 +47,7 @@ class ExchangeTraceFixture:
         self.message_id = 0
         self.wire: list[dict[str, str]] = []
         self.result = result
+        self.expected_limits: dict[str, dict[str, int]] = {}
         self.receipt: dict[str, Any] = {
             "status": "not_run",
             "scope": "isolated real Core; native logger WebSocket and authenticated diagnostic HTTP download",
@@ -110,7 +117,8 @@ class ExchangeTraceFixture:
                  "Diagnostic download reported a different Core version")
         data = payload["data"]
         trace = data["exchange_trace"]
-        _require(trace["schema"] == 1 and trace["limits"] == LIMITS,
+        _require(trace["schema"] == 1
+                 and trace["limits"] == self.expected_limits.get(entry.entry_id, LIMITS),
                  f"{label}: unexpected trace schema or retention limits")
         self.receipt["downloads"].append({
             "label": label, "http_status": 200, "authenticated": True,
@@ -118,6 +126,53 @@ class ExchangeTraceFixture:
             "capture_state": trace["capture_state"], "retained": trace["retained"],
         })
         return data
+
+    async def _options(
+        self, entry: Any, diagnostics: dict[str, Any], *, start: bool,
+        controls: bool | None = None, poll_interval: int | None = None,
+    ) -> dict[str, Any]:
+        """Drive the native authenticated options HTTP flow, not its callback."""
+        _require(self.session is not None, "Options HTTP session was not opened")
+        before = self._traffic()
+        base = f"{self.url}/api/config/config_entries/options/flow"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        async def post(url: str, body: dict[str, Any]) -> dict[str, Any]:
+            async with self.session.post(url, json=body, headers=headers) as response:
+                _require(response.status == 200, "Native options HTTP request failed")
+                return await response.json()
+
+        initial = await post(base, {"handler": entry.entry_id})
+        _require(initial["type"] == "form" and initial["step_id"] == "init",
+                 "Options did not open the settings form")
+        group = next(field for field in initial["data_schema"] if field["name"] == "diagnostics")
+        fields = {field["name"].partition("__")[0]: field["name"] for field in group["schema"]}
+        values = {"diagnostics": {
+            **group["default"],
+            **{fields[key]: value for key, value in diagnostics.items()}, "start_capture": start,
+        }}
+        if controls is not None:
+            values["enable_verified_controls"] = controls
+        if poll_interval is not None:
+            values["poll_interval"] = poll_interval
+        confirmed = await post(f"{base}/{initial['flow_id']}", values)
+        _require(confirmed["type"] == "form" and confirmed["step_id"] == "confirm"
+                 and not confirmed.get("errors"), "Options did not reach confirmation")
+        saved = await post(f"{base}/{initial['flow_id']}", {})
+        _require(saved["type"] == "create_entry", "Native options did not save/start")
+        await self.hass.async_block_till_done()
+        _require("start_capture" not in entry.options, "Start consent was persisted")
+        if controls is None:
+            _require(self._traffic() == before, "Capture preferences/start generated appliance traffic")
+        if start:
+            self.expected_limits[entry.entry_id] = {
+                name: entry.options[f"diagnostic_{name}"]
+                for name in ("operations", "events", "raw_bytes")
+            }
+            logs = await self._command({"type": "logger/log_info"})
+            _require(any(row["domain"] == DOMAIN and row["level"] == 10 for row in logs),
+                     "Options start did not enable the native DEBUG menu state")
+        return confirmed
 
     async def _reply(
         self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
@@ -202,6 +257,10 @@ class ExchangeTraceFixture:
     async def _history_depth(self) -> None:
         """Exercise capacity with accelerated real polls, not an elapsed-hour claim."""
         self.peer.query_response_writer = None
+        await self._options(self.entry, {
+            "diagnostic_operations": 300, "diagnostic_events": 6000,
+            "diagnostic_duration": "3600",
+        }, start=True)
         for number in range(1, 361):
             await self._poll()
             if number == 240:
@@ -234,6 +293,201 @@ class ExchangeTraceFixture:
         }
         await self._level("DEBUG")
         self.peer.query_response_writer = self._reply
+
+    @staticmethod
+    def _store_measurement(trace: Any) -> dict[str, Any]:
+        """Measure retained graph separately from additional export allocations."""
+        seen: set[int] = set()
+        graph_bytes = raw_object_bytes = 0
+        pending = [trace]
+        while pending:
+            value = pending.pop()
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            size = sys.getsizeof(value)
+            graph_bytes += size
+            if isinstance(value, bytes):
+                raw_object_bytes += size
+            if isinstance(value, dict):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple, set, frozenset, deque)):
+                pending.extend(value)
+            elif is_dataclass(value) and not isinstance(value, type):
+                pending.extend(getattr(value, field.name) for field in fields(value))
+            elif hasattr(value, "__dict__"):
+                pending.append(vars(value))
+        del pending, seen
+        gc.collect()
+        tracemalloc.start()
+        try:
+            exported = trace.export()
+            encoded = json.dumps(
+                exported, ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return {
+            "retained": exported["retained"], "omitted": exported["omitted"],
+            "partial_operations": sum(op["partial"] for op in exported["operations"]),
+            "compact_json_bytes": len(encoded),
+            "json_metadata_and_framing_bytes": len(encoded) - exported["retained"]["raw_bytes"] * 2,
+            "python_store_graph_bytes": graph_bytes,
+            "python_raw_object_bytes": raw_object_bytes,
+            "python_metadata_container_bytes": graph_bytes - raw_object_bytes,
+            "additional_export_json_peak_bytes": peak,
+        }
+
+    async def _long_history(self) -> dict[str, Any]:
+        """Retain initial real Start proof plus accelerated long-session traffic."""
+        from homeassistant.helpers import device_registry as dr
+
+        devices = dr.async_entries_for_config_entry(dr.async_get(self.hass), self.entry.entry_id)
+        _require(len(devices) == 1, "Long capture must own exactly one synthetic device")
+        initial_words = self.peer.words
+        cases = {}
+        for name, hours, polls, operations, events, raw_bytes in (
+            ("4", 4, 960, 1200, 12000, 4194304),
+            ("6", 6, 1440, 1800, 18000, 4194304),
+            ("6_low_raw", 6, 1440, 1800, 18000, 385000),
+        ):
+            self.peer.query_response_writer = None
+            self.peer.words = initial_words
+            await self._poll()
+            if name == "6_low_raw":
+                self.hass.config_entries.async_update_entry(
+                    self.entry, pref_disable_polling=False,
+                )
+            review = await self._options(self.entry, {
+                "diagnostic_operations": operations, "diagnostic_events": events,
+                "diagnostic_raw_bytes": raw_bytes, "diagnostic_duration": str(hours * 3600),
+            }, start=True, controls=True, poll_interval=15 if name == "6_low_raw" else None)
+            if name == "6_low_raw":
+                fields = {field["name"]: field for field in review["data_schema"]}
+                _require(fields["estimated_seconds"]["default"] == "21705"
+                         and "capture_capacity_warning" not in fields,
+                         "Adequate reference unexpectedly warned about capacity")
+                # Keep the fixture accelerated and deterministic, not wall-clock polling.
+                self.entry.runtime_data.update_interval = None
+            before = len(self.peer.profile_controls)
+            self.peer.allow_profile_start = True
+            await self.hass.services.async_call(
+                DOMAIN, "start_program",
+                {"device_id": devices[0].id, "drum": "upper", "program": "spin", "spin_rpm": 400},
+                blocking=True,
+            )
+            _require(len(self.peer.profile_controls) == before + 1
+                     and self.entry.runtime_data.health.latest_command.outcome == "confirmed",
+                     "Long capture Start was not independently sent once and confirmed")
+            for ordinal in range(1, polls + 1):
+                self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
+                await self._poll()
+            await self._level("WARNING")
+            data = await self._download(self.entry, f"long_history_{name}h")
+            trace = data["exchange_trace"]
+            retained = trace["operations"]
+            if name == "6_low_raw":
+                _require(retained and all(op["kind"] == "poll" for op in retained)
+                         and trace["omitted"]["operations"] > 0
+                         and trace["evicted_operations_by_limit"]["raw_bytes"] > 0
+                         and trace["evicted_operations_by_limit"]["operations"] == 0
+                         and trace["evicted_operations_by_limit"]["events"] == 0
+                         and trace["first_retained_at"] == retained[0]["started_at"]
+                         and trace["last_recorded_at"] == retained[-1]["finished_at"],
+                         "Low raw capacity did not honestly evict Start despite adequate reference")
+            else:
+                _require(len(retained) == polls + 1
+                         and retained[0]["kind"] == "upper_start"
+                         and retained[0]["result"]["outcome"] == "confirmed"
+                         and all(op["result"]["outcome"] == "received" for op in retained[1:])
+                         and not any(trace["omitted"].values())
+                         and not any(op["partial"] for op in retained),
+                         "Long-session history lost Start, ordinary polls or complete evidence")
+            cases[name] = {
+                "status": "passed", "ordinary_polls": polls, "control_operations": 1,
+                "extra_report_polls": polls // 37, "retained": trace["retained"],
+                "omitted": trace["omitted"], "first_operation": retained[0]["kind"],
+                "reference_warning_absent": "capture_capacity_warning" not in {
+                    field["name"] for field in review["data_schema"]
+                },
+                "evicted_operations_by_limit": trace["evicted_operations_by_limit"],
+                "first_retained_at": trace["first_retained_at"],
+                "last_recorded_at": trace["last_recorded_at"],
+                "capture": data["diagnostic_capture"],
+                "memory": self._store_measurement(self.entry.runtime_data.trace),
+                "elapsed_hours_verified": False,
+            }
+        self.peer.words = initial_words
+        self.peer.query_response_writer = None
+        return cases
+
+    async def _measure_retention(self) -> dict[str, Any]:
+        """Measure actual polls and label direct store stress as synthetic policy IO."""
+        from custom_components.uplus_reborn.capture_options import CapturePreferences
+        from custom_components.uplus_reborn.exchange_trace import ExchangeTrace
+
+        self.peer.query_response_writer = None
+        await self._options(self.entry, {
+            "diagnostic_operations": 600, "diagnostic_events": 12000,
+            "diagnostic_raw_bytes": 8388608, "diagnostic_duration": "7200",
+        }, start=True)
+        ordinary = {}
+        for number in range(1, 721):
+            await self._poll()
+            if number in (1, 240, 600, 720):
+                ordinary[str(number)] = self._store_measurement(self.entry.runtime_data.trace)
+        retained = ordinary["720"]["retained"]
+        _require(retained == {"operations": 600, "events": 6000, "raw_bytes": 159600}
+                 and ordinary["720"]["omitted"]["operations"] == 120,
+                 "Previous-limit ordinary history lost depth or oldest-first eviction")
+        await self._level("WARNING")
+        stress = ExchangeTrace()
+        stress_results = {}
+        for operation_limit, event_limit in ((600, 12000), (1800, 18000)):
+            maximum = CapturePreferences(operation_limit, event_limit, 8388608, 21600)
+            stress.start(maximum)
+            remaining = 8388608
+            chunk_size = (remaining + operation_limit - 1) // operation_limit
+            for operation in range(operation_limit):
+                stress.begin("synthetic_metadata_pressure", sample=operation)
+                for event in range(event_limit // operation_limit - 1):
+                    stress.event("metadata", values=[
+                        f"{operation}:{event}:{column}:" + "x" * 500
+                        for column in range(16)
+                    ])
+                size = min(remaining, chunk_size)
+                stress.raw("rx", bytes([operation % 256]) * size, stage="synthetic")
+                remaining -= size
+                stress.finish("synthetic")
+            _require(stress.summary()["retained"] == {
+                "operations": operation_limit, "events": event_limit, "raw_bytes": 8388608,
+            }, "Combined maximum stress failed to fill all selected budgets")
+            stress_results[str(operation_limit)] = self._store_measurement(stress)
+        stress.start(maximum)
+        stress.begin("synthetic_oversized")
+        stress.raw("rx", b"x" * (9 * 1024 * 1024), stage="synthetic")
+        stress.finish("synthetic")
+        oversized = self._store_measurement(stress)
+        _require(oversized["retained"]["raw_bytes"] == 8388608
+                 and oversized["omitted"]["raw_bytes"] == 1048576
+                 and oversized["partial_operations"] == 1,
+                 "One oversized operation escaped the maximum budget or hid loss")
+        stress.close()
+        return {
+            "python_version": platform.python_version(),
+            "method": "deduplicated reachable sys.getsizeof graph, not RSS/exclusive ownership; additional tracemalloc export/compact UTF-8 JSON peak after retained store exists",
+            "raw_limit_is_total_ram_limit": False,
+            "ordinary_real_tcp_polls": ordinary,
+            "previous_limit_nominal_retained_poll_slots_seconds": 9000,
+            "elapsed_hour_verified": False,
+            "synthetic_store_stress_previous_maxima": stress_results["600"],
+            "synthetic_store_stress_combined_maxima": stress_results["1800"],
+            "long_session_history": await self._long_history(),
+            "synthetic_store_stress_oversized": oversized,
+        }
 
     async def exercise(self, http_port: int) -> None:
         self.receipt["status"] = "running"
@@ -308,9 +562,12 @@ class ExchangeTraceFixture:
             await self.hass.config_entries.async_add(self.second_entry)
             await self.hass.async_block_till_done()
             _require(self.second_entry.state is ConfigEntryState.LOADED, "Second trace entry failed to load")
+            self._empty((await self._download(self.second_entry, "second_setup_no_resume"))["exchange_trace"], "stopped")
+            await self._options(self.second_entry, {}, start=True)
+            await self.second_entry.runtime_data.async_refresh()
             second = (await self._download(self.second_entry, "second_entry"))["exchange_trace"]
             _require(second["capture_state"] == "recording" and len(second["operations"]) == 1,
-                     "Entry setup while DEBUG enabled did not capture its first poll")
+                     "Explicit second-entry capture did not record its poll")
             self._empty((await self._download(self.entry, "first_entry_isolated"))["exchange_trace"], "recording")
             await self._poll()
             first_data = await self._download(self.entry, "first_entry_own_exchange")
@@ -325,9 +582,11 @@ class ExchangeTraceFixture:
             self.receipt["isolated_entries"] = {"status": "passed", "second_trace": second}
             old_coordinator = self.entry.runtime_data
             _require(await self.hass.config_entries.async_unload(self.entry.entry_id), "Trace entry unload failed")
+            cached_runtime_retained = getattr(self.entry, "runtime_data", None) is old_coordinator
+            if not cached_runtime_retained:
+                self.expected_limits.pop(self.entry.entry_id, None)
             unloaded = await self._download(self.entry, "unloaded_entry")
             self._empty(unloaded["exchange_trace"], "closed")
-            cached_runtime_retained = getattr(self.entry, "runtime_data", None) is old_coordinator
             if cached_runtime_retained:
                 _require(unloaded["device"]["state"] == first_data["device"]["state"],
                          "Trace unload changed attached cached non-trace state")
@@ -339,12 +598,14 @@ class ExchangeTraceFixture:
             await self._level("WARNING")
             await self._level("DEBUG")
             self._empty((await self._download(self.entry, "unloaded_logger_change"))["exchange_trace"], "closed")
+            self.expected_limits.pop(self.entry.entry_id, None)
             _require(await self.hass.config_entries.async_setup(self.entry.entry_id), "Trace entry reload failed")
             await self.hass.async_block_till_done()
             reloaded = (await self._download(self.entry, "reloaded_entry"))["exchange_trace"]
-            _require(self.entry.runtime_data is not old_coordinator and len(reloaded["operations"]) == 1
-                     and reloaded["capture_state"] == "recording",
-                     "Reload did not create a fresh capture")
+            _require(self.entry.runtime_data is not old_coordinator
+                     and reloaded["capture_state"] == "stopped"
+                     and not reloaded["operations"],
+                     "Reload resumed capture from existing DEBUG without fresh consent")
             _require(old_coordinator.trace.export()["capture_state"] == "closed"
                      and old_coordinator.trace.export()["operations"] == [],
                      "Reload repopulated the old closed capture")
@@ -353,6 +614,44 @@ class ExchangeTraceFixture:
                 "cached_runtime_retained": cached_runtime_retained,
                 "ordinary_unload_behavior_preserved": True, "fresh_capture": reloaded,
             }
+            await self._options(self.entry, {
+                "diagnostic_operations": 2, "diagnostic_events": 20,
+                "diagnostic_raw_bytes": 532, "diagnostic_duration": "1800",
+            }, start=True)
+            selected = await self._download(self.entry, "selected_limits_start")
+            _require(selected["exchange_trace"]["limits"] == {
+                "operations": 2, "events": 20, "raw_bytes": 532,
+            }, "Explicit limits were not applied")
+            active = selected["diagnostic_capture"]
+            _require(0 < active["remaining_seconds"] <= 1800
+                     and active["started_at"] and active["end_at"],
+                     "New capture lacks its selected finite deadline")
+            current = self.entry.runtime_data
+            await self._options(self.entry, {"diagnostic_operations": 3}, start=False)
+            unchanged = await self._download(self.entry, "preferences_only")
+            _require(self.entry.runtime_data is current
+                     and unchanged["diagnostic_capture"]["end_at"] == active["end_at"]
+                     and unchanged["exchange_trace"] == selected["exchange_trace"],
+                     "Preference-only Save changed active capture or reloaded")
+            await self._level("NOTSET")
+            frozen = (await self._download(self.entry, "native_stop_selected"))["exchange_trace"]
+            _require(frozen["capture_state"] == "stopped",
+                     "Native Disable failed to stop an options capture")
+            await self._options(self.entry, {
+                "diagnostic_operations": 300, "diagnostic_events": 6000,
+                "diagnostic_raw_bytes": 4194304, "diagnostic_duration": "3600",
+            }, start=True, controls=True)
+            _require(self.entry.runtime_data is not current
+                     and self.entry.runtime_data.trace.active,
+                     "Same-save control reload lost explicit capture start")
+            await self._level("WARNING")
+            self.receipt["native_capture_options"] = {
+                "status": "passed", "selected_limits": selected["exchange_trace"]["limits"],
+                "deadline": active["end_at"], "preference_only_preserved": True,
+                "native_stop": True, "same_save_reload_start": True,
+                "setup_reload_no_resume": True, "native_menu_debug": True,
+            }
+            self.receipt["retention_measurements"] = await self._measure_retention()
             self.receipt["status"] = "passed"
         except BaseException as err:
             self.receipt.update(status="failed", error=f"{type(err).__name__}: {err}")

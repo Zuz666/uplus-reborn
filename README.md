@@ -501,7 +501,8 @@ address on a loaded entry does not reload it.
 
 ### Configure integration options
 
-Open **Configure** on the integration entry:
+Open **Configure → Integration settings** on the integration entry. Settings are
+applied only on the final confirmation step, not while editing the first form.
 
 The dialog shows the last known appliance connection **when opened**: Connected
 after a fresh successful read, Offline after a failed read, or Not yet known
@@ -532,6 +533,71 @@ with no draft, never a previously staged selection. A reload performs
 the normal read-only setup query, not an appliance control. Unloaded/failed entries
 use the saved options on their next setup. Existing registry identities,
 user names, hidden flags, and explicitly disabled entities are retained.
+
+#### Diagnostic capture preferences
+
+The **Diagnostics** group starts collapsed whenever Integration settings is opened.
+Expand its heading to view the description and preferences for the next capture.
+Expanding or collapsing the group does not save settings or start/stop capture.
+
+| Resource | Default | Editable range |
+| --- | ---: | ---: |
+| Operations, including the current one | 1800 | 1–1800 |
+| Event records across operations | 18000 | 1–18000 |
+| Original raw bytes | 4 MiB (4194304 bytes) | 1–8388608 bytes (8 MiB) |
+
+Choose a separate auto-stop duration of **30 minutes**, **1 hour**, **2 hours**,
+**4 hours** or **6 hours** (new default). Explicit saved values are preserved.
+Field descriptions distinguish values saved when the dialog opened from current
+defaults, including absent/invalid preferences using defaults. They remain the
+opening baseline while editing, not a live change indicator. Diagnostic limits
+accept whole-number text; invalid edits are rejected unless explicitly replaced
+by **Restore diagnostic defaults**.
+
+After **Next**, a read-only review labels effective changes **will change**.
+If a new capture is selected, it also shows **unchanged** limits, the auto-stop
+duration and an **estimated trace depth in seconds**. Budget-only edits show
+their changes and that estimate without a replacement warning. All three budgets constrain the
+estimate; commands, unmatched reports, fragmentation or larger exchanges can
+shorten it. Defaults at a 15-second interval estimate about 27000 seconds of poll
+slots, independently of the 21600-second deadline. Disabled automatic polling
+gives an estimate of 0, not a forecast for command-only traffic.
+
+For a four-hour investigation, 1200 operations / 12000 events / 4 MiB leave
+ordinary-poll headroom above 960 polls; six-hour defaults leave headroom above
+1440. These are suggested combinations, not profiles or automatic budget coupling.
+When start is selected, a short non-blocking warning appears if enabled-poll
+reference capacity is shorter than the chosen duration. No warning guarantees
+complete history: actual commands, fragmentation and additional reports cost more.
+
+Saving with **Start a new diagnostic capture and enable DEBUG** unchecked only
+saves preferences. It does not stop, reset or resize an active capture, change
+its deadline, enable DEBUG or reload the entry for capture-only edits. The
+checkbox is inside the collapsed **Diagnostics** group, unchecked on each fresh
+settings flow, and is not a saved on/off switch. **Next** only prepares the review:
+checking the box starts nothing until final confirmation. The review warns about
+replacing previous evidence whenever start is selected, even without changed
+limits; download useful evidence first. Closing before final confirmation applies
+nothing. If a simultaneous control change requires reload, the new capture starts
+on the resulting coordinator. An ordinary unchanged save shows no diagnostics
+warning; a control-consent change explicitly shows draft clearing and loaded-entry
+reload.
+
+**Restore diagnostic defaults** is a separate, initially unchecked one-shot
+checkbox inside Diagnostics. It overrides all four diagnostic inputs, even
+invalid edits, with the defaults above and the six-hour duration. Next shows all
+resulting values; already-matching values are labelled unchanged. Only final
+confirmation saves them. It does not reset polling or remote-control consent,
+start/stop capture, erase evidence, change DEBUG or resize an active capture.
+Select the separate start checkbox as well to replace the trace using the
+restored settings, with the normal replacement warning. Cancellation saves
+nothing; both checkboxes are unchecked on a fresh opening. Independently selected
+control changes still have their disclosed reload consequences.
+
+All editable integration settings are UI-only. There are no duplicate integration
+YAML options; existing YAML automations invoking integration actions are unchanged.
+See [Temporary exchange tracing](#temporary-exchange-tracing) for both start routes,
+native stop, volatile evidence and sharing precautions.
 
 ### Troubleshooting availability and unsupported actions
 
@@ -886,11 +952,14 @@ for private diagnosis; the integration never uploads them automatically.
 
 ### Temporary exchange tracing
 
-Use the integration entry's native **Enable debug logging** control, reproduce
-the problem, then stop debug logging and choose **Download diagnostics**. Capture
-observes only the entry's existing polls and control attempts; it opens no extra
-connections, changes no polling interval and never repeats commands. Enabling
-diagnostics does not authorize appliance controls.
+Start from **Integration settings → Diagnostics**, check **Start a new diagnostic
+capture and enable DEBUG**, then review the selected budgets and replacement
+warning after **Next**. Final confirmation starts the capture.
+Alternatively, the integration entry's native **Enable debug logging** action
+starts finite captures on loaded entries using each entry's saved preferences.
+Capture observes only existing polls and control attempts; it opens no extra
+connections, changes no polling interval and never repeats commands. Neither
+start route authorizes appliance controls.
 
 Each entry groups requests, actual transmitted/received byte chunks, decoded
 observations and processing decisions by poll or control operation. TCP chunks
@@ -899,24 +968,43 @@ or command success. Reports processed during command confirmation are included.
 This is an **integration exchange trace**, not a complete physical cycle history
 or an alternative source of authoritative state.
 
-Capture is memory-only and bounded per entry: at most 300 operations, 6000 events
-and 4 MiB of original raw bytes, enforced together, with separately bounded
-metadata. These budgets target at least 240 consecutive ordinary polls (about an
-hour at 15-second intervals), with some headroom for controls. Bursts of reports,
-commands or malformed traffic can shorten that window; no complete cycle or
-fixed-duration history is guaranteed. Raw bytes are hex-encoded in the download,
-so 4 MiB is not a total RAM/JSON limit. Old operations are evicted first; partial
-captures, omitted bytes/events and overflow are marked honestly. See the
-[synthetic sizing evidence](docs/development-verification.md#real-isolated-core-fixture-docker)
-for measured depth and metadata/export memory costs.
+Capture is memory-only, with independently bounded metadata and all three
+[selected per-entry budgets](#diagnostic-capture-preferences) enforced together.
+New defaults accommodate 1440 ordinary polls plus control evidence in the
+representative synthetic scenario; a four-hour 1200/12000/4 MiB combination
+accommodates 960. These accelerated capacity observations are not real elapsed
+hours or guarantees under arbitrary traffic.
+Raw bytes are hex-encoded on download: the raw-byte limit is **not a total RAM
+or JSON limit**. Oldest operations are evicted first. A full buffer continues
+recording until stopped; partial captures, omitted events/bytes and overflow are
+marked honestly. See the [sizing evidence](docs/development-verification.md#real-isolated-core-fixture-docker)
+for measured traffic and metadata/export memory.
 
-Stopping DEBUG retains the trace. Downloads are nondestructive and do not contact
-the appliance. Starting a new capture clears the old one, even without an
-intervening appliance event. Entry unload/reload and Core restart clear it.
-Starting/stopping midway through an operation marks that trace partial.
-The native DEBUG switch is integration-wide; each entry's records and limits
-remain separate. Cloud onboarding, discovery, standalone CLI sessions and
-unrelated traffic are not part of this capture.
+The timer stops collection and preserves evidence for later **Download
+diagnostics**. Native **Disable debug logging** is always an integration-wide
+stop for every entry, including captures started from options. Downloads are
+nondestructive and network-free. A fresh start replaces the old trace even
+without an intervening appliance event; start/stop mid-operation is explicitly
+partial. Unchecking the options checkbox is not a stop action.
+Diagnostics distinguish the planned deadline from actual stop time/reason.
+Retained-range endpoints describe recorded observations, not uninterrupted
+coverage; partial operations, omissions and actual eviction-trigger counters
+explain loss. Repeated stop/download preserves this metadata. DEBUG state is
+reported separately: frozen evidence can coexist with independently enabled DEBUG.
+
+Entries have separate stores, limits and deadlines despite sharing native DEBUG.
+One expiry does not stop the others. The last active capture restores logging
+that it enabled, provided ownership is still unambiguous; earlier independent
+DEBUG is left enabled. Core does not identify the source of logger-change
+notifications. After an external notification, even an unrelated/same-level
+change, automatic restoration is relinquished rather than overwriting a newer
+user choice. Recording still stops on time, but DEBUG may remain on until
+**Disable debug logging**. Own notifications do not relinquish ownership.
+Explicit native Disable takes priority, including during a checked Save's reload.
+Unload/reload/Core restart stops and clears capture without automatic resumption,
+even if DEBUG remains enabled; saved preferences are not ongoing consent.
+Cloud onboarding, discovery, standalone CLI sessions and unrelated traffic are
+not part of this capture. Full traces are not anonymized; review before sharing.
 
 ### System Health
 
@@ -925,6 +1013,21 @@ U+ Reborn's native System Health section. It reports the integration version,
 configured/loaded/available entry counts, local polling mode, and anonymous
 per-entry lifecycle, configured polling interval, freshness, age of the last
 successful observation, and last sanitized failure category.
+Known transport failure stage (`connect` or `response`), independently assigned
+request/session correlations and measured duration survive in health/diagnostics
+and ordinary error reporting even without DEBUG. Missing evidence stays absent;
+this does not add requests, alter timeouts or retry commands.
+
+Capture fields show a colored Unicode/text status marker, snapshot timestamp,
+end timestamp and remaining seconds **when the report was collected**, plus each
+effective operation/event/raw-byte limit and its retained/free capacity. Active
+limits can differ from saved preferences for the next capture. Full capacity
+means oldest evidence is being replaced, not necessarily that recording stopped.
+These are native scalar snapshots, not a live countdown or CPU/RAM progress bars:
+close and reopen System Information to refresh them.
+
+The device card's **Visit** link opens this System Information dialog. Its native
+**Manage** link opens **Settings → Devices & services → Integrations**.
 
 Disabled or unloaded entries are not reported as actively available. An entry
 that has never been read successfully has no observation age. Stale or

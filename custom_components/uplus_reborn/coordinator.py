@@ -10,10 +10,10 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_LOGGING_CHANGED
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .capture_lifecycle import DiagnosticCapture
 from .const import (
     CONF_DEVICE_ID,
     CONF_ENABLE_VERIFIED_CONTROLS,
@@ -48,11 +48,15 @@ _REQUEST_IDS = count(1)
 
 @dataclass(frozen=True, slots=True)
 class ClassifiedError:
-    """One bounded, identifier-free failure record."""
+    """One bounded failure record with local operation/session correlations."""
 
     at: datetime
     cause: str
     context: tuple[tuple[str, int], ...] = ()
+    stage: str | None = None
+    request_id: int | None = None
+    session_id: int | None = None
+    elapsed_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +109,7 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             ),
         )
         self.trace = ExchangeTrace()
+        self.capture: DiagnosticCapture | None = None
         self.client = replace(client, observer=self.trace)
         self._connection_lock = asyncio.Lock()
         self._drafts: dict[Drum, ProgramIntent | None] = {"upper": None, "lower": None}
@@ -119,16 +124,26 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
 
     @callback
     def start_trace_listener(self) -> None:
-        """Follow native logger changes before the first entry refresh."""
-        self.config_entry.async_on_unload(
-            self.hass.bus.async_listen(EVENT_LOGGING_CHANGED, self._sync_trace_logging)
-        )
-        self.config_entry.async_on_unload(self.trace.close)
-        self._sync_trace_logging()
+        """Attach volatile capture ownership without resuming from logger state."""
+        if self.capture is None:
+            self.capture = DiagnosticCapture(self)
+            self.config_entry.async_on_unload(self.capture.close)
 
-    @callback
-    def _sync_trace_logging(self, event: Event | None = None) -> None:
-        self.trace.set_enabled(_LOGGER.isEnabledFor(logging.DEBUG))
+    @property
+    def capture_status(self) -> dict[str, object]:
+        """Return lightweight local timing/capacity, without raw trace export."""
+        if self.capture is not None:
+            return self.capture.status
+        return {
+            **self.trace.summary(),
+            "started_at": None,
+            "end_at": None,
+            "stopped_at": None,
+            "stop_reason": None,
+            "debug_enabled": _LOGGER.isEnabledFor(logging.DEBUG),
+            "remaining_seconds": None,
+            "snapshot_at": datetime.now(UTC).isoformat(),
+        }
 
     @property
     def health(self) -> CoordinatorHealth:
@@ -210,6 +225,10 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             datetime.now(UTC),
             cause,
             error.context if isinstance(error, ProtocolError) else (),
+            stage=getattr(error, "stage", None),
+            request_id=request,
+            session_id=getattr(error, "session_id", None),
+            elapsed_ms=getattr(error, "elapsed_ms", None),
         )
         self._read_available = False
         _LOGGER.debug(
@@ -219,6 +238,17 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             self._last_success,
         )
         return cause
+
+    def _failure_message(self, message: str) -> str:
+        """Enrich DUC's existing suppressed ERROR, never log a parallel failure."""
+        error = self._last_error
+        assert error is not None
+        details = [error.cause]
+        for key in ("stage", "request_id", "session_id", "elapsed_ms"):
+            value = getattr(error, key)
+            if value is not None:
+                details.append(f"{key}={value}")
+        return f"{message} ({'; '.join(details)})"
 
     @property
     def device_id(self) -> str:
@@ -371,7 +401,7 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                 except ProtocolError as error:
                     outcome, cause = "failed", self._record_failure(error, request)
                     raise UpdateFailed(
-                        f"Unable to read appliance state ({cause})"
+                        self._failure_message("Unable to read appliance state")
                     ) from None
                 except asyncio.CancelledError:
                     cause = "cancelled"
@@ -481,7 +511,9 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                     if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
                         self._record_failure(error, request)
                         self.async_set_update_error(
-                            UpdateFailed(f"Authoritative state unavailable ({cause})")
+                            UpdateFailed(
+                                self._failure_message("Authoritative state unavailable")
+                            )
                         )
                     raise
                 self._latest_command = CommandOutcome(

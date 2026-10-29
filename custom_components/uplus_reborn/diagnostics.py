@@ -10,6 +10,7 @@ from homeassistant.const import CONF_PORT
 from homeassistant.core import HomeAssistant
 
 from . import UplusRebornConfigEntry
+from .capture_options import capture_preferences
 from .const import (
     CONF_ENABLE_VERIFIED_CONTROLS,
     CONF_POLL_INTERVAL,
@@ -211,6 +212,10 @@ async def async_get_config_entry_diagnostics(
                 entry.options.get(CONF_ENABLE_VERIFIED_CONTROLS) is True
             ),
             CONF_POLL_INTERVAL: configured_poll_interval(entry.options),
+            **{
+                f"diagnostic_{key}": value
+                for key, value in asdict(capture_preferences(entry.options)).items()
+            },
         },
         "control_mode": (
             "source_derived_opt_in"
@@ -244,5 +249,8 @@ async def async_get_config_entry_diagnostics(
             "automatic_retry": False,
         },
         "capabilities": _capability_diagnostics(),
+        "diagnostic_capture": (
+            coordinator.capture_status if coordinator is not None else None
+        ),
         "exchange_trace": trace.export(),
     }
