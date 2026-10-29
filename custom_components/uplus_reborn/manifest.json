@@ -2,7 +2,8 @@
   "domain": "uplus_reborn",
   "name": "U+ Reborn",
   "after_dependencies": [
-    "http"
+    "http",
+    "logger"
   ],
   "categories": [
     "appliances_cleaning.laundry"

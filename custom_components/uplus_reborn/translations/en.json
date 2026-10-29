@@ -351,9 +351,9 @@
               "diagnostic_raw_bytes__saved": "Saved: {diagnostic_raw_bytes_saved} · Default: {diagnostic_raw_bytes_default}. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
               "diagnostic_raw_bytes__matching": "Saved: {diagnostic_raw_bytes_saved} — matches the default. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
               "diagnostic_raw_bytes__default": "Using default: {diagnostic_raw_bytes_default} (no valid saved value). 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
-              "diagnostic_duration__saved": "Saved: {diagnostic_duration_saved} · Default: {diagnostic_duration_default}. Separate finite deadline; values below are in minutes.",
-              "diagnostic_duration__matching": "Saved: {diagnostic_duration_saved} — matches the default. Separate finite deadline; values below are in minutes.",
-              "diagnostic_duration__default": "Using default: {diagnostic_duration_default} (no valid saved value). Separate finite deadline; values below are in minutes.",
+              "diagnostic_duration__saved": "Saved: {diagnostic_duration_saved} min · Default: {diagnostic_duration_default} min. Separate finite deadline.",
+              "diagnostic_duration__matching": "Saved: {diagnostic_duration_saved} min — matches the default. Separate finite deadline.",
+              "diagnostic_duration__default": "Using default: {diagnostic_duration_default} min (no valid saved value). Separate finite deadline.",
               "restore_defaults": "Overrides all four diagnostic inputs, even invalid edits. Next shows the defaults; only final confirmation saves them. Does not start capture unless Start is also selected.",
               "start_capture": "Starts only after final confirmation and replaces the previous trace. Leave unchecked to save preferences only. Trace may include original local addresses, MAC/device identifiers and bytes; review before sharing."
             }

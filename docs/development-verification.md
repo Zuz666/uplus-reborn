@@ -410,7 +410,7 @@ buffers. Its peak is additional to the existing store, not a 4 MiB total-memory
 promise, and varies with Python/platform and workload. No measurement machinery
 runs in the integration or changes production polling.
 
-**Configurable maximum-budget sizing: issue #81 acceptance.**
+**Previous-limit sizing: initial issue #81 acceptance.**
 
 The same public `exchange-trace` scenario was exercised from the committed package
 on minimum Core 2026.2.3 / Python 3.13.15 and current Core 2026.10.4 / Python 3.14.9.
@@ -422,14 +422,14 @@ can change serialized sizes and peak allocations slightly.
 | --- | ---: | ---: | --- |
 | 240 ordinary TCP polls | 240 / 2400 | 63840 | None |
 | 720 ordinary TCP polls | 600 / 6000 | 159600 | 120 oldest operations evicted |
-| Direct synthetic combined maxima | 600 / 12000 | 8388608 | None |
+| Direct synthetic previous combined maxima | 600 / 12000 | 8388608 | None |
 | One direct synthetic 9 MiB observation | 1 / 1 | 8388608 | 1048576 raw bytes omitted; operation partial |
 
 | Workload | Python raw objects MiB | Python metadata/container MiB | Python store graph MiB | Compact JSON MiB | Additional export/JSON peak MiB |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 240 ordinary TCP polls | 0.08 | 2.45 | 2.53 | 1.14 | 4.71 |
 | 720 ordinary TCP polls | 0.19 | 6.12 | 6.31 | 2.85 | 11.78 |
-| Direct synthetic combined maxima | 8.02 | 102.79 | 110.81 | 106.12 | 235.18 |
+| Direct synthetic previous combined maxima | 8.02 | 102.79 | 110.81 | 106.12 | 235.18 |
 | One direct synthetic 9 MiB observation | 8.00 | <0.01 | 8.00 | 16.00 | 52.01 |
 
 The direct store-policy pressure uses deliberately metadata-heavy observations,
@@ -438,12 +438,13 @@ an 8 MiB RAM budget**: metadata and transient export allocations are separate.
 The additional peak is not total process RSS or an exclusive-memory upper bound.
 The oversized case retains 4612 metadata/container bytes, not zero.
 
-The maximum-budget ordinary run keeps the newest 600 complete polls after 720
+The previous-limit ordinary run keeps the newest 600 complete polls after 720
 operations, with honest oldest-first omissions. At 15 seconds per poll that is
-9000 seconds of nominal capacity, while the longest capture timer is 7200 seconds.
+9000 seconds of nominal capacity; current selectable timers reach 21600 seconds.
+Current maxima are 1800 / 18000 / 8 MiB; see the revised sizing above.
 These accelerated tests establish capacity, not elapsed-hour observation or
-guaranteed history under arbitrary traffic. Default-budget acceptance separately
-keeps all 240 first polls, then the newest 300 of 360 polls.
+guaranteed history under arbitrary traffic. Explicit legacy 300/6000 acceptance
+separately keeps all 240 first polls, then the newest 300 of 360 polls.
 
 The `offline` scenario refuses the first real TCP connection while loading a
 previously configured entry. It requires a loaded entry, absent authoritative
