@@ -1,7 +1,7 @@
 # Reproducible Linux verification environments for U+ Reborn.
 # Built from explicit stage inputs by tools/delivery.py; never mutates at runtime.
 
-FROM python:3.13@sha256:debad600e8d6e754012528dc796488acc52438fea3d28596b87262df9b91c71e AS node
+FROM python:3.15@sha256:f17ec845ebdd4f3347431579e1c22eaeec82913f039f2a54b937c7ff870bacdb AS node
 
 ARG NODE_VERSION=22.23.3
 ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
