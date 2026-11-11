@@ -32,7 +32,7 @@ assert not missing, f'Locked smoke prerequisites do not match Core: {missing}'" 
     && rm -rf /tmp/build /root/.cache
 WORKDIR /workspace
 
-FROM ghcr.io/home-assistant/home-assistant:2026.10.4@sha256:23f4dfbb69ce76315dbc4de7915504f1c2dcecd7ca2648113a493a385972e133 AS core-current
+FROM ghcr.io/home-assistant/home-assistant:2026.11.1@sha256:6785d1eca68747a524c156faae1b139ed415c07357386ae6fe17291986e59e82 AS core-current
 COPY --from=node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
 RUN test "$(node --version)" = "v22.23.3"
