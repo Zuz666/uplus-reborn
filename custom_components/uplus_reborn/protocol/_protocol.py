@@ -8,12 +8,13 @@ import struct
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import count
 from time import monotonic
 from typing import Final, Literal
 
+from ._alarms import _CODE_ALPHABET, AlarmSnapshot, decode_alarm_payload
 from ._capabilities import Drum, ordinary_stain_choices
 from ._commands import BuilderContext, ProgramIntent, encode_start, validate_intent
 from ._observation import ExchangeObserver
@@ -43,7 +44,6 @@ _FRAME_STATUS: Final = 0x02
 _FRAME_REPORT: Final = 0x06
 _QUERY_STATE: Final = 0x4D01
 _STATE_REPORT: Final = 0x6D01
-_CODE_ALPHABET: Final = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FRAME_ACK: Final = 0x03
 type DrumAction = Literal["pause", "resume", "cancel", "reset"]
 type ApplianceOption = Literal["power", "buzzer", "child_lock"]
@@ -62,11 +62,13 @@ _OPTION_COMMANDS: Final = {
 }
 _CONTROL_INIT_REQUEST: Final = 0x73
 _CONTROL_INIT_RESPONSE: Final = 0x74
+_FRAME_ALARM_REPORT: Final = 0x04
 _RESPONSE_KINDS: Final = {
     _FRAME_STATUS: "status",
     _FRAME_REPORT: "report",
     _FRAME_ACK: "ack",
-    _CONTROL_INIT_RESPONSE: "control_init",
+    _FRAME_ALARM_REPORT: "alarm_report",
+    _CONTROL_INIT_RESPONSE: "alarm_response",
 }
 _HEARTBEAT_INTERVAL: Final = 5.0
 # A missing/unknown command response may be resolved by a correlated state query.
@@ -202,6 +204,9 @@ def classify_error(error: BaseException) -> str:
         "controls_disabled",
         "program_not_staged",
         "no_snapshot",
+        "active_fault",
+        "alarm_state_unknown",
+        "invalid_alarm_payload",
         "partial_envelope",
         "invalid_escape",
         "checksum_mismatch",
@@ -294,6 +299,8 @@ class DeviceSnapshot:
     buzzer_enabled: bool = True
     # Exact profile 205005/6: word 2 bit 3, distinct from local_lock.
     child_lock: bool = False
+    # Authoritative `0x04`/`0x74` alarm payload when decoded; `None` if unavailable.
+    alarms: AlarmSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -759,17 +766,56 @@ def _validate_cycle_control(snapshot: DeviceSnapshot) -> None:
         raise UnsafeState("Control is blocked by child lock", reason="child_lock")
 
 
-def validate_program_start(snapshot: DeviceSnapshot, intent: ProgramIntent) -> None:
+def _decode_alarm_frame(frame: _InnerFrame) -> AlarmSnapshot:
+    try:
+        return decode_alarm_payload(frame.payload)
+    except ValueError as error:
+        raise InvalidFrame(
+            str(error),
+            reason="invalid_alarm_payload",
+            context=(("state_received_length", len(frame.payload)),),
+        ) from error
+
+
+def _validate_drum_alarms(
+    snapshot: DeviceSnapshot,
+    drum: Drum,
+    *,
+    require_known: bool,
+) -> None:
+    if snapshot.alarms is None:
+        if require_known:
+            raise UnsafeState(
+                "Control requires a known alarm state",
+                reason="alarm_state_unknown",
+            )
+        return
+    target_alarm = getattr(snapshot.alarms, drum)
+    if target_alarm.has_fault:
+        raise UnsafeState(
+            f"Control is blocked by active fault on {drum} drum",
+            reason="active_fault",
+        )
+
+
+def validate_program_start(
+    snapshot: DeviceSnapshot,
+    intent: ProgramIntent,
+    *,
+    require_alarms: bool = True,
+) -> None:
     """Validate an exact-target new program without constraining the other drum.
 
-    No decoded bit establishes physical door closure or absence of an alarm.
-    Appliance interlocks remain authoritative; confirmation is never optimistic.
+    No decoded bit establishes physical door closure. Physical door/appliance
+    interlocks remain authoritative; active target-drum faults block start, and
+    unknown alarms fail closed. Confirmation is never optimistic.
     """
     try:
         validate_intent(intent)
     except (TypeError, ValueError) as error:
         raise UnsafeState("Invalid program intent", reason="invalid_intent") from error
     _validate_cycle_control(snapshot)
+    _validate_drum_alarms(snapshot, intent.drum, require_known=require_alarms)
     target = _drum_state(snapshot, intent.drum)
     if target.phase_value != 0 or target.cycle_active:
         raise UnsafeState(
@@ -778,13 +824,23 @@ def validate_program_start(snapshot: DeviceSnapshot, intent: ProgramIntent) -> N
 
 
 def validate_drum_control(
-    snapshot: DeviceSnapshot, drum: Drum, action: DrumAction
+    snapshot: DeviceSnapshot,
+    drum: Drum,
+    action: DrumAction,
+    *,
+    require_alarms: bool = True,
 ) -> None:
-    """Validate source Start/Pause state and explicit operational/finished phases."""
+    """Validate source Start/Pause state, alarm interlocks and cycle phases."""
     _validate_cycle_control(snapshot)
-    target = _drum_state(snapshot, drum)
+    _drum_state(snapshot, drum)
     if action not in ("pause", "resume", "cancel", "reset"):
         raise UnsafeState("Unknown drum action", reason="invalid_action")
+    _validate_drum_alarms(
+        snapshot,
+        drum,
+        require_known=(require_alarms and action == "resume"),
+    )
+    target = _drum_state(snapshot, drum)
     if action == "reset":
         if target.phase_value not in _FINISHED_PHASES:
             raise UnsafeState("Reset requires a finished drum", reason="not_finished")
@@ -942,6 +998,9 @@ class _LocalSession:
     request_kind: str = "state_query"
     request_sequence: int | None = None
     request_started_at: float = 0
+    deadline: float = 0.0
+    latest_alarm: AlarmSnapshot | None = None
+    post_dispatch_alarm: AlarmSnapshot | None = None
 
     def log_event(self, event: str, **context: object) -> None:
         """Log only caller-selected scalar context, never a frame or identity."""
@@ -969,6 +1028,54 @@ class _LocalSession:
                 response_kind=_response_kind(result.frame),
                 decoded_snapshot=result.snapshot,
             )
+
+    def observe_alarm(
+        self,
+        envelope: _Envelope,
+        frame: _InnerFrame,
+        alarm: AlarmSnapshot,
+        *,
+        stage: str,
+        decision: str,
+    ) -> None:
+        """Record one decoded `0x04` or `0x74` alarm payload observation."""
+        if self.observer is not None and self.observer.active:
+            self.observer.event(
+                "alarm_observed",
+                stage=stage,
+                decision=decision,
+                response_sequence=envelope.sequence,
+                response_kind=_response_kind(frame),
+                decoded_alarms=alarm,
+            )
+
+    def _record_alarm_unavailable(self, *, stage: str, cause: str) -> None:
+        self.log_event("alarm_unavailable", stage=stage, cause=cause)
+        if self.observer is not None and self.observer.active:
+            self.observer.event("alarm_unavailable", stage=stage, cause=cause)
+
+    def _handle_opportunistic_alarm(
+        self,
+        envelope: _Envelope,
+        frame: _InnerFrame,
+        *,
+        stage: str,
+        strict: bool,
+        decision: str = "opportunistic_report",
+    ) -> AlarmSnapshot | None:
+        try:
+            alarm = _decode_alarm_frame(frame)
+        except InvalidFrame:
+            if strict:
+                raise
+            self.latest_alarm = None
+            self._record_alarm_unavailable(
+                stage=stage, cause="invalid_alarm_payload"
+            )
+            return None
+        self.latest_alarm = alarm
+        self.observe_alarm(envelope, frame, alarm, stage=stage, decision=decision)
+        return alarm
 
     def observe_envelope(self, envelope: _Envelope) -> None:
         if self.observer is not None and self.observer.active:
@@ -1042,6 +1149,11 @@ class _LocalSession:
         sequence = await self._send_state_query()
         while True:
             envelope, frame = await self.receive_inner()
+            if frame.frame_type == _FRAME_ALARM_REPORT:
+                self._handle_opportunistic_alarm(
+                    envelope, frame, stage="query", strict=False
+                )
+                continue
             if result := _state_result(envelope, frame):
                 if envelope.sequence == sequence:
                     self.observe_state(result, stage="query", decision="correlated")
@@ -1049,6 +1161,113 @@ class _LocalSession:
                     return result
                 self.log_event("uncorrelated", response_sequence=envelope.sequence)
                 self.observe_state(result, stage="query", decision="uncorrelated")
+
+    async def query_alarms_best_effort(
+        self,
+        *,
+        deadline: float,
+        stage: str,
+        seed: AlarmSnapshot | None = None,
+    ) -> AlarmSnapshot | None:
+        observed = seed
+        try:
+            sequence = self._allocate_sequence()
+            self.begin_request("alarm_query", sequence)
+            async with asyncio.timeout_at(deadline):
+                await self._send(
+                    sequence=sequence,
+                    frame_type=_CONTROL_INIT_REQUEST,
+                    payload=b"",
+                )
+                while True:
+                    envelope, frame = await self.receive_inner()
+                    if frame.frame_type == _FRAME_ALARM_REPORT:
+                        observed = self._handle_opportunistic_alarm(
+                            envelope, frame, stage=stage, strict=False
+                        )
+                        continue
+                    if (
+                        envelope.sequence == sequence
+                        and frame.frame_type == _CONTROL_INIT_RESPONSE
+                    ):
+                        try:
+                            alarm = _decode_alarm_frame(frame)
+                        except InvalidFrame:
+                            self._record_alarm_unavailable(
+                                stage=stage, cause="invalid_alarm_payload"
+                            )
+                            return None
+                        self.latest_alarm = alarm
+                        self.observe_alarm(
+                            envelope,
+                            frame,
+                            alarm,
+                            stage=stage,
+                            decision="correlated",
+                        )
+                        self.log_event(
+                            "correlated", response_kind=_response_kind(frame)
+                        )
+                        return alarm
+                    if frame.frame_type == _CONTROL_INIT_RESPONSE:
+                        self.log_event(
+                            "uncorrelated", response_sequence=envelope.sequence
+                        )
+        except InvalidFrame as error:
+            self._record_alarm_unavailable(
+                stage=stage, cause=classify_error(error)
+            )
+            return None
+        except (TimeoutError, OSError, ProtocolError) as error:
+            self._record_alarm_unavailable(
+                stage=stage, cause=classify_error(error)
+            )
+            return observed
+
+    def _decode_uwt_response(self, envelope: _Envelope) -> _InnerFrame | None:
+        self.observe_envelope(envelope)
+        if envelope.message_id != _UWT_RESPONSE:
+            self.log_event("non_state_envelope", response_sequence=envelope.sequence)
+            return None
+        inner, consumed = _decode_inner_frame(envelope.payload)
+        if consumed != len(envelope.payload):
+            raise InvalidFrame(
+                "Trailing bytes after inner frame",
+                context=(
+                    ("inner_offset", consumed),
+                    ("inner_received_length", len(envelope.payload)),
+                ),
+            )
+        self.observe_response(envelope, inner)
+        return inner
+
+    def _apply_init_frame(
+        self,
+        envelope: _Envelope,
+        inner: _InnerFrame,
+        alarm: AlarmSnapshot | None,
+        current: DeviceSnapshot,
+        *,
+        decision: str,
+        check: Callable[[DeviceSnapshot], None] | None,
+    ) -> tuple[AlarmSnapshot | None, DeviceSnapshot]:
+        if inner.frame_type == _FRAME_ALARM_REPORT:
+            alarm = self._handle_opportunistic_alarm(
+                envelope,
+                inner,
+                stage="initialization",
+                strict=True,
+                decision=decision,
+            )
+            current = replace(current, alarms=alarm)
+            if check is not None:
+                check(current)
+        elif result := _state_result(envelope, inner):
+            self.observe_state(result, stage="initialization", decision=decision)
+            current = replace(result.snapshot, alarms=alarm)
+            if check is not None:
+                check(current)
+        return alarm, current
 
     async def initialize_controls(
         self,
@@ -1063,38 +1282,37 @@ class _LocalSession:
             payload=b"",
         )
         current = expected
+        alarm = expected.alarms
         while True:
             envelope, frame = await self.receive_inner()
-            if result := _state_result(envelope, frame):
-                self.observe_state(
-                    result, stage="initialization", decision="pre_dispatch_observation"
-                )
-                if check is not None:
-                    check(result.snapshot)
-                current = result.snapshot
             if (
                 envelope.sequence == sequence
                 and frame.frame_type == _CONTROL_INIT_RESPONSE
             ):
+                alarm = _decode_alarm_frame(frame)
+                self.latest_alarm = alarm
+                self.observe_alarm(
+                    envelope,
+                    frame,
+                    alarm,
+                    stage="initialization",
+                    decision="correlated",
+                )
+                current = replace(current, alarms=alarm)
                 # Reports already received before dispatch cannot prove its result.
                 while self.pending:
                     pending = self.pending.popleft()
-                    self.observe_envelope(pending)
-                    if pending.message_id != _UWT_RESPONSE:
+                    inner = self._decode_uwt_response(pending)
+                    if inner is None:
                         continue
-                    inner, consumed = _decode_inner_frame(pending.payload)
-                    if consumed != len(pending.payload):
-                        raise InvalidFrame("Trailing bytes after inner frame")
-                    self.observe_response(pending, inner)
-                    if result := _state_result(pending, inner):
-                        self.observe_state(
-                            result,
-                            stage="initialization",
-                            decision="pre_dispatch_pending_observation",
-                        )
-                        if check is not None:
-                            check(result.snapshot)
-                        current = result.snapshot
+                    alarm, current = self._apply_init_frame(
+                        pending,
+                        inner,
+                        alarm,
+                        current,
+                        decision="pre_dispatch_pending_observation",
+                        check=check,
+                    )
                 self.log_event("correlated", response_kind=_response_kind(frame))
                 if self.observer is not None and self.observer.active:
                     self.observer.event(
@@ -1107,6 +1325,14 @@ class _LocalSession:
                     asyncio.get_running_loop().time() + _HEARTBEAT_INTERVAL
                 )
                 return current
+            alarm, current = self._apply_init_frame(
+                envelope,
+                frame,
+                alarm,
+                current,
+                decision="pre_dispatch_observation",
+                check=check,
+            )
 
     async def send_control(self, name: str, *, frame_type: int, payload: bytes) -> int:
         if self.control_name is not None:
@@ -1139,6 +1365,7 @@ class _LocalSession:
         """
         accepted = False
         observed: DeviceSnapshot | None = None
+        self.post_dispatch_alarm = None
         query_due = asyncio.get_running_loop().time() + _CONFIRMATION_QUERY_DELAY
         query_sequence: int | None = None
         while True:
@@ -1151,6 +1378,11 @@ class _LocalSession:
                     continue
             else:
                 envelope, frame = await self.receive_inner()
+            if frame.frame_type == _FRAME_ALARM_REPORT:
+                self.post_dispatch_alarm = self._handle_opportunistic_alarm(
+                    envelope, frame, stage="confirmation", strict=False
+                )
+                continue
             result = _state_result(envelope, frame)
             if (
                 result is not None
@@ -1291,22 +1523,9 @@ class _LocalSession:
                 self.pending.extend(self.decoder.feed(chunk))
 
             envelope = self.pending.popleft()
-            self.observe_envelope(envelope)
-            if envelope.message_id != _UWT_RESPONSE:
-                self.log_event(
-                    "non_state_envelope", response_sequence=envelope.sequence
-                )
+            inner = self._decode_uwt_response(envelope)
+            if inner is None:
                 continue
-            inner, consumed = _decode_inner_frame(envelope.payload)
-            if consumed != len(envelope.payload):
-                raise InvalidFrame(
-                    "Trailing bytes after inner frame",
-                    context=(
-                        ("inner_offset", consumed),
-                        ("inner_received_length", len(envelope.payload)),
-                    ),
-                )
-            self.observe_response(envelope, inner)
             self.log_event(
                 "response",
                 response_kind=_response_kind(inner),
@@ -1348,10 +1567,10 @@ class UwtClient:
             raise ValueError("device_id must contain 1-16 non-NUL ASCII bytes")
 
     async def read_state(self) -> DeviceSnapshot:
-        """Open one session, send one read-only query, and return fresh state.
+        """Open one session, query `4d01` then best-effort `0x73`, and return fresh state.
 
-        The query is never retried. The connection is closed immediately after
-        the first checksum-valid matching-sequence `6d01` status/report frame.
+        Neither query is retried. The connection is closed immediately after the
+        correlated `0x74` response (or best-effort alarm degradation).
         """
 
         return (await self._read_state_result()).snapshot
@@ -1382,6 +1601,9 @@ class UwtClient:
             f"{intent.drum} Start",
             expected=expected,
             validate=lambda state: validate_program_start(state, intent),
+            pre_validate=lambda state: validate_program_start(
+                state, intent, require_alarms=False
+            ),
             revision=lambda state: _control_revision(
                 state, intent.drum, new_program=True
             ),
@@ -1418,6 +1640,9 @@ class UwtClient:
             f"{drum} {action}",
             expected=expected,
             validate=lambda state: validate_drum_control(state, drum, action),
+            pre_validate=lambda state: validate_drum_control(
+                state, drum, action, require_alarms=False
+            ),
             revision=lambda state: _control_revision(state, drum),
             frame_type=_FRAME_CONTROL,
             payload=lambda state: _DRUM_COMMANDS[drum][action].to_bytes(2, "big"),
@@ -1461,37 +1686,75 @@ class UwtClient:
         *,
         expected: DeviceSnapshot | None,
         validate: Callable[[DeviceSnapshot], None],
+        pre_validate: Callable[[DeviceSnapshot], None] | None = None,
         revision: Callable[[DeviceSnapshot], tuple[object, ...]],
         frame_type: int,
         payload: Callable[[DeviceSnapshot], bytes],
         postcondition: Callable[[DeviceSnapshot, DeviceSnapshot, bytes], bool],
         unconfirmed_settings: tuple[str, ...] = (),
     ) -> ControlResult:
+        active_pre_validate = validate if pre_validate is None else pre_validate
         async with self._session(self.control_timeout) as session:
-            before = (await session.query_state()).snapshot
-            _require_expected_state(expected, before, revision)
-            validate(before)
+            async with asyncio.timeout_at(session.deadline):
+                before = (await session.query_state()).snapshot
+                if session.latest_alarm is not None:
+                    before = replace(before, alarms=session.latest_alarm)
+                _require_expected_state(expected, before, revision)
+                active_pre_validate(before)
 
-            def check(current: DeviceSnapshot) -> None:
-                _require_expected_state(before, current, revision)
-                validate(current)
+                def check(current: DeviceSnapshot) -> None:
+                    _require_expected_state(before, current, revision)
+                    active_pre_validate(current)
 
-            before = await session.initialize_controls(before, check)
-            validate(before)
-            dispatched_payload = payload(before)
-            sequence = await session.send_control(
-                name, frame_type=frame_type, payload=dispatched_payload
-            )
-            after = await session.confirm_control(
-                sequence, lambda state: postcondition(before, state, dispatched_payload)
-            )
+                before = await session.initialize_controls(before, check)
+                validate(before)
+                dispatched_payload = payload(before)
+                sequence = await session.send_control(
+                    name, frame_type=frame_type, payload=dispatched_payload
+                )
+                after = await session.confirm_control(
+                    sequence,
+                    lambda state: postcondition(before, state, dispatched_payload),
+                )
+
+            session.heartbeat_due = None
+            now = asyncio.get_running_loop().time()
+            budget = min(self.timeout, max(0.0, session.deadline - now))
+            if budget > 0:
+                after_alarms = await session.query_alarms_best_effort(
+                    deadline=now + budget,
+                    stage="post_confirm",
+                    seed=session.post_dispatch_alarm,
+                )
+            else:
+                after_alarms = session.post_dispatch_alarm
             return ControlResult(
-                before=before, after=after, unconfirmed_settings=unconfirmed_settings
+                before=before,
+                after=replace(after, alarms=after_alarms),
+                unconfirmed_settings=unconfirmed_settings,
             )
 
     async def _read_state_result(self) -> _StateResult:
         async with self._session(self.timeout) as session:
-            return await session.query_state()
+            async with asyncio.timeout_at(session.deadline):
+                result = await session.query_state()
+            remaining = session.deadline - asyncio.get_running_loop().time()
+            if remaining > 0:
+                alarm = await session.query_alarms_best_effort(
+                    deadline=session.deadline,
+                    stage="query",
+                    seed=session.latest_alarm,
+                )
+            else:
+                alarm = session.latest_alarm
+            if alarm is None:
+                return result
+            return _StateResult(
+                snapshot=replace(result.snapshot, alarms=alarm),
+                words=result.words,
+                envelope=result.envelope,
+                frame=result.frame,
+            )
 
     @asynccontextmanager
     async def _session(self, timeout: float) -> AsyncIterator[_LocalSession]:
@@ -1510,19 +1773,21 @@ class UwtClient:
                     port=self.port,
                     device_id=self.device_id,
                 )
-            async with asyncio.timeout(timeout):
+            deadline = asyncio.get_running_loop().time() + timeout
+            async with asyncio.timeout_at(deadline):
                 reader, writer = await asyncio.open_connection(self.host, self.port)
-                session = _LocalSession(
-                    reader,
-                    writer,
-                    self.device_id,
-                    correlation,
-                    started_at,
-                    observer=self.observer,
-                )
-                if self.observer is not None and self.observer.active:
-                    self.observer.event("session_connected", session=correlation)
-                yield session
+            session = _LocalSession(
+                reader,
+                writer,
+                self.device_id,
+                correlation,
+                started_at,
+                deadline=deadline,
+                observer=self.observer,
+            )
+            if self.observer is not None and self.observer.active:
+                self.observer.event("session_connected", session=correlation)
+            yield session
         except (TimeoutError, OSError, ProtocolError, asyncio.CancelledError) as error:
             stage = "response" if session is not None else "connect"
             elapsed_ms = (monotonic() - started_at) * 1000

@@ -337,7 +337,7 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
         options={
             **entry.options,
             "diagnostic_operations": 1800,
-            "diagnostic_events": 18000,
+            "diagnostic_events": 30600,
             "diagnostic_raw_bytes": 8388608,
             "diagnostic_duration": 21600,
         },

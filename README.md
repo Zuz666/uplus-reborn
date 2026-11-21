@@ -164,14 +164,20 @@ stain code alone does not prove that an externally started program is using it.
 A control:
 
 1. serializes with polling and other controls and re-checks the current opt-in;
-2. reads fresh state and checks action-relevant revision and preconditions;
+2. reads fresh state (`4d01`) and alarm state (`0x73 -> 0x74`), checking action-relevant revision and preconditions;
 3. preserves applicable reported/shared fields while constructing one command;
-4. sends once and requires correlated response/postcondition evidence;
+4. sends once and requires correlated response/postcondition evidence, followed by one best-effort post-confirm `0x73 -> 0x74` alarm refresh that never turns a confirmed write into an unknown outcome;
 5. reports **outcome unknown** if confirmation is lost, never retrying the write.
 
 The other drum may be active. Countdown changes do not invalidate an otherwise
-unchanged target state. Power, physical Remote Control and applicable lock/state
-constraints still apply; there is no fabricated physical-door-position sensor.
+unchanged target state. Power, physical Remote Control, per-drum active-fault
+interlocks and applicable lock/state constraints still apply; there is no
+fabricated physical-door-position sensor. A confirmed active fault on a drum
+blocks all five lifecycle actions (`start`, `pause`, `resume`, `cancel`, `reset`)
+on that drum while leaving the healthy other drum and shared switches (`power`,
+`buzzer`, `child_lock`) operable; an unconfirmed alarm state (`unknown`) fails
+closed on `start` and `resume` while leaving `pause`, `cancel` and `reset`
+available in the UI (and re-checking `0x73 -> 0x74` before any control write).
 Pause/resume use the source cycle-active flag, not a claim about motor motion.
 Cancel proves a return to standby, **not draining or safe physical door opening**.
 Reset applies to the completed state; it is an appliance command.
@@ -543,7 +549,7 @@ Expanding or collapsing the group does not save settings or start/stop capture.
 | Resource | Default | Editable range |
 | --- | ---: | ---: |
 | Operations, including the current one | 1800 | 1–1800 |
-| Event records across operations | 18000 | 1–18000 |
+| Event records across operations | 30600 | 1–30600 |
 | Original raw bytes | 4 MiB (4194304 bytes) | 1–8388608 bytes (8 MiB) |
 
 Choose a separate auto-stop duration of **30 minutes**, **1 hour**, **2 hours**,
@@ -563,9 +569,9 @@ shorten it. Defaults at a 15-second interval estimate about 27000 seconds of pol
 slots, independently of the 21600-second deadline. Disabled automatic polling
 gives an estimate of 0, not a forecast for command-only traffic.
 
-For a four-hour investigation, 1200 operations / 12000 events / 4 MiB leave
-ordinary-poll headroom above 960 polls; six-hour defaults leave headroom above
-1440. These are suggested combinations, not profiles or automatic budget coupling.
+For a four-hour investigation, 1200 operations / 20400 events / 4 MiB leave
+ordinary-poll headroom above 960 polls; six-hour defaults (1800 / 30600 / 4 MiB) leave headroom above
+1440 (at 17 events and 464 raw bytes per reference poll). These are suggested combinations, not profiles or automatic budget coupling.
 When start is selected, a short non-blocking warning appears if enabled-poll
 reference capacity is shorter than the chosen duration. No warning guarantees
 complete history: actual commands, fragmentation and additional reports cost more.
@@ -686,6 +692,8 @@ and privacy guidance; never attach credentials or raw private captures.
 | Sensor | Upper execution state | Running, Paused, Standby, Completed or Delayed; independent of the retained phase |
 | Sensor | Upper remaining time | Minutes; unknown in standby or when omitted |
 | Sensor | Upper cycle count | Diagnostic total-increasing counter |
+| Binary sensor | Upper fault | Diagnostic `problem`; `on` when at least one mapped/unmapped upper alarm fault bit is set (`programme_end` `50500H` excluded); `unknown` if alarm query fails |
+| Sensor | Upper fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
 
 ### Lower drum entities
 
@@ -697,6 +705,8 @@ and privacy guidance; never attach credentials or raw private captures.
 | Sensor | Lower execution state | Same phase-aware execution contract as the upper drum |
 | Sensor | Lower remaining time | Minutes; unknown in standby or when omitted |
 | Sensor | Lower cycle count | Diagnostic total-increasing counter |
+| Binary sensor | Lower fault | Diagnostic `problem`; `on` when at least one mapped/unmapped lower alarm fault bit is set (`programme_end` `50501B` excluded); `unknown` if alarm query fails |
+| Sensor | Lower fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
 
 ### Reported cycle settings
 
@@ -777,12 +787,17 @@ support is not a claim of physical verification. See the
 
 ### Categories and existing history
 
-The 44 status entities comprise **35 primary** and **nine Diagnostic** entities.
+The 48 status entities comprise **35 primary** and **13 Diagnostic** entities.
 Power, Remote control, Local control lock, session and cumulative water/energy,
-and both cycle counters are Diagnostic. Both reported door-lock flags, both
-drums' program/phase/execution state/remaining time and the 25 reported-setting
-entities remain primary. Together with 48 controls the integration registers
-92 entities when controls are enabled. Operational controls remain separate from
+both cycle counters, and both drums' fault binary/enum entities are Diagnostic.
+Both reported door-lock flags, both drums' program/phase/execution
+state/remaining time and the 25 reported-setting entities remain primary.
+Together with 48 controls the integration registers 96 entities when controls are
+enabled. `upper_execution_state` and `lower_execution_state` stay strictly
+derived from `6d01` even during an active fault or an unconfirmed `0x74` alarm
+reply; when `0x74` fails or times out during polling, only the four Diagnostic
+fault entities turn `unknown` while the 92 existing entities stay online.
+Operational controls remain separate from
 integration configuration. Retained entities keep their existing enabled
 defaults; upgrades do not enable user-disabled entities or undo visibility
 preferences.
@@ -970,10 +985,11 @@ or an alternative source of authoritative state.
 
 Capture is memory-only, with independently bounded metadata and all three
 [selected per-entry budgets](#diagnostic-capture-preferences) enforced together.
-New defaults accommodate 1440 ordinary polls plus control evidence in the
-representative synthetic scenario; a four-hour 1200/12000/4 MiB combination
-accommodates 960. These accelerated capacity observations are not real elapsed
-hours or guarantees under arbitrary traffic.
+New defaults (1800 operations, 30600 events, 4 MiB raw bytes) accommodate 1440
+ordinary polls (`4d01 -> 6d01` + `0x73 -> 0x74`, 17 events and 464 raw bytes
+each) plus control evidence in the representative synthetic scenario; a four-hour
+1200/20400/4 MiB combination accommodates 960. These accelerated capacity
+observations are not real elapsed hours or guarantees under arbitrary traffic.
 Raw bytes are hex-encoded on download: the raw-byte limit is **not a total RAM
 or JSON limit**. Oldest operations are evicted first. A full buffer continues
 recording until stopped; partial captures, omitted events/bytes and overflow are
@@ -1176,7 +1192,9 @@ uv run --no-project --python 3.13 python tools/delivery.py docker --target test 
 uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python -m custom_components.uplus_reborn.protocol decode --file sanitized-packet.bin
 ```
 
-`status` contacts a real appliance and is not a development smoke test. Only
+`decode` supports `6d01` state frames as well as `0x04`/`0x74` alarm payloads.
+`status` contacts a real appliance (`4d01 -> 6d01` followed by read-only
+`0x73 -> 0x74`, reporting decoded `alarms`) and is not a development smoke test. Only
 after explicit authorization, replace the documentation-only address and
 private device-ID file in this read-only example:
 

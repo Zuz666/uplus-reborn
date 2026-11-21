@@ -304,13 +304,13 @@ def test_partial_count_tracks_retained_operations_not_historical_gaps() -> None:
             CapturePreferences(),
             304,
             2330,
-            {"operations": 1800, "events": 18000, "raw_bytes": 4194304},
+            {"operations": 1800, "events": 30600, "raw_bytes": 4194304},
         ),
         (
-            CapturePreferences(operations=1800, events=18000, raw_bytes=8388608),
+            CapturePreferences(operations=1800, events=30600, raw_bytes=8388608),
             608,
             4660,
-            {"operations": 1800, "events": 18000, "raw_bytes": 8388608},
+            {"operations": 1800, "events": 30600, "raw_bytes": 8388608},
         ),
     ],
     ids=("defaults", "maximum"),
@@ -326,7 +326,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary(
         trace.begin("poll", number=number)
         size = chunk_size + 1 if number < larger_chunks else chunk_size
         trace.raw("rx", b"x" * size, stage="read")
-        for _ in range(9):
+        for _ in range(16):
             trace.event("observation")
         trace.finish("success")
     boundary = trace.export()
@@ -341,7 +341,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary(
 
     trace.begin("control", number=retained["operations"])
     trace.raw("tx", b"y" * (chunk_size + 1), stage="write_submitted")
-    for _ in range(9):
+    for _ in range(16):
         trace.event("observation")
     trace.finish("confirmed")
     exported = trace.export()
@@ -351,7 +351,7 @@ def test_all_three_limits_at_and_beyond_the_same_boundary(
     )
     assert exported["omitted"] == {
         "operations": 1,
-        "events": 10,
+        "events": 17,
         "raw_bytes": chunk_size + 1,
         "metadata": 0,
     }
@@ -387,12 +387,12 @@ def test_event_pressure_evicts_oldest_operation_before_current_events() -> None:
     trace.event("second")
     trace.finish("success")
     trace.begin("current")
-    for index in range(17999):
+    for index in range(30599):
         trace.event("observed", index=index)
     trace.finish("success")
     exported = trace.export()
     assert [operation["kind"] for operation in exported["operations"]] == ["current"]
-    assert exported["retained"]["events"] == 17999
+    assert exported["retained"]["events"] == 30599
     assert exported["omitted"]["operations"] == 1
     assert exported["omitted"]["events"] == 2
     assert not exported["operations"][0]["partial"]
@@ -437,7 +437,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     assert len(payload) == 4194321
     trace.raw("rx", payload, stage="read")
     trace.raw("rx", b"missing", stage="read")
-    for _ in range(17998):
+    for _ in range(30598):
         trace.event("confirmation_pending")
     trace.event("not_retained")
     trace.raw("rx", b"end", stage="read")
@@ -445,7 +445,7 @@ def test_oversized_operation_keeps_prefix_context_result_and_honest_gaps() -> No
     exported = trace.export()
     assert exported["retained"] == {
         "operations": 1,
-        "events": 18000,
+        "events": 30600,
         "raw_bytes": 4194304,
     }
     operation = exported["operations"][0]
@@ -476,7 +476,7 @@ def test_event_limit_also_accounts_for_unretained_raw_chunk() -> None:
     trace = ExchangeTrace()
     trace.start(CapturePreferences())
     trace.begin("poll")
-    for _ in range(18000):
+    for _ in range(30600):
         trace.event("observed")
     trace.raw("rx", b"unretained", stage="read")
     trace.finish("success")
@@ -787,7 +787,7 @@ def test_active_replacement_and_summary_preserve_honest_partial_coverage() -> No
         ),
         (
             "diagnostic_events",
-            CapturePreferences(operations=7, events=18000, raw_bytes=800, duration=1800),
+            CapturePreferences(operations=7, events=30600, raw_bytes=800, duration=1800),
         ),
         (
             "diagnostic_raw_bytes",
@@ -834,16 +834,16 @@ def test_invalid_persisted_preference_defaults_independently(
         (
             {
                 "diagnostic_operations": 1800,
-                "diagnostic_events": 18000,
+                "diagnostic_events": 30600,
                 "diagnostic_raw_bytes": 8388608,
                 "diagnostic_duration": 1800,
             },
-            CapturePreferences(operations=1800, events=18000, raw_bytes=8388608, duration=1800),
+            CapturePreferences(operations=1800, events=30600, raw_bytes=8388608, duration=1800),
         ),
         (
             {
                 "diagnostic_operations": 1801,
-                "diagnostic_events": 18001,
+                "diagnostic_events": 30601,
                 "diagnostic_raw_bytes": 8388609,
                 "diagnostic_duration": 1801,
             },
@@ -865,11 +865,11 @@ def test_persisted_preferences_enforce_inclusive_finite_bounds(
         (CapturePreferences(), 30, 54000),
         (CapturePreferences(duration=1800), 15, 27000),
         (CapturePreferences(operations=3), 15, 45),
-        (CapturePreferences(events=39), 15, 45),
-        (CapturePreferences(raw_bytes=1063), 15, 45),
-        (CapturePreferences(raw_bytes=1064), 15, 60),
-        (CapturePreferences(events=9), 15, 0),
-        (CapturePreferences(raw_bytes=265), 15, 0),
+        (CapturePreferences(events=67), 15, 45),
+        (CapturePreferences(raw_bytes=1855), 15, 45),
+        (CapturePreferences(raw_bytes=1856), 15, 60),
+        (CapturePreferences(events=16), 15, 0),
+        (CapturePreferences(raw_bytes=463), 15, 0),
     ],
 )
 def test_estimated_depth_counts_complete_reference_polls_not_capture_duration(
@@ -881,7 +881,7 @@ def test_estimated_depth_counts_complete_reference_polls_not_capture_duration(
 
 @pytest.mark.parametrize("values", [
     {"operations": 0}, {"operations": 1801}, {"operations": True},
-    {"events": 0}, {"events": 18001}, {"raw_bytes": 0},
+    {"events": 0}, {"events": 30601}, {"raw_bytes": 0},
     {"raw_bytes": 8388609}, {"duration": 0}, {"duration": 1800.0},
 ])
 def test_capture_preferences_cannot_create_an_unbounded_store(values: dict) -> None:

@@ -287,14 +287,14 @@ store/protocol code solely because the settings presentation changed.
 
 The scenario retains the previous-limit 720-poll/600-operation measurement for
 comparison. It also executes representative long-session cases: 960 real ordinary
-polls with four-hour 1200/12000/4 MiB settings, and 1440 with six-hour
-1800/18000/4 MiB defaults. Each includes one explicitly armed exact synthetic
+polls with four-hour 1200/20400/4 MiB settings, and 1440 with six-hour
+1800/30600/4 MiB defaults. Each includes one explicitly armed exact synthetic
 Spin/400 Start through the registered native action and occasional fragmented,
 additional reports. Initial Start proof and every poll must remain complete.
 These are accelerated capacity observations, not elapsed hours or physical
 appliance actions; isolated peers reject unarmed or unsupported commands.
-A separate six-hour case keeps 1800/18000 but selects 385000 raw bytes: native
-review with polling enabled estimates 21705 seconds without a capacity warning,
+A separate six-hour case keeps 1800/30600 but selects 672000 raw bytes: native
+review with polling enabled estimates 21720 seconds without a capacity warning,
 yet actual traffic must evict the initial Start under raw pressure. It records loss and
 the retained observation range. Autonomous scheduling is suppressed for this
 accelerated fixture after selecting the 15-second reference; no wall-clock
@@ -441,7 +441,7 @@ The oversized case retains 4612 metadata/container bytes, not zero.
 The previous-limit ordinary run keeps the newest 600 complete polls after 720
 operations, with honest oldest-first omissions. At 15 seconds per poll that is
 9000 seconds of nominal capacity; current selectable timers reach 21600 seconds.
-Current maxima are 1800 / 18000 / 8 MiB; see the revised sizing above.
+Current maxima are 1800 / 30600 / 8 MiB (17 events and 464 raw bytes per reference poll); see the historical #81 sizing above.
 These accelerated tests establish capacity, not elapsed-hour observation or
 guaranteed history under arbitrary traffic. Explicit legacy 300/6000 acceptance
 separately keeps all 240 first polls, then the newest 300 of 360 polls.

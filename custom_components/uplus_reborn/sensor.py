@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -26,6 +27,7 @@ from .coordinator import UplusRebornCoordinator
 from .entity import UplusRebornEntity
 from .protocol import (
     DRYING_MODE_OPTIONS,
+    FAULT_OPTIONS,
     LOWER_PROGRAM_OPTIONS,
     PHASE_OPTIONS,
     PROGRAM_CAPABILITIES,
@@ -45,6 +47,25 @@ class UplusRebornSensorEntityDescription(SensorEntityDescription):
     """Describe one decoded appliance value."""
 
     value_fn: Callable[[DeviceSnapshot], SensorValue]
+    extra_state_attributes_fn: Callable[[DeviceSnapshot], dict[str, Any] | None] | None = (
+        None
+    )
+
+
+def _drum_fault_attributes(snapshot: DeviceSnapshot, drum: Drum) -> dict[str, Any]:
+    """Expose bounded multi-fault details while keeping primary enum deterministic."""
+    if snapshot.alarms is None:
+        return {
+            "active_faults": None,
+            "active_fault_codes": None,
+            "fault_count": None,
+        }
+    alarm = getattr(snapshot.alarms, drum)
+    return {
+        "active_faults": list(alarm.faults),
+        "active_fault_codes": list(alarm.fault_codes),
+        "fault_count": len(alarm.faults),
+    }
 
 
 def _reported_value(
@@ -254,6 +275,25 @@ SENSORS: tuple[UplusRebornSensorEntityDescription, ...] = (
         icon="mdi:tumble-dryer",
         value_fn=_reported_drying_mode,
     ),
+    *(
+        UplusRebornSensorEntityDescription(
+            key=f"{drum}_fault_code",
+            translation_key=f"{drum}_fault_code",
+            device_class=SensorDeviceClass.ENUM,
+            options=list(FAULT_OPTIONS),
+            entity_category=EntityCategory.DIAGNOSTIC,
+            icon="mdi:alert-circle-outline",
+            value_fn=lambda snapshot, drum=drum: (
+                None
+                if snapshot.alarms is None
+                else getattr(snapshot.alarms, drum).primary_fault
+            ),
+            extra_state_attributes_fn=lambda snapshot, drum=drum: _drum_fault_attributes(
+                snapshot, drum
+            ),
+        )
+        for drum in ("upper", "lower")
+    ),
 )
 
 
@@ -286,4 +326,18 @@ class UplusRebornSensor(UplusRebornEntity, SensorEntity):
     @property
     def native_value(self) -> SensorValue:
         """Return the current decoded value."""
+        if self.coordinator.data is None:
+            return None
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return bounded alarm attributes when configured for this sensor."""
+        if (
+            self.coordinator.data is None
+            or self.entity_description.extra_state_attributes_fn is None
+        ):
+            return None
+        return self.entity_description.extra_state_attributes_fn(
+            self.coordinator.data
+        )
