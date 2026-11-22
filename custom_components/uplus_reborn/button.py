@@ -58,7 +58,11 @@ class UplusRebornButton(UplusRebornEntity, ButtonEntity):
     @property
     @override
     def available(self) -> bool:
-        if not super().available or not self.coordinator.controls_enabled:
+        if (
+            not super().available
+            or not self.coordinator.controls_enabled
+            or self.coordinator.data is None
+        ):
             return False
         try:
             if self._action == "start":

@@ -8,7 +8,11 @@ import pytest
 import pytest_socket
 from homeassistant.core import HomeAssistant
 
-from custom_components.uplus_reborn.protocol import DeviceSnapshot, DrumSnapshot
+from custom_components.uplus_reborn.protocol import (
+    AlarmSnapshot,
+    DeviceSnapshot,
+    DrumSnapshot,
+)
 
 DEVICE_ID = "TESTDEVICE123"
 HOST = "192.0.2.10"
@@ -63,6 +67,7 @@ def standby_snapshot() -> DeviceSnapshot:
         total_water_raw=63568,
         current_electricity_raw=1,
         total_electricity_raw=75309,
+        alarms=AlarmSnapshot(),
     )
 
 
@@ -90,6 +95,7 @@ def active_snapshot(standby_snapshot: DeviceSnapshot) -> DeviceSnapshot:
         total_water_raw=standby_snapshot.total_water_raw,
         current_electricity_raw=standby_snapshot.current_electricity_raw,
         total_electricity_raw=standby_snapshot.total_electricity_raw,
+        alarms=standby_snapshot.alarms,
     )
 
 
@@ -117,6 +123,7 @@ def cancelled_snapshot(active_snapshot: DeviceSnapshot) -> DeviceSnapshot:
         total_water_raw=active_snapshot.total_water_raw,
         current_electricity_raw=active_snapshot.current_electricity_raw,
         total_electricity_raw=active_snapshot.total_electricity_raw,
+        alarms=active_snapshot.alarms,
     )
 
 

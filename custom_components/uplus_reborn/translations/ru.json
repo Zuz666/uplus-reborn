@@ -345,9 +345,9 @@
               "diagnostic_operations__saved": "Сохранено: {diagnostic_operations_saved} · По умолчанию: {diagnostic_operations_default}. 1–1800 опросов или попыток управления.",
               "diagnostic_operations__matching": "Сохранено: {diagnostic_operations_saved} — соответствует значению по умолчанию. 1–1800 опросов или попыток управления.",
               "diagnostic_operations__default": "Используется значение по умолчанию: {diagnostic_operations_default} (нет корректного сохранённого значения). 1–1800 опросов или попыток управления.",
-              "diagnostic_events__saved": "Сохранено: {diagnostic_events_saved} · По умолчанию: {diagnostic_events_default}. 1–18000 событий.",
-              "diagnostic_events__matching": "Сохранено: {diagnostic_events_saved} — соответствует значению по умолчанию. 1–18000 событий.",
-              "diagnostic_events__default": "Используется значение по умолчанию: {diagnostic_events_default} (нет корректного сохранённого значения). 1–18000 событий.",
+              "diagnostic_events__saved": "Сохранено: {diagnostic_events_saved} · По умолчанию: {diagnostic_events_default}. 1–30600 событий.",
+              "diagnostic_events__matching": "Сохранено: {diagnostic_events_saved} — соответствует значению по умолчанию. 1–30600 событий.",
+              "diagnostic_events__default": "Используется значение по умолчанию: {diagnostic_events_default} (нет корректного сохранённого значения). 1–30600 событий.",
               "diagnostic_raw_bytes__saved": "Сохранено: {diagnostic_raw_bytes_saved} · По умолчанию: {diagnostic_raw_bytes_default}. 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
               "diagnostic_raw_bytes__matching": "Сохранено: {diagnostic_raw_bytes_saved} — соответствует значению по умолчанию. 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
               "diagnostic_raw_bytes__default": "Используется значение по умолчанию: {diagnostic_raw_bytes_default} (нет корректного сохранённого значения). 1–8388608 байт (максимум 8 МиБ); введите целое число байтов.",
@@ -383,7 +383,7 @@
         },
         "data_description": {
           "controls_change": "Сбрасывает несохранённые настройки программ обоих барабанов и перезагружает загруженную запись интеграции.",
-          "estimated_seconds": "Расчёт по 10 событиям и 266 исходным байтам на эталонный опрос с выбранным интервалом. При отключённом автоматическом опросе — 0: нет активного источника опросов, это не прогноз для одних команд. Крупные обмены и команды сокращают оценку; это не срок автоостановки и не гарантия полноты.",
+          "estimated_seconds": "Расчёт по 17 событиям и 464 исходным байтам на эталонный опрос с выбранным интервалом. При отключённом автоматическом опросе — 0: нет активного источника опросов, это не прогноз для одних команд. Крупные обмены и команды сокращают оценку; это не срок автоостановки и не гарантия полноты.",
           "capture_preferences": "Текущая запись сохранит накопленные данные, действующие лимиты и срок остановки без изменений.",
           "capture_replacement": "Сначала скачайте полезные данные. Трасса может содержать исходные адреса, идентификаторы и байты: проверьте перед передачей. После внешнего изменения логирования DEBUG может остаться включённым после остановки записи; выключите его штатным действием интеграции."
         }
@@ -454,6 +454,12 @@
       },
       "lower_door_lock": {
         "name": "Нижний \u200a\u200aдверной замок"
+      },
+      "upper_fault": {
+        "name": "Верхний неисправность"
+      },
+      "lower_fault": {
+        "name": "Нижний неисправность"
       }
     },
     "button": {
@@ -903,6 +909,78 @@
       },
       "cumulative_energy": {
         "name": "Всего электроэнергии"
+      },
+      "upper_fault_code": {
+        "name": "Верхний код ошибки",
+        "state": {
+          "none": "Нет",
+          "drying_fan_fault": "Сбой вентилятора сушки (FE)",
+          "water_heating_fault": "Ошибка нагрева воды (F4)",
+          "motor_fault": "Ошибка мотора (F7)",
+          "power_board_fault": "Неисправность блока питания (Ec)",
+          "drying_heating_fault": "Сбой нагрева сушки",
+          "water_temperature_fault": "Ошибка датчика темп. воды (F3)",
+          "drying_temperature_fault": "Сбой температуры сушки (F9)",
+          "door_not_locked": "Ошибка замка люка (E2)",
+          "door_not_unlocked": "Ошибка отключения замка (E2)",
+          "motor_drive_comm_fault": "Сбой связи модуля мотора (FC1)",
+          "common_drive_comm_fault": "Сбой связи модуля привода",
+          "touch_screen_comm_fault": "Сбой связи дисплея",
+          "water_level_sensor_fault": "Ошибка датчика уровня воды",
+          "water_inlet_fault": "Ошибка залива воды (E4)",
+          "water_drain_fault": "Ошибка слива воды",
+          "water_level_too_high": "Высокий уровень воды (E8)",
+          "unbalanced_load": "Дисбаланс белья (Unb)",
+          "weighing_error": "Ошибка взвешивания",
+          "drying_overweight": "Перегруз сушки (AL_E)",
+          "main_eeprom_fault": "Ошибка памяти EEPROM (EE)",
+          "high_drum_temperature": "Высокая темп. барабана",
+          "other_error": "Другая ошибка (E0)",
+          "drying_comm_fault": "Сбой связи сушки",
+          "leakage_alarm": "Сигнал утечки (E_L)",
+          "fault_f6": "F6",
+          "fault_f5": "F5",
+          "fault_fc4": "FC4",
+          "mainboard_comm_fault": "Сбой связи с осн. платой",
+          "drive_board_duplicate_fault": "Конфликт платы привода",
+          "unknown_fault": "Неизвестная ошибка"
+        }
+      },
+      "lower_fault_code": {
+        "name": "Нижний код ошибки",
+        "state": {
+          "none": "Нет",
+          "drying_fan_fault": "Сбой вентилятора сушки (FE)",
+          "water_heating_fault": "Ошибка нагрева воды (F4)",
+          "motor_fault": "Ошибка мотора (F7)",
+          "power_board_fault": "Неисправность блока питания (Ec)",
+          "drying_heating_fault": "Сбой нагрева сушки",
+          "water_temperature_fault": "Ошибка датчика темп. воды (F3)",
+          "drying_temperature_fault": "Сбой температуры сушки (F9)",
+          "door_not_locked": "Ошибка замка люка (E2)",
+          "door_not_unlocked": "Ошибка отключения замка (E2)",
+          "motor_drive_comm_fault": "Сбой связи модуля мотора (FC1)",
+          "common_drive_comm_fault": "Сбой связи модуля привода",
+          "touch_screen_comm_fault": "Сбой связи дисплея",
+          "water_level_sensor_fault": "Ошибка датчика уровня воды",
+          "water_inlet_fault": "Ошибка залива воды (E4)",
+          "water_drain_fault": "Ошибка слива воды",
+          "water_level_too_high": "Высокий уровень воды (E8)",
+          "unbalanced_load": "Дисбаланс белья (Unb)",
+          "weighing_error": "Ошибка взвешивания",
+          "drying_overweight": "Перегруз сушки (AL_E)",
+          "main_eeprom_fault": "Ошибка памяти EEPROM (EE)",
+          "high_drum_temperature": "Высокая темп. барабана",
+          "other_error": "Другая ошибка (E0)",
+          "drying_comm_fault": "Сбой связи сушки",
+          "leakage_alarm": "Сигнал утечки (E_L)",
+          "fault_f6": "F6",
+          "fault_f5": "F5",
+          "fault_fc4": "FC4",
+          "mainboard_comm_fault": "Сбой связи с осн. платой",
+          "drive_board_duplicate_fault": "Конфликт платы привода",
+          "unknown_fault": "Неизвестная ошибка"
+        }
       }
     },
     "switch": {
@@ -986,6 +1064,12 @@
     },
     "pause_resume_not_paused": {
       "message": "Возобновление работы невозможно: этот барабан не на паузе."
+    },
+    "pause_resume_active_fault": {
+      "message": "Пауза и возобновление работы недоступны при активной ошибке на этом барабане."
+    },
+    "pause_resume_alarm_state_unknown": {
+      "message": "Возобновление работы невозможно, пока свежий опрос ошибок не подтвердит отсутствие активной ошибки на этом барабане."
     },
     "pause_resume_state_changed": {
       "message": "Состояние машины изменилось до отправки команды. Дождитесь обновления состояния, затем попробуйте снова."

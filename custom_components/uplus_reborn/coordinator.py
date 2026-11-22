@@ -478,10 +478,13 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
         request = next(_REQUEST_IDS)
         async with self._connection_lock:
             self.trace.begin(
-                kind, request=request, cached_snapshot=self.data,
-                requested_intent=requested() if requested is not None else None,
+                kind,
+                request=request,
                 host=self.client.host,
-                port=self.client.port, device_id=self.client.device_id,
+                port=self.client.port,
+                device_id=self.client.device_id,
+                cached_snapshot=self.data,
+                requested_intent=requested() if requested is not None else None,
             )
             outcome = "interrupted"
             cause: str | None = None
@@ -508,7 +511,27 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                         "request=%s kind=%s event=%s cause=%s retried=false",
                         request, kind, outcome, cause,
                     )
-                    if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
+                    if unknown:
+                        self._record_failure(error, request)
+                        self.async_set_update_error(
+                            UpdateFailed(
+                                self._failure_message("Authoritative state unavailable")
+                            )
+                        )
+                    elif (
+                        isinstance(error, InvalidFrame)
+                        and error.reason == "invalid_alarm_payload"
+                    ) or (
+                        isinstance(error, UnsafeState)
+                        and error.reason == "alarm_state_unknown"
+                    ):
+                        if (
+                            self._read_available
+                            and self.data is not None
+                            and self.data.alarms is not None
+                        ):
+                            self.async_set_updated_data(replace(self.data, alarms=None))
+                    elif isinstance(error, (CannotConnect, InvalidFrame)):
                         self._record_failure(error, request)
                         self.async_set_update_error(
                             UpdateFailed(

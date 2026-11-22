@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntryState
 from homeassistant.const import (
@@ -17,6 +18,7 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_PORT,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     EntityCategory,
     Platform,
     UnitOfEnergy,
@@ -43,7 +45,9 @@ from custom_components.uplus_reborn.coordinator import UplusRebornCoordinator
 from custom_components.uplus_reborn.diagnostics import (
     async_get_config_entry_diagnostics,
 )
+from custom_components.uplus_reborn.entity import async_execute_control
 from custom_components.uplus_reborn.protocol import (
+    FAULT_OPTIONS,
     CannotConnect,
     ControlResult,
     DeviceSnapshot,
@@ -51,6 +55,7 @@ from custom_components.uplus_reborn.protocol import (
     OutcomeUnknown,
     UnsafeState,
     UwtClient,
+    decode_alarm_payload,
     default_intent,
     fabric_intent,
     update_intent,
@@ -2085,3 +2090,294 @@ async def test_ordinary_stain_clears_conflicts_and_restores_only_recipe_defaults
         start.assert_not_awaited()
         control.assert_not_awaited()
         appliance.assert_not_awaited()
+
+
+def _alarm_snapshot(*bit_positions: int):
+    bitmap = bytearray(14)
+    for bit_pos in bit_positions:
+        bitmap[13 - bit_pos // 8] |= 1 << (bit_pos % 8)
+    return decode_alarm_payload(b"\x0f\x5a" + bytes(bitmap))
+
+
+async def test_diagnostic_fault_entities_categories_and_soft_degradation(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """96 entities total (13 Diagnostic); alarms decode cleanly and degrade softly."""
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with patch.object(
+        UwtClient, "read_state", AsyncMock(return_value=standby_snapshot)
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    registered = er.async_entries_for_config_entry(registry, entry.entry_id)
+    assert len(registered) == 96
+    diagnostic_entries = [
+        item for item in registered if item.entity_category is EntityCategory.DIAGNOSTIC
+    ]
+    assert len(diagnostic_entries) == 13
+    assert {item.entity_category for item in registered if item.unique_id in {
+        f"{DEVICE_ID}_upper_fault",
+        f"{DEVICE_ID}_lower_fault",
+        f"{DEVICE_ID}_upper_fault_code",
+        f"{DEVICE_ID}_lower_fault_code",
+    }} == {EntityCategory.DIAGNOSTIC}
+
+    for drum in ("upper", "lower"):
+        prob_id = _entity_id(registry, "binary_sensor", f"{drum}_fault")
+        code_id = _entity_id(registry, "sensor", f"{drum}_fault_code")
+        prob_state = hass.states.get(prob_id)
+        code_state = hass.states.get(code_id)
+        assert prob_state is not None and code_state is not None
+        assert prob_state.state == "off"
+        assert prob_state.attributes["device_class"] == BinarySensorDeviceClass.PROBLEM
+        assert code_state.state == "none"
+        assert code_state.attributes["device_class"] == SensorDeviceClass.ENUM
+        assert code_state.attributes["options"] == list(FAULT_OPTIONS)
+        assert len(FAULT_OPTIONS) == 31
+        assert code_state.attributes["active_faults"] == []
+        assert code_state.attributes["active_fault_codes"] == []
+        assert code_state.attributes["fault_count"] == 0
+
+    coordinator = entry.runtime_data
+    # 1) Lower F7 (50501a, bit 71) + upper programme_end (50500H, bit 42 excluded)
+    coordinator.async_set_updated_data(
+        replace(standby_snapshot, alarms=_alarm_snapshot(42, 71))
+    )
+    await hass.async_block_till_done()
+    assert _state(hass, _entity_id(registry, "binary_sensor", "upper_fault")) == "off"
+    assert _state(hass, _entity_id(registry, "sensor", "upper_fault_code")) == "none"
+    assert _state(hass, _entity_id(registry, "binary_sensor", "lower_fault")) == "on"
+    lower_code = hass.states.get(_entity_id(registry, "sensor", "lower_fault_code"))
+    assert lower_code is not None
+    assert lower_code.state == "motor_fault"
+    assert lower_code.attributes["active_faults"] == ["motor_fault"]
+    assert lower_code.attributes["active_fault_codes"] == ["50501a"]
+    assert lower_code.attributes["fault_count"] == 1
+
+    # 2) Multi-fault deduplication + unmapped unknown_fault ordering
+    coordinator.async_set_updated_data(
+        replace(standby_snapshot, alarms=_alarm_snapshot(4, 15, 56))
+    )
+    await hass.async_block_till_done()
+    upper_code = hass.states.get(_entity_id(registry, "sensor", "upper_fault_code"))
+    lower_unmapped = hass.states.get(_entity_id(registry, "sensor", "lower_fault_code"))
+    assert upper_code is not None and lower_unmapped is not None
+    assert upper_code.state == "motor_fault"
+    assert upper_code.attributes["active_faults"] == ["motor_fault"]
+    assert upper_code.attributes["active_fault_codes"] == ["505005", "50500g"]
+    assert upper_code.attributes["fault_count"] == 1
+    assert lower_unmapped.state == "unknown_fault"
+    assert lower_unmapped.attributes["active_faults"] == ["unknown_fault"]
+    assert lower_unmapped.attributes["active_fault_codes"] == ["50500V"]
+    assert lower_unmapped.attributes["fault_count"] == 1
+
+    # 3) Soft degradation: alarms=None makes only the 4 fault entities unknown
+    coordinator.async_set_updated_data(replace(standby_snapshot, alarms=None))
+    await hass.async_block_till_done()
+    assert _state(hass, _entity_id(registry, "binary_sensor", "power")) == "on"
+    assert _state(hass, _entity_id(registry, "sensor", "upper_execution_state")) == "standby"
+    for drum in ("upper", "lower"):
+        assert _state(hass, _entity_id(registry, "binary_sensor", f"{drum}_fault")) == STATE_UNKNOWN
+        fault_code = hass.states.get(_entity_id(registry, "sensor", f"{drum}_fault_code"))
+        assert fault_code is not None
+        assert fault_code.state == STATE_UNKNOWN
+        assert fault_code.attributes["active_faults"] is None
+        assert fault_code.attributes["active_fault_codes"] is None
+        assert fault_code.attributes["fault_count"] is None
+
+
+async def test_per_drum_fault_interlocks_services_and_diagnostics_provenance(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Active faults block all 5 actions per drum without blocking healthy drum/switches."""
+    upper_fault = _alarm_snapshot(4)
+    faulted_active = replace(
+        standby_snapshot,
+        upper=replace(
+            standby_snapshot.upper,
+            program="spin",
+            program_value=0x1C,
+            phase="spinning",
+            phase_value=0x0B,
+            cycle_active=True,
+        ),
+        alarms=upper_fault,
+    )
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with (
+        patch.object(UwtClient, "read_state", AsyncMock(return_value=faulted_active)),
+        patch.object(
+            UwtClient,
+            "start_program",
+            AsyncMock(side_effect=UnsafeState("blocked", reason="active_fault")),
+        ) as start,
+        patch.object(
+            UwtClient,
+            "control_drum",
+            AsyncMock(
+                side_effect=[
+                    UnsafeState("blocked", reason="active_fault"),
+                    UnsafeState("unknown", reason="alarm_state_unknown"),
+                ]
+            ),
+        ),
+        patch.object(
+            UwtClient,
+            "set_appliance_option",
+            AsyncMock(
+                return_value=ControlResult(
+                    before=faulted_active,
+                    after=replace(faulted_active, buzzer_enabled=False),
+                )
+            ),
+        ) as appliance,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        registry = er.async_get(hass)
+        coordinator = entry.runtime_data
+        coordinator.stage_program("upper", "spin")
+        coordinator.stage_program("lower", "spin")
+        await hass.async_block_till_done()
+
+        for action in ("start", "pause", "resume", "cancel", "reset"):
+            assert _state(hass, _entity_id(registry, "button", f"upper_{action}")) == STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "lower_start")) != STATE_UNAVAILABLE
+
+        # Calling pause/resume on a faulted drum surfaces pause_resume_active_fault.
+        coordinator.async_set_updated_data(replace(faulted_active, alarms=upper_fault))
+        await hass.async_block_till_done()
+        with pytest.raises(ServiceValidationError) as exc:
+            await async_execute_control(
+                coordinator.async_control_drum("upper", "pause"), pause_resume=True
+            )
+        assert exc.value.translation_key == "pause_resume_active_fault"
+
+        # Shared switches remain operable even when drums have faults.
+        await hass.services.async_call(
+            "switch",
+            "turn_off",
+            {ATTR_ENTITY_ID: _entity_id(registry, "switch", "buzzer")},
+            blocking=True,
+        )
+        appliance.assert_awaited_once_with(
+            "buzzer", False, allow_live=True, expected=faulted_active
+        )
+
+        # Unconfirmed alarms fail closed on start/resume only.
+        coordinator.async_set_updated_data(replace(faulted_active, alarms=None))
+        await hass.async_block_till_done()
+        assert _state(hass, _entity_id(registry, "button", "upper_start")) == STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "upper_resume")) == STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "upper_pause")) != STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "upper_cancel")) != STATE_UNAVAILABLE
+        with pytest.raises(ServiceValidationError) as resume_exc:
+            await async_execute_control(
+                coordinator.async_control_drum("upper", "resume"), pause_resume=True
+            )
+        assert resume_exc.value.translation_key == "pause_resume_alarm_state_unknown"
+        device_entry = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)[0]
+        with pytest.raises(HomeAssistantError):
+            await hass.services.async_call(
+                DOMAIN,
+                "start_program",
+                {"device_id": device_entry.id, "drum": "upper", "program": "spin"},
+                blocking=True,
+            )
+        start.assert_awaited_once()
+
+        # Diagnostics includes alarms state + provenance without leaking identifiers.
+        coordinator.async_set_updated_data(
+            replace(faulted_active, alarms=_alarm_snapshot(42, 71))
+        )
+        diag = await async_get_config_entry_diagnostics(hass, entry)
+        assert diag["device"]["state"]["alarms"]["upper"]["programme_end"] is True
+        assert diag["device"]["state"]["alarms"]["lower"]["fault_codes"] == ("50501a",)
+        assert "alarms" in diag["device"]["provenance"]
+        assert "50501a" in repr(diag["device"]["provenance"]["alarms"])
+        assert DEVICE_ID not in repr(diag)
+        assert HOST not in repr(diag)
+
+
+async def test_malformed_init_alarm_keeps_health_and_unaffected_entities_available(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Malformed or unconfirmed init alarms degrade only fault/start-resume state."""
+    healthy_mixed = replace(
+        standby_snapshot,
+        lower=replace(
+            standby_snapshot.lower,
+            program="spin",
+            program_value=0x1C,
+            phase="spinning",
+            phase_value=0x0B,
+            cycle_active=True,
+        ),
+        alarms=_alarm_snapshot(),
+    )
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with patch.object(UwtClient, "read_state", AsyncMock(return_value=healthy_mixed)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        registry = er.async_get(hass)
+        coordinator = entry.runtime_data
+        coordinator.stage_program("upper", "spin")
+        await hass.async_block_till_done()
+
+        assert _state(hass, _entity_id(registry, "button", "upper_start")) != STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "lower_pause")) != STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "binary_sensor", "upper_fault")) == "off"
+
+        for error, expected_exc in (
+            (InvalidFrame("bad alarm", reason="invalid_alarm_payload"), HomeAssistantError),
+            (UnsafeState("unknown", reason="alarm_state_unknown"), ServiceValidationError),
+        ):
+            coordinator.async_set_updated_data(healthy_mixed)
+            await hass.async_block_till_done()
+            with (
+                patch.object(UwtClient, "start_program", AsyncMock(side_effect=error)),
+                pytest.raises(expected_exc),
+            ):
+                await async_execute_control(
+                    coordinator.async_start_program(
+                        "upper", default_intent("upper", "spin")
+                    )
+                )
+            await hass.async_block_till_done()
+            assert coordinator.health.available is True
+            assert coordinator.data is not None
+            assert coordinator.data.alarms is None
+            assert _state(hass, _entity_id(registry, "sensor", "upper_execution_state")) == "standby"
+            assert _state(hass, _entity_id(registry, "binary_sensor", "power")) == "on"
+            assert _state(hass, _entity_id(registry, "switch", "buzzer")) != STATE_UNAVAILABLE
+            assert _state(hass, _entity_id(registry, "button", "lower_pause")) != STATE_UNAVAILABLE
+            assert _state(hass, _entity_id(registry, "button", "upper_start")) == STATE_UNAVAILABLE
+            for drum in ("upper", "lower"):
+                assert _state(hass, _entity_id(registry, "binary_sensor", f"{drum}_fault")) == STATE_UNKNOWN
+                assert _state(hass, _entity_id(registry, "sensor", f"{drum}_fault_code")) == STATE_UNKNOWN
+
+        # Non-alarm framing failures still invalidate coordinator health.
+        coordinator.async_set_updated_data(healthy_mixed)
+        await hass.async_block_till_done()
+        with (
+            patch.object(
+                UwtClient,
+                "start_program",
+                AsyncMock(side_effect=InvalidFrame("bad checksum", reason="invalid_checksum")),
+            ),
+            pytest.raises(HomeAssistantError),
+        ):
+            await async_execute_control(
+                coordinator.async_start_program(
+                    "upper", default_intent("upper", "spin")
+                )
+            )
+        await hass.async_block_till_done()
+        assert coordinator.health.available is False
+        assert _state(hass, _entity_id(registry, "sensor", "upper_execution_state")) == STATE_UNAVAILABLE
+

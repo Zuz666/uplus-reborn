@@ -468,7 +468,7 @@ async def test_options_flow_requires_explicit_control_opt_in(
         CONF_ENABLE_VERIFIED_CONTROLS: True,
         CONF_POLL_INTERVAL: 15,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 18000,
+        "diagnostic_events": 30600,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -543,7 +543,7 @@ async def test_options_store_bounded_integer_seconds(
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: interval,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 18000,
+        "diagnostic_events": 30600,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -723,8 +723,8 @@ async def test_reconfigure_preserves_explicit_entry_disablement(
     [
         ({}, 15, False, 27000),
         ({"diagnostic_operations": 2}, 15, False, 30),
-        ({"diagnostic_events": 19}, 20, False, 20),
-        ({"diagnostic_raw_bytes": 531}, 30, False, 30),
+        ({"diagnostic_events": 33}, 20, False, 20),
+        ({"diagnostic_raw_bytes": 927}, 30, False, 30),
         ({"diagnostic_raw_bytes": 1}, 15, False, 0),
         ({
             "diagnostic_operations": 600,
@@ -758,7 +758,7 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
     assert result["step_id"] == "confirm"
     selected = {
         "diagnostic_operations": 1800,
-        "diagnostic_events": 18000,
+        "diagnostic_events": 30600,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": "21600",
         **budgets,
@@ -782,7 +782,7 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
     [
         ("diagnostic_operations", 0),
         ("diagnostic_operations", 1801),
-        ("diagnostic_events", 18001),
+        ("diagnostic_events", 30601),
         ("diagnostic_events", 1.5),
         ("diagnostic_raw_bytes", 8388609),
         ("diagnostic_raw_bytes", 15.0),
@@ -863,7 +863,7 @@ async def test_capture_defaults_normalize_persisted_options_without_applying(
         (600, 12000, 4194304, 7200),
         (1, 1, 1, 1800),
         (1200, 12000, 4194304, 14400),
-        (1800, 18000, 8388608, 21600),
+        (1800, 30600, 8388608, 21600),
     ],
 )
 async def test_native_options_section_displays_saved_capture_preferences(
@@ -1181,7 +1181,7 @@ async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
             {
                 "review_action": "start",
                 "diagnostic_operations": "1800",
-                "diagnostic_events": "18000",
+                "diagnostic_events": "30600",
                 "diagnostic_raw_bytes": "4194304",
                 "diagnostic_duration": "21600",
                 "estimated_seconds": "27000",
@@ -1236,7 +1236,7 @@ async def test_review_cannot_inject_start_consent(
     [
         ("diagnostic_operations", 0),
         ("diagnostic_operations", "not a number"),
-        ("diagnostic_events", 18001),
+        ("diagnostic_events", 30601),
         ("diagnostic_events", True),
         ("diagnostic_raw_bytes", 1.5),
         ("diagnostic_raw_bytes", None),
@@ -1284,7 +1284,7 @@ async def test_native_restore_recovers_invalid_diagnostic_input_only_on_confirma
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: 20,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 18000,
+        "diagnostic_events": 30600,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -1413,8 +1413,8 @@ async def test_restore_preserves_active_capture_unless_separate_start_selected(
             opened = await hass.config_entries.options.async_init(entry.entry_id)
             review = await hass.config_entries.options.async_configure(
                 opened["flow_id"], capture_options_input(opened, {"diagnostics": {
-                    "diagnostic_operations": 2, "diagnostic_events": 20,
-                    "diagnostic_raw_bytes": 532, "diagnostic_duration": "1800",
+                    "diagnostic_operations": 2, "diagnostic_events": 34,
+                    "diagnostic_raw_bytes": 928, "diagnostic_duration": "1800",
                     "start_capture": True,
                 }}),
             )

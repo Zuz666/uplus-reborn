@@ -12,9 +12,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ._alarms import decode_alarm_payload
 from ._commands import prepare_intent
 from ._protocol import (
     ControlResult,
+    InvalidFrame,
     ProtocolError,
     UwtClient,
     _decode_inner_frame,
@@ -75,6 +77,16 @@ def _inspect_inner(
                 "raw_profile_fields": _raw_profile_fields(words),
                 "state_words": [f"{word:04x}" for word in words],
             }
+    elif frame.frame_type in (0x04, 0x74):
+        try:
+            alarm = decode_alarm_payload(frame.payload)
+        except ValueError as error:
+            raise InvalidFrame(
+                str(error), reason="invalid_alarm_payload"
+            ) from error
+        result["alarms"] = asdict(alarm)
+        if include_raw:
+            result["_diagnostics"] = {"alarm_bitmap_hex": alarm.bitmap_hex}
 
     return result
 
@@ -202,6 +214,11 @@ async def _read_live_state(arguments: argparse.Namespace) -> dict[str, Any]:
             "raw_profile_fields": _raw_profile_fields(state_result.words),
             "reserved": state_result.frame.reserved.hex(),
             "state_words": [f"{word:04x}" for word in state_result.words],
+            "alarm_bitmap_hex": (
+                state_result.snapshot.alarms.bitmap_hex
+                if state_result.snapshot.alarms is not None
+                else None
+            ),
         }
     return result
 
@@ -294,7 +311,9 @@ def _parser() -> argparse.ArgumentParser:
         help="Include state words or non-inner payload bytes",
     )
 
-    status = commands.add_parser("status", help="Perform one read-only 4d01 query")
+    status = commands.add_parser(
+        "status", help="Perform one read-only 4d01 and 0x73 status/alarm query"
+    )
     _add_live_arguments(status, include_raw=True)
 
     start = commands.add_parser("start", help="Start one complete target-drum program")

@@ -33,6 +33,8 @@ _PAUSE_RESUME_REASONS = frozenset(
         "unsupported_phase",
         "not_active",
         "not_paused",
+        "active_fault",
+        "alarm_state_unknown",
         "state_changed",
     )
 )

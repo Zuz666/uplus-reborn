@@ -24,7 +24,7 @@ _COUNTER_LIMIT: Final = (1 << 63) - 1
 _STRING_LIMIT: Final = 512
 _COLLECTION_LIMIT: Final = 32
 _DEPTH_LIMIT: Final = 6
-_NODE_LIMIT: Final = 192
+_NODE_LIMIT: Final = 320
 _TEXT_LIMIT: Final = 8192
 
 
