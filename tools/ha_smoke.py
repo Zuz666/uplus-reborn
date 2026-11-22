@@ -35,7 +35,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,19 +101,16 @@ def _impossible_store_target(storage: Any, storage_path: Path) -> Iterator[None]
     # A real existing storage file cannot also be that directory, yielding a
     # propagated OSError even when the container runs as root.
     impossible = str(storage_path / "impossible-commit")
-    saved: list[tuple[Any, Any]] = []
     targets = [storage]
     io_impl = getattr(storage, "_io", None)
     if io_impl is not None and hasattr(io_impl, "path"):
         targets.append(io_impl)
-    try:
+    with ExitStack() as stack:
         for target in targets:
-            saved.append((target, target.path))
+            original_path = target.path
             target.path = impossible
+            stack.callback(setattr, target, "path", original_path)
         yield
-    finally:
-        for target, original_path in reversed(saved):
-            target.path = original_path
 
 
 def _inner(frame_type: int, payload: bytes) -> bytes:

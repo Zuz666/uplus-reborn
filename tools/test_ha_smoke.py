@@ -29,6 +29,21 @@ class _ModernStore:
         self._io = _FileIO(path)
 
 
+class _ReadOnlyFileIO:
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+
+class _ReadOnlyIoModernStore:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._io = _ReadOnlyFileIO(path)
+
+
 class ImpossibleStoreTargetTests(unittest.TestCase):
     def test_redirects_and_restores_legacy_store_on_exit_and_error(self) -> None:
         storage_path = Path("/tmp/.storage/uplus_reborn.profiles.entry1")
@@ -64,6 +79,18 @@ class ImpossibleStoreTargetTests(unittest.TestCase):
         ):
             self.assertEqual(store._io.path, expected_impossible)
             raise OSError("boom")
+        self.assertEqual(store.path, str(storage_path))
+        self.assertEqual(store._io.path, str(storage_path))
+
+    def test_partial_setup_failure_restores_earlier_target_and_propagates(self) -> None:
+        storage_path = Path("/tmp/.storage/uplus_reborn.profiles.entry3")
+        store = _ReadOnlyIoModernStore(str(storage_path))
+
+        with (
+            self.assertRaises(AttributeError),
+            ha_smoke._impossible_store_target(store, storage_path),
+        ):
+            self.fail("Context manager body should not execute after partial setup failure")
         self.assertEqual(store.path, str(storage_path))
         self.assertEqual(store._io.path, str(storage_path))
 
