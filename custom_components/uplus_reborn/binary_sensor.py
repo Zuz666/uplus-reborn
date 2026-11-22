@@ -78,6 +78,21 @@ BINARY_SENSORS: tuple[UplusRebornBinarySensorEntityDescription, ...] = (
     ),
     *(
         UplusRebornBinarySensorEntityDescription(
+            key=f"{drum}_fault",
+            translation_key=f"{drum}_fault",
+            device_class=BinarySensorDeviceClass.PROBLEM,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            icon="mdi:alert-circle-outline",
+            value_fn=lambda snapshot, drum=drum: (
+                None
+                if snapshot.alarms is None
+                else getattr(snapshot.alarms, drum).has_fault
+            ),
+        )
+        for drum in ("upper", "lower")
+    ),
+    *(
+        UplusRebornBinarySensorEntityDescription(
             key=f"{drum}_reported_{option}",
             translation_key=f"{drum}_reported_{option}",
             icon=icon,
@@ -130,4 +145,6 @@ class UplusRebornBinarySensor(UplusRebornEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         """Return the current flag value."""
+        if self.coordinator.data is None:
+            return None
         return self.entity_description.value_fn(self.coordinator.data)

@@ -74,6 +74,13 @@ _STATE_PROVENANCE = {
         "current_electricity_raw": "word 11, 16 bits",
         "total_electricity_raw": "word 12, 32 bits across words 12..13",
     },
+    "alarms": {
+        "source": "0x04 alarm_report and 0x74 alarm_response to 0x73 query (`0f5a` + 14-byte bitmap)",
+        "lower": "bitmap[0..6] (bits 56..111, mapped slots 50500X..50501I + unmapped bits); 50501a (F7) is HARDWARE-verified; others SOURCE",
+        "upper": "bitmap[7..13] (bits 0..55, mapped slots 505003..50500O + unmapped bits); +56-bit mirror INFERENCE/SOURCE, unverified on hardware",
+        "clear_and_non_fault": "505000 clear is HARDWARE-verified; 50500H/50501B programme_end is retained here and excluded from active faults",
+        "hint_codes": "6d01 hint fields (60500a/60500B) are unresolved and remain excluded from active faults",
+    },
     "unsupported": (
         "Unknown program/phase codes are unsupported, never guessed.",
         "Motion semantics, hint codes and physical door position are not decoded state.",

@@ -200,7 +200,7 @@ coordinator, entities, decoder or transport. Each run uses a fresh temporary
 config and unloads/stops afterward.
 
 Use `tools/delivery.py docker` to run against the immutable container images
-(`--target core-current` for Home Assistant 2026.10.4 on Python 3.14; `--target test`
+(`--target core-current` for Home Assistant 2026.11.2 on Python 3.14; `--target test`
 for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
 stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
@@ -287,14 +287,14 @@ store/protocol code solely because the settings presentation changed.
 
 The scenario retains the previous-limit 720-poll/600-operation measurement for
 comparison. It also executes representative long-session cases: 960 real ordinary
-polls with four-hour 1200/12000/4 MiB settings, and 1440 with six-hour
-1800/18000/4 MiB defaults. Each includes one explicitly armed exact synthetic
+polls with four-hour 1200/20400/4 MiB settings, and 1440 with six-hour
+1800/30600/4 MiB defaults. Each includes one explicitly armed exact synthetic
 Spin/400 Start through the registered native action and occasional fragmented,
 additional reports. Initial Start proof and every poll must remain complete.
 These are accelerated capacity observations, not elapsed hours or physical
 appliance actions; isolated peers reject unarmed or unsupported commands.
-A separate six-hour case keeps 1800/18000 but selects 385000 raw bytes: native
-review with polling enabled estimates 21705 seconds without a capacity warning,
+A separate six-hour case keeps 1800/30600 but selects 672000 raw bytes: native
+review with polling enabled estimates 21720 seconds without a capacity warning,
 yet actual traffic must evict the initial Start under raw pressure. It records loss and
 the retained observation range. Autonomous scheduling is suppressed for this
 accelerated fixture after selecting the 15-second reference; no wall-clock
@@ -363,8 +363,10 @@ operation partial and reports the omitted 1 MiB.
 
 **Default retention sizing: measured coordinator/TCP sample from #80.**
 
-New/default budgets are 1800 operations, 18000 events and 4,194,304 raw bytes,
-with a separate six-hour finite deadline; explicitly saved values remain.
+Current default budgets are 1800 operations, 30600 events and 4,194,304 raw
+bytes (expanded from the historical #80 18000-event default after adding
+short-session alarm queries), with a separate six-hour finite deadline;
+explicitly saved values remain.
 They are configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
 The original 300/6000 sample below is historical reference, not current defaults
 or evidence of new maximum RAM costs. All three budgets apply together, including
@@ -441,7 +443,7 @@ The oversized case retains 4612 metadata/container bytes, not zero.
 The previous-limit ordinary run keeps the newest 600 complete polls after 720
 operations, with honest oldest-first omissions. At 15 seconds per poll that is
 9000 seconds of nominal capacity; current selectable timers reach 21600 seconds.
-Current maxima are 1800 / 18000 / 8 MiB; see the revised sizing above.
+Current maxima are 1800 / 30600 / 8 MiB (17 events and 464 raw bytes per reference poll); see the historical #81 sizing above.
 These accelerated tests establish capacity, not elapsed-hour observation or
 guaranteed history under arbitrary traffic. Explicit legacy 300/6000 acceptance
 separately keeps all 240 first polls, then the newest 300 of 360 polls.
@@ -722,7 +724,7 @@ license and attribution remain separately defined by README and `docs/LICENSE`.
 | Metadata and packaging | Manifest/project/uv root agree; dated notes; committed-byte, licensed, root-layout ZIP; rejection of unsafe/incomplete/occupied candidates |
 | Standalone tooling | Windows and Ubuntu artifact/release boundary regressions, including stale SHA, duplicate tag, version rollback and failed required checks |
 | HA contracts | Full pytest and Ruff in the frozen Docker test image |
-| Real Core | 2026.2.3 and 2026.10.4: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
+| Real Core | 2026.2.3 and 2026.11.2: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
 | Public surface | Markdown/Mermaid, actual issue/PR/private-report routes, hosted CI and effective protection settings |
 | HACS | Separate actual source-tree bootstrap and published-ZIP installation/upgrade; exact installed-member comparison |
 

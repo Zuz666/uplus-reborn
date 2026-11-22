@@ -103,6 +103,9 @@ async def test_runtime_trace_observes_real_control_without_adding_traffic(
     before = _state_response(_standby_words(), frame_type=0x02)
     after = _frame_response(0x03, b"\x00\x00", sequence=2) + _state_response(_active_spin_words())
     init = _frame_response(0x74, bytes.fromhex("0f5a0000000000000000000000000000"), sequence=1)
+    post_init = _frame_response(
+        0x74, bytes.fromhex("0f5a0000000000000000000000000000"), sequence=3
+    )
 
     async def serve(reader, writer):
         requests = []
@@ -114,10 +117,15 @@ async def test_runtime_trace_observes_real_control_without_adding_traffic(
             await asyncio.sleep(0.01)
             writer.write(before[3:])
             await writer.drain()
+            requests.append(await _accept_control_initialization(reader, writer))
             if len(connections) == 3:
-                requests.append(await _accept_control_initialization(reader, writer))
                 requests.append(await _read_request(reader))
                 writer.write(after)
+                await writer.drain()
+                post_req = await _read_request(reader)
+                requests.append(post_req)
+                assert post_req[0] == 3 and post_req[1][9] == 0x73
+                writer.write(post_init)
                 await writer.drain()
             assert await reader.read() == b""
         except (AssertionError, OSError, ValueError, asyncio.IncompleteReadError) as error:
@@ -151,8 +159,8 @@ async def test_runtime_trace_observes_real_control_without_adding_traffic(
         await asyncio.wait_for(asyncio.gather(*peer_tasks), 2)
         assert not errors
         assert closed == [True, True, True]
-        assert [len(requests) for requests in connections] == [1, 1, 3]
-        assert [sequence for sequence, _ in connections[-1]] == [0, 1, 2]
+        assert [len(requests) for requests in connections] == [2, 2, 4]
+        assert [sequence for sequence, _ in connections[-1]] == [0, 1, 2, 3]
         trace = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
         json.dumps(trace)
         if enabled:
@@ -164,7 +172,10 @@ async def test_runtime_trace_observes_real_control_without_adding_traffic(
                 for event in operation["events"]
                 if event["event"] == "raw" and event["direction"] == "rx"
             )
-            assert received == before + init + after
+            assert received == before + init + after + post_init
+            assert any(
+                event["event"] == "alarm_observed" for event in operation["events"]
+            )
             assert operation["context"]["host"] == "127.0.0.1"
             assert not operation["partial"]
         else:
@@ -311,6 +322,9 @@ async def test_native_trace_retains_240_consecutive_ordinary_polls(
     assert await async_setup_component(hass, "logger", {})
     await _level(hass, "info")
     response = _state_response(_standby_words(), frame_type=0x02)
+    alarm_reply = _frame_response(
+        0x74, bytes.fromhex("0f5a0000000000000000000000000000"), sequence=1
+    )
     peers = []
     requests = []
     errors = []
@@ -320,6 +334,7 @@ async def test_native_trace_retains_240_consecutive_ordinary_polls(
             requests.append(await _read_request(reader))
             writer.write(response)
             await writer.drain()
+            requests.append(await _accept_control_initialization(reader, writer))
             assert await reader.read() == b""
         except (AssertionError, OSError, ValueError, asyncio.IncompleteReadError) as err:
             errors.append(err)
@@ -350,7 +365,7 @@ async def test_native_trace_retains_240_consecutive_ordinary_polls(
                 assert coordinator.last_update_success
             await asyncio.wait_for(asyncio.gather(*peers), 5)
             assert not errors
-            assert len(requests) == 241  # Initial setup plus the captured hour.
+            assert len(requests) == 241 * 2  # Initial setup plus the captured hour.
             await _level(hass, "info")
             trace = (await async_get_config_entry_diagnostics(hass, entry))["exchange_trace"]
             assert [op["operation_id"] for op in trace["operations"]] == list(range(1, 241))
@@ -365,7 +380,10 @@ async def test_native_trace_retains_240_consecutive_ordinary_polls(
                     bytes.fromhex(event["data_hex"]) for event in operation["events"]
                     if event["event"] == "raw" and event["direction"] == "rx"
                 )
-                assert received == response
+                assert received == response + alarm_reply
+                assert any(
+                    event["event"] == "alarm_observed" for event in operation["events"]
+                )
         finally:
             await _level(hass, "info")
             assert await hass.config_entries.async_unload(entry.entry_id)

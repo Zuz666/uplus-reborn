@@ -6,6 +6,7 @@ import os
 import struct
 import sys
 import unittest
+from argparse import Namespace
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -16,16 +17,27 @@ from unittest.mock import patch
 import pytest
 
 from custom_components.uplus_reborn.protocol import (
+    FAULT_OPTIONS,
+    NO_FAULT,
+    UNKNOWN_FAULT,
+    AlarmSnapshot,
     CannotConnect,
     ControlResult,
     DeviceSnapshot,
+    DrumAlarmState,
     InvalidFrame,
     OutcomeUnknown,
     StateChanged,
     UnsafeState,
     UwtClient,
+    classify_error,
+    decode_alarm_payload,
 )
-from custom_components.uplus_reborn.protocol.__main__ import _inspect_inner
+from custom_components.uplus_reborn.protocol.__main__ import (
+    _decode_bytes,
+    _inspect_inner,
+    _read_live_state,
+)
 from custom_components.uplus_reborn.protocol._capabilities import (
     Drum,
     program_delay_capabilities,
@@ -41,6 +53,8 @@ from custom_components.uplus_reborn.protocol._protocol import (
     _decode_inner_frame,
     _decode_state,
     _EnvelopeDecoder,
+    _InnerFrame,
+    _response_kind,
     _state_words,
     validate_drum_control,
     validate_program_start,
@@ -259,6 +273,7 @@ async def _exercise_cli_start(
             (0, _inner_frame(0x01, b"\x4d\x01")),
             (1, _inner_frame(0x73, b"")),
             (2, _inner_frame(0x60, bytes.fromhex(expected_group))),
+            (3, _inner_frame(0x73, b"")),
         ]
         if expected_group is not None
         else []
@@ -285,12 +300,12 @@ async def _exercise_cli_start(
                     raise AssertionError(f"Unexpected CLI request at position {index}")
                 if index == 0:
                     writer.write(_state_response(_standby_words(), frame_type=0x02))
-                elif index == 1:
+                elif index in (1, 3):
                     writer.write(
                         _frame_response(
                             0x74,
                             bytes.fromhex("0f5a0000000000000000000000000000"),
-                            sequence=1,
+                            sequence=index,
                         )
                     )
                 else:
@@ -1250,6 +1265,10 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             struct.pack(">II32s32sII", 10004, 0, b"", b"TESTDEVICE", 0, 13)
             + bytes.fromhex("ffff0a000000000000014d0159")
         )
+        expected_alarm_tx = (
+            struct.pack(">II32s32sII", 10004, 0, b"", b"TESTDEVICE", 1, 11)
+            + _inner_frame(0x73, b"")
+        )
         traffic: list[list[bytes]] = []
         for enabled in (False, True):
             with self.subTest(capture=enabled):
@@ -1296,7 +1315,13 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                             await asyncio.sleep(0.01)
                         writer.write(incoming[7:])
                         await writer.drain()
-                        requests.append(await reader.read())
+                        alarm_header = await reader.readexactly(80)
+                        requests.append(
+                            alarm_header
+                            + await reader.readexactly(
+                                int.from_bytes(alarm_header[76:80], "big")
+                            )
+                        )
                     finally:
                         writer.close()
                         await writer.wait_closed()
@@ -1327,7 +1352,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                     for direction, data, stage in observer.raw_chunks
                     if direction == "rx" and stage == "read"
                 ]
-                self.assertEqual(received, [incoming[:7], incoming[7:]])
+                self.assertEqual(received, [incoming[:7], incoming[7:], b""])
                 self.assertTrue(all(len(data) <= 4096 for data in received))
                 states = [
                     context
@@ -1338,7 +1363,9 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                     [context["decision"] for context in states],
                     ["uncorrelated", "correlated"],
                 )
-        self.assertEqual(traffic, [[expected_tx, b""], [expected_tx, b""]])
+        self.assertEqual(
+            traffic, [[expected_tx, expected_alarm_tx], [expected_tx, expected_alarm_tx]]
+        )
 
     async def test_observer_retains_rejected_bytes_before_strict_failure(self) -> None:
         header = _frame_response(0x05, b"")[:76]
@@ -1419,7 +1446,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                     initialization = await _read_request(reader)
                     requests.append(initialization)
                     accepted = _frame_response(
-                        0x74, b"", sequence=initialization[0]
+                        0x74, _alarm_payload(), sequence=initialization[0]
                     )
                     report = _state_response(changed)
                     writer.write(
@@ -1852,7 +1879,8 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             requests.append(await _read_request(reader))
             current[28] = 0x0400
             writer.write(
-                _state_response(current) + _frame_response(0x74, b"", sequence=1)
+                _state_response(current)
+                + _frame_response(0x74, _alarm_payload(), sequence=1)
             )
             await writer.drain()
             requests.append(await _read_request(reader))
@@ -1886,7 +1914,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             await writer.drain()
             await _read_request(reader)
             writer.write(
-                _frame_response(0x74, b"", sequence=1)
+                _frame_response(0x74, _alarm_payload(), sequence=1)
                 + _state_response(_active_spin_words())
             )
             await writer.drain()
@@ -2020,22 +2048,1063 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
     def test_source_child_lock_is_not_local_lock_or_physical_door(self) -> None:
         before = _standby_words()
         before[2] = 0x0108
-        state = _snapshot(before)
+        state = replace(_snapshot(before), alarms=AlarmSnapshot())
         self.assertTrue(state.child_lock)
         self.assertFalse(state.local_lock)
         self.assertFalse(state.buzzer_enabled)
-        with self.assertRaises(UnsafeState):
+        with self.assertRaises(UnsafeState) as raised:
             validate_program_start(state, default_intent("upper", "spin"))
+        self.assertEqual(raised.exception.reason, "child_lock")
         before[2] = 0
         before[3] |= 0x20
-        validate_program_start(_snapshot(before), default_intent("upper", "spin"))
+        validate_program_start(
+            replace(_snapshot(before), alarms=AlarmSnapshot()),
+            default_intent("upper", "spin"),
+        )
 
     def test_finished_and_unknown_phases_are_not_paused_cycles(self) -> None:
         for phase in (0, 0x12, 0x13, 0x15):
-            state = _snapshot(_cycle_words("upper", phase=phase, active=False))
-            with self.subTest(phase=phase), self.assertRaises(UnsafeState):
+            state = replace(
+                _snapshot(_cycle_words("upper", phase=phase, active=False)),
+                alarms=AlarmSnapshot(),
+            )
+            with self.subTest(phase=phase), self.assertRaises(UnsafeState) as ctx:
                 validate_drum_control(state, "upper", "resume")
+            self.assertEqual(ctx.exception.reason, "unsupported_phase")
         for phase in (0x0B, 0x0E, 0x0F):
             state = _snapshot(_cycle_words("upper", phase=phase))
-            with self.subTest(phase=phase), self.assertRaises(UnsafeState):
+            with self.subTest(phase=phase), self.assertRaises(UnsafeState) as ctx:
                 validate_drum_control(state, "upper", "reset")
+            self.assertEqual(ctx.exception.reason, "not_finished")
+
+
+class ResponseKindTest(unittest.TestCase):
+    """Classification tests for incoming EPP inner frame types."""
+
+    def test_response_kind_classifies_empty_0x72_and_unclassified_frames(self) -> None:
+        reserved = b"\x00" * 5
+        self.assertEqual(
+            _response_kind(_InnerFrame(0, reserved, 0x72, b"")),
+            "unsolicited_empty",
+        )
+        self.assertEqual(
+            _response_kind(_InnerFrame(0, reserved, 0x72, b"\x01")),
+            "unclassified",
+        )
+        self.assertEqual(
+            _response_kind(_InnerFrame(0, reserved, 0x05, b"")),
+            "unclassified",
+        )
+        self.assertEqual(
+            _response_kind(_InnerFrame(0, reserved, 0x7F, b"")),
+            "unclassified",
+        )
+        for frame_type, expected in (
+            (0x02, "status"),
+            (0x06, "report"),
+            (0x03, "ack"),
+            (0x04, "alarm_report"),
+            (0x74, "alarm_response"),
+        ):
+            self.assertEqual(
+                _response_kind(_InnerFrame(0, reserved, frame_type, b"")),
+                expected,
+            )
+
+
+class AlarmDecoderTest(unittest.TestCase):
+    """Independent wire-oracle tests for 0x04 / 0x74 alarm payloads."""
+
+    def test_clear_payload_decodes_as_no_active_fault(self) -> None:
+        alarm = decode_alarm_payload(bytes.fromhex("0f5a" + "00" * 14))
+        self.assertEqual(alarm.bitmap_hex, "00" * 14)
+        self.assertEqual(alarm.raw_codes, ("505000",))
+        for drum in (alarm.upper, alarm.lower):
+            self.assertEqual(drum, DrumAlarmState())
+            self.assertFalse(drum.has_fault)
+            self.assertEqual(drum.primary_fault, NO_FAULT)
+
+    def test_hardware_corroborated_lower_f7_bit_71(self) -> None:
+        alarm = decode_alarm_payload(bytes.fromhex("0f5a0000000000800000000000000000"))
+        self.assertEqual(alarm.raw_codes, ("50501a",))
+        self.assertFalse(alarm.upper.has_fault)
+        self.assertEqual(alarm.upper.primary_fault, NO_FAULT)
+        self.assertTrue(alarm.lower.has_fault)
+        self.assertEqual(alarm.lower.primary_fault, "motor_fault")
+        self.assertEqual(alarm.lower.faults, ("motor_fault",))
+        self.assertEqual(alarm.lower.fault_codes, ("50501a",))
+        self.assertFalse(alarm.lower.programme_end)
+
+    def test_complete_mirrored_112_bit_map_programme_end_and_unmapped_bits(
+        self,
+    ) -> None:
+        self.assertEqual(len(FAULT_OPTIONS), 31)
+        self.assertEqual(FAULT_OPTIONS[0], NO_FAULT)
+        self.assertEqual(FAULT_OPTIONS[-1], UNKNOWN_FAULT)
+
+        # Independently constructed literal 16-byte alarm payloads across both
+        # drums, byte boundaries, programme_end, and unmapped positions.
+        literal_cases = (
+            ("0f5a0000000000000000000000000001", "upper", UNKNOWN_FAULT, "505001", False),
+            ("0f5a0000000000000000000000000004", "upper", "drying_fan_fault", "505003", False),
+            ("0f5a0000000000000000000000400000", "upper", "door_not_locked", "50500n", False),
+            ("0f5a0000000000000000040000000000", "upper", NO_FAULT, "50500H", True),
+            ("0f5a0000000000000002000000000000", "upper", "drive_board_duplicate_fault", "50500O", False),
+            ("0f5a0000000000000400000000000000", "lower", "drying_fan_fault", "50500X", False),
+            ("0f5a0000000040000000000000000000", "lower", "door_not_locked", "50501h", False),
+            ("0f5a0004000000000000000000000000", "lower", NO_FAULT, "50501B", True),
+            ("0f5a0200000000000000000000000000", "lower", "drive_board_duplicate_fault", "50501I", False),
+            ("0f5a8000000000000000000000000000", "lower", UNKNOWN_FAULT, "50501O", False),
+        )
+        for payload_hex, drum, slug, raw_code, is_end in literal_cases:
+            with self.subTest(payload_hex=payload_hex):
+                alarm = decode_alarm_payload(bytes.fromhex(payload_hex))
+                self.assertEqual(alarm.raw_codes, (raw_code,))
+                target, other = (
+                    (alarm.upper, alarm.lower)
+                    if drum == "upper"
+                    else (alarm.lower, alarm.upper)
+                )
+                self.assertFalse(other.has_fault)
+                self.assertEqual(other.fault_codes, ())
+                self.assertFalse(other.programme_end)
+                self.assertEqual(target.programme_end, is_end)
+                self.assertEqual(target.primary_fault, slug)
+                if is_end:
+                    self.assertFalse(target.has_fault)
+                    self.assertEqual(target.faults, ())
+                    self.assertEqual(target.fault_codes, ())
+                else:
+                    self.assertTrue(target.has_fault)
+                    self.assertEqual(target.faults, (slug,))
+                    self.assertEqual(target.fault_codes, (raw_code,))
+
+        # Exhaustive single-bit structural invariants without duplicating _FAULT_GROUPS.
+        seen_codes: set[str] = set()
+        upper_slugs: list[str] = []
+        lower_slugs: list[str] = []
+        programme_end_bits = 0
+        unmapped_bits = 0
+        mapped_bits = 0
+        for bit_pos in range(112):
+            payload = b"\x0f\x5a" + (1 << bit_pos).to_bytes(14, "big")
+            alarm = decode_alarm_payload(payload)
+            with self.subTest(bit_pos=bit_pos):
+                self.assertEqual(len(alarm.raw_codes), 1)
+                raw_code = alarm.raw_codes[0]
+                self.assertRegex(raw_code, r"\A5050[0-9a-zA-Z]{2}\Z")
+                self.assertNotEqual(raw_code, "505000")
+                self.assertNotIn(raw_code, seen_codes)
+                seen_codes.add(raw_code)
+                target, other = (
+                    (alarm.upper, alarm.lower)
+                    if bit_pos < 56
+                    else (alarm.lower, alarm.upper)
+                )
+                self.assertFalse(other.has_fault)
+                self.assertEqual(other.fault_codes, ())
+                self.assertFalse(other.programme_end)
+                if target.programme_end:
+                    programme_end_bits += 1
+                    self.assertFalse(target.has_fault)
+                    self.assertEqual(target.primary_fault, NO_FAULT)
+                    self.assertEqual(target.faults, ())
+                    self.assertEqual(target.fault_codes, ())
+                else:
+                    self.assertTrue(target.has_fault)
+                    self.assertEqual(len(target.faults), 1)
+                    self.assertEqual(target.primary_fault, target.faults[0])
+                    self.assertEqual(target.fault_codes, (raw_code,))
+                    self.assertIn(target.primary_fault, FAULT_OPTIONS)
+                    if target.primary_fault == UNKNOWN_FAULT:
+                        unmapped_bits += 1
+                    else:
+                        mapped_bits += 1
+                (upper_slugs if bit_pos < 56 else lower_slugs).append(target.primary_fault)
+
+        self.assertEqual(len(seen_codes), 112)
+        self.assertEqual(upper_slugs, lower_slugs)
+        self.assertEqual(programme_end_bits, 2)
+        self.assertEqual(unmapped_bits, 16)
+        self.assertEqual(mapped_bits, 94)
+        self.assertEqual(set(upper_slugs) - {NO_FAULT, UNKNOWN_FAULT}, set(FAULT_OPTIONS[1:-1]))
+
+    def test_multi_fault_priority_deduplication_and_invalid_inputs(self) -> None:
+        # Unmapped lower sl=57 (bit 56) + lower F7 sl=72 (bit 71) + upper programme_end sl=43 (bit 42)
+        bitmap = bytearray(14)
+        for bit_pos in (42, 56, 71):
+            bitmap[13 - bit_pos // 8] |= 1 << (bit_pos % 8)
+        alarm = decode_alarm_payload(b"\x0f\x5a" + bytes(bitmap))
+        self.assertTrue(alarm.upper.programme_end)
+        self.assertFalse(alarm.upper.has_fault)
+        self.assertEqual(alarm.lower.primary_fault, "motor_fault")
+        self.assertEqual(alarm.lower.faults, ("motor_fault", UNKNOWN_FAULT))
+        self.assertEqual(alarm.lower.fault_codes, ("50500V", "50501a"))
+
+        # Two F7 sub-bits deduplicate in faults while preserving both raw codes
+        bitmap_f7 = bytearray(14)
+        for bit_pos in (4, 15):
+            bitmap_f7[13 - bit_pos // 8] |= 1 << (bit_pos % 8)
+        f7 = decode_alarm_payload(b"\x0f\x5a" + bytes(bitmap_f7))
+        self.assertEqual(f7.upper.faults, ("motor_fault",))
+        self.assertEqual(f7.upper.fault_codes, ("505005", "50500g"))
+        self.assertEqual(f7.upper.primary_fault, "motor_fault")
+
+        for bad in (b"", b"\x0f\x5a" + b"\x00" * 13, b"\x0f\x5b" + b"\x00" * 14):
+            with self.subTest(bad=bad.hex()), self.assertRaises(ValueError):
+                decode_alarm_payload(bad)
+
+        self.assertIsInstance(alarm, AlarmSnapshot)
+
+
+def _alarm_payload(*bit_positions: int) -> bytes:
+    bitmap = bytearray(14)
+    for bit_pos in bit_positions:
+        bitmap[13 - bit_pos // 8] |= 1 << (bit_pos % 8)
+    return b"\x0f\x5a" + bytes(bitmap)
+
+
+@pytest.mark.usefixtures("loopback_socket")
+class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    """Protocol lifecycle, safety interlock and CLI tests for 0x04 / 0x73 / 0x74."""
+
+    async def _run_client(
+        self,
+        handler: object,
+        *,
+        timeout: float = 1.0,
+        control_timeout: float = 2.0,
+    ) -> tuple[asyncio.Server, UwtClient]:
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        self.addAsyncCleanup(self._close_server, server)
+        port = server.sockets[0].getsockname()[1]
+        client = UwtClient(
+            host="127.0.0.1",
+            device_id="001122334455",
+            port=port,
+            timeout=timeout,
+            control_timeout=control_timeout,
+        )
+        return server, client
+
+    @staticmethod
+    async def _close_server(server: asyncio.Server) -> None:
+        server.close()
+        await server.wait_closed()
+
+    async def test_read_state_queries_alarms_after_6d01_in_one_session(self) -> None:
+        requests: list[tuple[int, bytes]] = []
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, inner0 = await _read_request(reader)
+            requests.append((seq0, inner0))
+            writer.write(_state_response(_standby_words(), sequence=seq0))
+            await writer.drain()
+
+            seq1, inner1 = await _read_request(reader)
+            requests.append((seq1, inner1))
+            writer.write(_frame_response(0x74, _alarm_payload(71), sequence=seq1))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        _, client = await self._run_client(handle)
+        snapshot = await client.read_state()
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0][0], 0)
+        self.assertEqual(requests[1][0], 1)
+        self.assertEqual(requests[1][1][9], 0x73)
+        self.assertIsNotNone(snapshot.alarms)
+        assert snapshot.alarms is not None
+        self.assertFalse(snapshot.alarms.upper.has_fault)
+        self.assertTrue(snapshot.alarms.lower.has_fault)
+        self.assertEqual(snapshot.alarms.lower.primary_fault, "motor_fault")
+        self.assertEqual(snapshot.alarms.lower.fault_codes, ("50501a",))
+
+    async def test_alarm_frames_handle_ff_escaping_and_report_observer_kinds(
+        self,
+    ) -> None:
+        ff_payload = b"\x0f\x5a" + b"\x00" * 13 + b"\xff"
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x04, ff_payload, sequence=0)
+                + _state_response(_standby_words(), sequence=seq0)
+            )
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, ff_payload, sequence=seq1))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        _, base_client = await self._run_client(handle)
+        observer = _RecordingObserver()
+        client = replace(base_client, observer=observer)
+        snapshot = await client.read_state()
+
+        assert snapshot.alarms is not None
+        self.assertEqual(snapshot.alarms.upper.primary_fault, "drying_fan_fault")
+        self.assertEqual(
+            snapshot.alarms.upper.faults,
+            ("drying_fan_fault", "water_heating_fault", "motor_fault", UNKNOWN_FAULT),
+        )
+        response_kinds = [
+            context["response_kind"]
+            for event, context in observer.events
+            if event == "response"
+        ]
+        self.assertIn("alarm_report", response_kinds)
+        self.assertIn("alarm_response", response_kinds)
+
+    async def test_read_state_captures_opportunistic_0x04_and_soft_degrades(self) -> None:
+        async def handle_0x04_only(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x04, _alarm_payload(4), sequence=0)
+                + _state_response(_standby_words(), sequence=seq0)
+            )
+            await writer.drain()
+            await _read_request(reader)
+            writer.close()
+            await writer.wait_closed()
+
+        _, client = await self._run_client(handle_0x04_only, timeout=0.5)
+        snap = await client.read_state()
+        assert snap.alarms is not None
+        self.assertEqual(snap.alarms.upper.primary_fault, "motor_fault")
+
+        async def handle_timeout(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(_standby_words(), sequence=seq0))
+            await writer.drain()
+            await _read_request(reader)
+            await asyncio.sleep(0.3)
+            writer.close()
+            await writer.wait_closed()
+
+        async def handle_eof(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(_standby_words(), sequence=seq0))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        async def handle_seq0_0x74(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(_standby_words(), sequence=seq0))
+            await writer.drain()
+            await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(4), sequence=0))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        async def handle_malformed_0x74(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x04, _alarm_payload(4), sequence=0)
+                + _state_response(_standby_words(), sequence=seq0)
+            )
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, b"\x0f\x5b" + b"\x00" * 14, sequence=seq1))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        for case, handler in (
+            ("timeout", handle_timeout),
+            ("eof", handle_eof),
+            ("seq0", handle_seq0_0x74),
+            ("malformed", handle_malformed_0x74),
+        ):
+            with self.subTest(case=case):
+                _, degraded_client = await self._run_client(handler, timeout=0.08)
+                degraded = await degraded_client.read_state()
+                self.assertIsNone(degraded.alarms)
+
+    def test_per_drum_fault_interlocks_and_programme_end_exclusion(self) -> None:
+        base_standby = _snapshot(_standby_words())
+        base_active = _snapshot(_cycle_words("upper"))
+        base_paused = _snapshot(_cycle_words("upper", active=False))
+        base_finished = _snapshot(_cycle_words("upper", phase=0x13, active=False))
+
+        # Unknown alarms fail closed on start and resume, but allow pause/cancel/reset.
+        with self.assertRaises(UnsafeState) as start_ctx:
+            validate_program_start(base_standby, default_intent("upper", "spin"))
+        self.assertEqual(start_ctx.exception.reason, "alarm_state_unknown")
+        self.assertEqual(classify_error(start_ctx.exception), "alarm_state_unknown")
+
+        with self.assertRaises(UnsafeState) as resume_ctx:
+            validate_drum_control(base_paused, "upper", "resume")
+        self.assertEqual(resume_ctx.exception.reason, "alarm_state_unknown")
+
+        validate_drum_control(base_active, "upper", "pause")
+        validate_drum_control(base_active, "upper", "cancel")
+        validate_drum_control(base_finished, "upper", "reset")
+
+        # Upper fault blocks all 5 upper actions while leaving lower standby/active unblocked.
+        upper_fault = decode_alarm_payload(_alarm_payload(4))
+        for snap, fn in (
+            (base_standby, lambda s: validate_program_start(s, default_intent("upper", "spin"))),
+            (base_active, lambda s: validate_drum_control(s, "upper", "pause")),
+            (base_paused, lambda s: validate_drum_control(s, "upper", "resume")),
+            (base_active, lambda s: validate_drum_control(s, "upper", "cancel")),
+            (base_finished, lambda s: validate_drum_control(s, "upper", "reset")),
+        ):
+            with self.subTest(action_snap=snap.upper.phase_value), self.assertRaises(UnsafeState) as ctx:
+                fn(snap.__class__(**{f: getattr(snap, f) for f in snap.__dataclass_fields__} | {"alarms": upper_fault}))
+            self.assertEqual(ctx.exception.reason, "active_fault")
+            self.assertEqual(classify_error(ctx.exception), "active_fault")
+
+        lower_snap = base_standby.__class__(
+            **{f: getattr(base_standby, f) for f in base_standby.__dataclass_fields__}
+            | {"alarms": upper_fault}
+        )
+        validate_program_start(lower_snap, default_intent("lower", "spin"))
+
+        # Programme end alone (sl=43 / sl=99) is not an active fault.
+        program_end = decode_alarm_payload(_alarm_payload(42, 98))
+        for snap, fn in (
+            (base_standby, lambda s: validate_program_start(s, default_intent("upper", "spin"))),
+            (base_finished, lambda s: validate_drum_control(s, "upper", "reset")),
+        ):
+            fn(
+                snap.__class__(
+                    **{f: getattr(snap, f) for f in snap.__dataclass_fields__}
+                    | {"alarms": program_end}
+                )
+            )
+
+    async def test_initialize_controls_rejects_fault_and_invalid_alarm_before_dispatch(
+        self,
+    ) -> None:
+        rejection_cases: tuple[
+            tuple[str, list[int], bytes, str, Callable[[UwtClient], Awaitable[ControlResult]]],
+            ...,
+        ] = (
+            (
+                "start_empty_0x74",
+                _standby_words(),
+                b"",
+                "alarm_state_unknown",
+                lambda c: c.start_program(
+                    default_intent("upper", "spin"), allow_live=True
+                ),
+            ),
+            (
+                "start_bad_header",
+                _standby_words(),
+                b"\x0f\x5b" + b"\x00" * 14,
+                "alarm_state_unknown",
+                lambda c: c.start_program(
+                    default_intent("upper", "spin"), allow_live=True
+                ),
+            ),
+            (
+                "start_active_fault",
+                _standby_words(),
+                _alarm_payload(4),
+                "active_fault",
+                lambda c: c.start_program(
+                    default_intent("upper", "spin"), allow_live=True
+                ),
+            ),
+            (
+                "resume_empty_0x74",
+                _cycle_words("upper", active=False),
+                b"",
+                "alarm_state_unknown",
+                lambda c: c.control_drum("upper", "resume", allow_live=True),
+            ),
+            (
+                "pause_active_fault",
+                _active_spin_words(),
+                _alarm_payload(4),
+                "active_fault",
+                lambda c: c.control_drum("upper", "pause", allow_live=True),
+            ),
+        )
+        for case, state_words, payload, reason, invoke in rejection_cases:
+            requests: list[tuple[int, bytes]] = []
+            finished = asyncio.Event()
+
+            async def handle(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+                reply_words: list[int] = state_words,
+                reply_payload: bytes = payload,
+                captured_requests: list[tuple[int, bytes]] = requests,
+                done: asyncio.Event = finished,
+            ) -> None:
+                try:
+                    seq0, _ = await _read_request(reader)
+                    captured_requests.append((seq0, b"query"))
+                    writer.write(_state_response(reply_words, sequence=seq0))
+                    await writer.drain()
+                    seq1, _ = await _read_request(reader)
+                    captured_requests.append((seq1, b"init"))
+                    writer.write(_frame_response(0x74, reply_payload, sequence=seq1))
+                    await writer.drain()
+                    trailing = await reader.read()
+                    if trailing:
+                        captured_requests.append((-1, trailing))
+                    writer.close()
+                    await writer.wait_closed()
+                finally:
+                    done.set()
+
+            with self.subTest(case=case):
+                _, client = await self._run_client(handle)
+                with self.assertRaises(UnsafeState) as ctx:
+                    await invoke(client)
+                await asyncio.wait_for(finished.wait(), 1)
+                self.assertEqual(ctx.exception.reason, reason)
+                self.assertEqual(classify_error(ctx.exception), reason)
+                self.assertEqual(len(requests), 2)
+
+        # Alarm-independent actions proceed on checksum-valid sequence-matched empty 0x74.
+        paused_words = _cycle_words("upper", active=False)
+        power_on = _standby_words()
+        power_off = power_on.copy()
+        power_off[3] = 0
+        for case, before_words, after_words, invoke in (
+            (
+                "pause_empty_0x74",
+                _active_spin_words(),
+                paused_words,
+                lambda c: c.control_drum("upper", "pause", allow_live=True),
+            ),
+            (
+                "power_empty_0x74",
+                power_on,
+                power_off,
+                lambda c: c.set_appliance_option("power", False, allow_live=True),
+            ),
+        ):
+            async def handle_empty_init_allowed(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+                init_words: list[int] = before_words,
+                done_words: list[int] = after_words,
+            ) -> None:
+                seq0, _ = await _read_request(reader)
+                writer.write(_state_response(init_words, sequence=seq0))
+                await writer.drain()
+                seq1, _ = await _read_request(reader)
+                writer.write(_frame_response(0x74, b"", sequence=seq1))
+                await writer.drain()
+                seq2, _ = await _read_request(reader)
+                writer.write(
+                    _frame_response(0x03, b"", sequence=seq2)
+                    + _state_response(done_words, sequence=0)
+                )
+                await writer.drain()
+                seq3, _ = await _read_request(reader)
+                writer.write(_frame_response(0x74, b"", sequence=seq3))
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+
+            with self.subTest(case=case):
+                _, base_client = await self._run_client(handle_empty_init_allowed)
+                observer = _RecordingObserver()
+                result = await invoke(replace(base_client, observer=observer))
+                self.assertIsNone(result.before.alarms)
+                self.assertIsNone(result.after.alarms)
+                self.assertIn(
+                    (
+                        "alarm_unavailable",
+                        {"stage": "initialization", "cause": "invalid_alarm_payload"},
+                    ),
+                    observer.events,
+                )
+                if case == "pause_empty_0x74":
+                    self.assertFalse(result.after.upper.cycle_active)
+                else:
+                    self.assertFalse(result.after.power)
+
+        # Cached expected snapshot with alarms=None must NOT raise StateChanged against clear 0x74.
+        before = _standby_words()
+        active = _active_spin_words()
+
+        async def handle_clear_from_unknown(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(before, sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x03, b"", sequence=seq2)
+                + _state_response(active, sequence=0)
+            )
+            await writer.drain()
+            seq3, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(71), sequence=seq3))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        _, client = await self._run_client(handle_clear_from_unknown)
+        result = await client.start_program(
+            default_intent("upper", "spin"),
+            allow_live=True,
+            expected=_snapshot(before),
+        )
+        assert result.after.alarms is not None
+        self.assertEqual(result.after.alarms.lower.primary_fault, "motor_fault")
+
+        # Shared options remain allowed even when both drums report active faults.
+        power_on = _standby_words()
+        power_off = power_on.copy()
+        power_off[3] = 0
+
+        async def handle_shared_option(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(power_on, sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(4, 71), sequence=seq1))
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x03, b"", sequence=seq2)
+                + _state_response(power_off, sequence=0)
+            )
+            await writer.drain()
+            seq3, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(4, 71), sequence=seq3))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        _, opt_client = await self._run_client(handle_shared_option)
+        opt_result = await opt_client.set_appliance_option(
+            "power", False, allow_live=True
+        )
+        self.assertFalse(opt_result.after.power)
+        assert opt_result.after.alarms is not None
+        self.assertTrue(opt_result.after.alarms.upper.has_fault)
+
+    async def test_post_confirm_alarm_refresh_never_raises_outcome_unknown(self) -> None:
+        before = _standby_words()
+        active = _active_spin_words()
+
+        async def handle_post_confirm_eof(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(before, sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x03, b"", sequence=seq2)
+                + _state_response(active, sequence=0)
+            )
+            await writer.drain()
+            await _read_request(reader)
+            writer.close()
+            await writer.wait_closed()
+
+        async def handle_post_confirm_timeout(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(before, sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x03, b"", sequence=seq2)
+                + _state_response(active, sequence=0)
+            )
+            await writer.drain()
+            await _read_request(reader)
+            await asyncio.sleep(0.3)
+            writer.close()
+            await writer.wait_closed()
+
+        async def handle_post_confirm_malformed(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(before, sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(
+                _frame_response(0x03, b"", sequence=seq2)
+                + _state_response(active, sequence=0)
+            )
+            await writer.drain()
+            seq3, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, b"", sequence=seq3))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        for case, handler in (
+            ("eof", handle_post_confirm_eof),
+            ("timeout", handle_post_confirm_timeout),
+            ("malformed", handle_post_confirm_malformed),
+        ):
+            with self.subTest(case=case):
+                _, client = await self._run_client(
+                    handler, timeout=0.08, control_timeout=0.5
+                )
+                result = await client.start_program(
+                    default_intent("upper", "spin"), allow_live=True
+                )
+                self.assertEqual(result.after.upper.phase_value, 0x0B)
+                self.assertIsNone(result.after.alarms)
+
+    async def test_cli_decodes_0x04_0x74_and_status_reports_alarms(self) -> None:
+        inner_payload = _alarm_payload(71)
+        stream_04 = _frame_response(0x04, inner_payload, sequence=0)
+        decoded_stream = _decode_bytes(stream_04, include_raw=True)
+        self.assertEqual(decoded_stream["kind"], "uwt_stream")
+        alarm_out = decoded_stream["envelopes"][0]["inner"]["alarms"]
+        self.assertEqual(alarm_out["lower"]["faults"], ("motor_fault",))
+        self.assertEqual(alarm_out["lower"]["fault_codes"], ("50501a",))
+        self.assertEqual(
+            decoded_stream["envelopes"][0]["inner"]["_diagnostics"]["alarm_bitmap_hex"],
+            inner_payload[2:].hex(),
+        )
+
+        # Also exercise raw inner frame decode for 0x74 and live status CLI output.
+        env_74 = _EnvelopeDecoder().feed(_frame_response(0x74, _alarm_payload(4), sequence=1))[0]
+        inspected_74 = _inspect_inner(
+            env_74.payload,
+            include_raw=False,
+            observed_at=_snapshot(_standby_words()).observed_at,
+        )
+        self.assertEqual(inspected_74["alarms"]["upper"]["faults"], ("motor_fault",))
+
+        async def handle_status(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(_standby_words(), sequence=seq0))
+            await writer.drain()
+            seq1, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, _alarm_payload(71), sequence=seq1))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server, client = await self._run_client(handle_status)
+        port = server.sockets[0].getsockname()[1]
+        with patch.dict(os.environ, clear=False):
+            os.environ.pop("UPLUS_REBORN_DEVICE_ID", None)
+            status_out = await _read_live_state(
+                Namespace(
+                    allow_live=True,
+                    host="127.0.0.1",
+                    port=port,
+                    timeout=client.timeout,
+                    device_id=client.device_id,
+                    device_id_file=None,
+                    include_raw=True,
+                )
+            )
+        self.assertEqual(status_out["alarms"]["lower"]["faults"], ("motor_fault",))
+        self.assertEqual(status_out["alarms"]["lower"]["fault_codes"], ("50501a",))
+        self.assertEqual(
+            status_out["_diagnostics"]["alarm_bitmap_hex"],
+            _alarm_payload(71)[2:].hex(),
+        )
+
+    async def test_read_state_retries_0x73_once_on_0x72_seq0_collision_only(
+        self,
+    ) -> None:
+        for case, with_0x72, reply_after_collision, expected_seq_list, expect_fault in (
+            ("collision_recovers", True, True, [0, 1, 2], "motor_fault"),
+            ("0x72_without_seq0_no_retry", True, False, [0, 1], "clear"),
+            ("collision_bounded_to_one_retry", True, "repeat_seq0", [0, 1, 2], None),
+            ("seq0_0x74_without_0x72_no_retry", False, None, [0, 1], None),
+        ):
+            requests: list[tuple[int, bytes]] = []
+            finished = asyncio.Event()
+
+            async def handle(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+                send_0x72: bool = with_0x72,
+                after_mode: object = reply_after_collision,
+                captured: list[tuple[int, bytes]] = requests,
+                done: asyncio.Event = finished,
+            ) -> None:
+                try:
+                    seq0, inner0 = await _read_request(reader)
+                    captured.append((seq0, inner0))
+                    writer.write(_state_response(_standby_words(), sequence=seq0))
+                    await writer.drain()
+
+                    seq1, inner1 = await _read_request(reader)
+                    captured.append((seq1, inner1))
+                    if send_0x72 and after_mode is False:
+                        writer.write(
+                            _frame_response(0x72, b"", sequence=0)
+                            + _frame_response(0x74, _alarm_payload(), sequence=seq1)
+                        )
+                        await writer.drain()
+                    elif send_0x72:
+                        writer.write(
+                            _frame_response(0x72, b"", sequence=0)
+                            + _frame_response(0x74, _alarm_payload(4), sequence=0)
+                        )
+                        await writer.drain()
+                        if after_mode is True:
+                            seq2, inner2 = await _read_request(reader)
+                            captured.append((seq2, inner2))
+                            writer.write(
+                                _frame_response(0x74, _alarm_payload(71), sequence=seq2)
+                            )
+                            await writer.drain()
+                        else:
+                            seq2, inner2 = await _read_request(reader)
+                            captured.append((seq2, inner2))
+                            writer.write(
+                                _frame_response(0x72, b"", sequence=0)
+                                + _frame_response(0x74, _alarm_payload(4), sequence=0)
+                            )
+                            await writer.drain()
+                    else:
+                        writer.write(_frame_response(0x74, _alarm_payload(4), sequence=0))
+                        await writer.drain()
+
+                    trailing = await reader.read()
+                    if trailing:
+                        captured.append((-1, trailing))
+                    writer.close()
+                    await writer.wait_closed()
+                finally:
+                    done.set()
+
+            with self.subTest(case=case):
+                _, base_client = await self._run_client(handle, timeout=0.12)
+                observer = _RecordingObserver()
+                client = replace(base_client, observer=observer)
+                snap = await client.read_state()
+                await asyncio.wait_for(finished.wait(), 1)
+                self.assertEqual([seq for seq, _ in requests], expected_seq_list)
+                self.assertEqual(requests[0][1][9], 0x01)
+                self.assertEqual(
+                    [inner[9] for _, inner in requests[1:]],
+                    [0x73] * (len(expected_seq_list) - 1),
+                )
+                retries = [
+                    ctx
+                    for event, ctx in observer.events
+                    if event == "alarm_query_retry"
+                ]
+                kinds = [
+                    ctx["response_kind"]
+                    for event, ctx in observer.events
+                    if event == "response"
+                ]
+                if case == "collision_recovers":
+                    self.assertIn("unsolicited_empty", kinds)
+                    self.assertEqual(
+                        retries,
+                        [
+                            {
+                                "stage": "query",
+                                "reason": "unsolicited_empty_seq0_collision",
+                                "sequence": 2,
+                            }
+                        ],
+                    )
+                    assert snap.alarms is not None
+                    self.assertEqual(snap.alarms.lower.primary_fault, expect_fault)
+                elif case == "0x72_without_seq0_no_retry":
+                    self.assertIn("unsolicited_empty", kinds)
+                    self.assertEqual(retries, [])
+                    assert snap.alarms is not None
+                    self.assertFalse(snap.alarms.upper.has_fault)
+                elif case == "collision_bounded_to_one_retry":
+                    self.assertEqual(len(retries), 1)
+                    self.assertIsNone(snap.alarms)
+                else:
+                    self.assertEqual(retries, [])
+                    self.assertIsNone(snap.alarms)
+
+    async def test_control_init_and_post_confirm_retry_0x73_once_on_0x72_collision(
+        self,
+    ) -> None:
+        # 1) Both pre-dispatch and post-confirm recover with 1 retry each, control sent once.
+        requests: list[tuple[int, bytes]] = []
+        finished = asyncio.Event()
+
+        async def handle_recover(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                seq0, inner0 = await _read_request(reader)
+                requests.append((seq0, inner0))
+                writer.write(_state_response(_standby_words(), sequence=seq0))
+                await writer.drain()
+
+                seq1, inner1 = await _read_request(reader)
+                requests.append((seq1, inner1))
+                writer.write(
+                    _frame_response(0x72, b"", sequence=0)
+                    + _frame_response(0x74, _alarm_payload(4), sequence=0)
+                )
+                await writer.drain()
+
+                seq2, inner2 = await _read_request(reader)
+                requests.append((seq2, inner2))
+                writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq2))
+                await writer.drain()
+
+                seq3, inner3 = await _read_request(reader)
+                requests.append((seq3, inner3))
+                writer.write(
+                    _frame_response(0x03, b"", sequence=seq3)
+                    + _state_response(_active_spin_words(), sequence=0)
+                )
+                await writer.drain()
+
+                seq4, inner4 = await _read_request(reader)
+                requests.append((seq4, inner4))
+                writer.write(
+                    _frame_response(0x72, b"", sequence=0)
+                    + _frame_response(0x74, _alarm_payload(), sequence=0)
+                )
+                await writer.drain()
+
+                seq5, inner5 = await _read_request(reader)
+                requests.append((seq5, inner5))
+                writer.write(_frame_response(0x74, _alarm_payload(71), sequence=seq5))
+                await writer.drain()
+
+                trailing = await reader.read()
+                if trailing:
+                    requests.append((-1, trailing))
+                writer.close()
+                await writer.wait_closed()
+            finally:
+                finished.set()
+
+        _, base_client = await self._run_client(handle_recover, timeout=0.5, control_timeout=2.0)
+        observer = _RecordingObserver()
+        result = await replace(base_client, observer=observer).start_program(
+            default_intent("upper", "spin"), allow_live=True
+        )
+        await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual([seq for seq, _ in requests], [0, 1, 2, 3, 4, 5])
+        self.assertEqual(sum(1 for _, inner in requests if inner[9] == 0x60), 1)
+        self.assertEqual(result.after.upper.phase_value, 0x0B)
+        assert result.after.alarms is not None
+        self.assertEqual(result.after.alarms.lower.primary_fault, "motor_fault")
+        self.assertEqual(
+            [ctx for event, ctx in observer.events if event == "alarm_query_retry"],
+            [
+                {
+                    "stage": "initialization",
+                    "reason": "unsolicited_empty_seq0_collision",
+                    "sequence": 2,
+                },
+                {
+                    "stage": "post_confirm",
+                    "reason": "unsolicited_empty_seq0_collision",
+                    "sequence": 5,
+                },
+            ],
+        )
+
+        # 2) Pre-dispatch retry revealing an active fault rejects without sending control.
+        for case, second_reply, exc_type, reason in (
+            ("retry_reveals_fault", _alarm_payload(4), UnsafeState, "active_fault"),
+            ("double_collision_times_out", "repeat_seq0", CannotConnect, None),
+        ):
+            case_requests: list[tuple[int, bytes]] = []
+            case_done = asyncio.Event()
+
+            async def handle_reject(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+                reply_spec: object = second_reply,
+                captured: list[tuple[int, bytes]] = case_requests,
+                done: asyncio.Event = case_done,
+            ) -> None:
+                try:
+                    seq0, inner0 = await _read_request(reader)
+                    captured.append((seq0, inner0))
+                    writer.write(_state_response(_standby_words(), sequence=seq0))
+                    await writer.drain()
+
+                    seq1, inner1 = await _read_request(reader)
+                    captured.append((seq1, inner1))
+                    writer.write(
+                        _frame_response(0x72, b"", sequence=0)
+                        + _frame_response(0x74, _alarm_payload(), sequence=0)
+                    )
+                    await writer.drain()
+
+                    seq2, inner2 = await _read_request(reader)
+                    captured.append((seq2, inner2))
+                    if reply_spec == "repeat_seq0":
+                        writer.write(
+                            _frame_response(0x72, b"", sequence=0)
+                            + _frame_response(0x74, _alarm_payload(), sequence=0)
+                        )
+                    else:
+                        assert isinstance(reply_spec, bytes)
+                        writer.write(_frame_response(0x74, reply_spec, sequence=seq2))
+                    await writer.drain()
+
+                    trailing = await reader.read()
+                    if trailing:
+                        captured.append((-1, trailing))
+                    writer.close()
+                    await writer.wait_closed()
+                finally:
+                    done.set()
+
+            with self.subTest(case=case):
+                _, client = await self._run_client(
+                    handle_reject, timeout=0.12, control_timeout=0.15
+                )
+                with self.assertRaises(exc_type) as ctx:
+                    await client.start_program(
+                        default_intent("upper", "spin"), allow_live=True
+                    )
+                await asyncio.wait_for(case_done.wait(), 1)
+                self.assertEqual([seq for seq, _ in case_requests], [0, 1, 2])
+                self.assertEqual(
+                    sum(1 for _, inner in case_requests if inner[9] == 0x60), 0
+                )
+                if reason is not None:
+                    self.assertEqual(ctx.exception.reason, reason)

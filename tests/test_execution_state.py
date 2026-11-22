@@ -14,6 +14,7 @@ from custom_components.uplus_reborn.protocol import (
     CannotConnect,
     DeviceSnapshot,
     UwtClient,
+    decode_alarm_payload,
 )
 
 from .conftest import DEVICE_ID, HOST, PORT
@@ -174,3 +175,38 @@ async def test_execution_connection_loss_recovery_and_reload(
         await hass.async_block_till_done()
         for drum in ("upper", "lower"):
             assert _state(hass, f"{drum}_execution_state") == "standby"
+
+
+async def test_execution_state_stays_6d01_derived_during_fault_and_unknown_alarms(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Alarms never override or degrade 6d01 execution states."""
+    bitmap = bytearray(14)
+    bitmap[13 - 71 // 8] |= 1 << (71 % 8)  # 50501a -> lower F7 motor_fault
+    f7_alarms = decode_alarm_payload(b"\x0f\x5a" + bytes(bitmap))
+    spinning = replace(
+        standby_snapshot,
+        upper=replace(standby_snapshot.upper, phase="standby", phase_value=0, cycle_active=False),
+        lower=replace(
+            standby_snapshot.lower,
+            program="curtain",
+            program_value=0x09,
+            phase="spinning",
+            phase_value=0x0B,
+            cycle_active=True,
+            remaining_minutes=102,
+        ),
+        alarms=f7_alarms,
+    )
+    entry = _entry()
+    entry.add_to_hass(hass)
+    with patch.object(UwtClient, "read_state", AsyncMock(return_value=spinning)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coordinator = entry.runtime_data
+        assert _state(hass, "lower_execution_state") == "running"
+        assert _state(hass, "upper_execution_state") == "standby"
+        coordinator.async_set_updated_data(replace(spinning, alarms=None))
+        await hass.async_block_till_done()
+        assert _state(hass, "lower_execution_state") == "running"
+        assert _state(hass, "upper_execution_state") == "standby"
