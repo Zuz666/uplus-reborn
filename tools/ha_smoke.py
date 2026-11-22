@@ -102,6 +102,8 @@ def _inner(frame_type: int, payload: bytes) -> bytes:
 
 
 READ_REQUEST = _inner(0x01, b"\x4d\x01")
+ALARM_REQUEST = _inner(0x73, b"")
+CLEAR_ALARM_PAYLOAD = bytes.fromhex("0f5a0000000000000000000000000000")
 
 
 def _words(execution: str) -> tuple[int, ...]:
@@ -207,6 +209,7 @@ class ReadOnlyPeer:
         self.profile_controls: list[str] = []
         self.profile_initializations = 0
         self.profile_initialization_pending = False
+        self.alarm_payload = CLEAR_ALARM_PAYLOAD
         self.query_response_writer: (
             Callable[[asyncio.StreamWriter, bytes, bytes], Awaitable[None]] | None
         ) = None
@@ -242,6 +245,19 @@ class ReadOnlyPeer:
                     payload = await reader.readexactly(size)
                     if source != bytes(32) or device.rstrip(b"\0") != self.device_id.encode():
                         raise ValueError("unexpected synthetic peer identity")
+                    if payload == ALARM_REQUEST and not self._should_route_alarm_to_control(sequence):
+                        alarm_inner = _inner(0x74, self.alarm_payload)
+                        alarm_response = HEADER.pack(
+                            10005, 0, b"", self.device_id.encode(), sequence, len(alarm_inner)
+                        ) + alarm_inner
+                        if self.query_response_writer is None:
+                            writer.write(alarm_response)
+                            await writer.drain()
+                        else:
+                            await self.query_response_writer(
+                                writer, header + payload, alarm_response
+                            )
+                        continue
                     if payload != READ_REQUEST:
                         writer.write(self._control_reply(payload, sequence))
                         await writer.drain()
@@ -279,6 +295,9 @@ class ReadOnlyPeer:
 
     def _controls_armed(self) -> bool:
         return self.allow_profile_start
+
+    def _should_route_alarm_to_control(self, sequence: int) -> bool:
+        return self.allow_profile_start and not self.profile_initialization_pending
 
     def _control_reply(self, payload: bytes, sequence: int) -> bytes:
         """Accept one exact synthetic Spin/400 Start per explicit fixture arming."""
@@ -377,6 +396,9 @@ class ProgrammeIntentPeer(ReadOnlyPeer):
 
     def _controls_armed(self) -> bool:
         return self.armed_case is not None
+
+    def _should_route_alarm_to_control(self, sequence: int) -> bool:
+        return self.armed_case is not None and not self.initialized and sequence == 1
 
     def _control_reply(self, payload: bytes, sequence: int) -> bytes:
         name = self.armed_case
@@ -1100,6 +1122,10 @@ async def _exercise(
                 row.unique_id.removeprefix(f"{DEVICE_ID}_"): row.entity_id
                 for row in registered if row.domain == "sensor" and row.platform == DOMAIN
             }
+            binary_sensor_ids = {
+                row.unique_id.removeprefix(f"{DEVICE_ID}_"): row.entity_id
+                for row in registered if row.domain == "binary_sensor" and row.platform == DOMAIN
+            }
 
             if scenario == "offline":
                 _require(coordinator.data is None and not coordinator.last_update_success,
@@ -1177,12 +1203,19 @@ async def _exercise(
                     for key, value in (
                         (f"{drum}_phase", "standby" if expected == "standby" else "spinning"),
                         (f"{drum}_execution_state", expected),
+                        (f"{drum}_fault_code", "none"),
                     ):
                         entity_id = sensor_ids.get(key)
                         state = hass.states.get(entity_id) if entity_id else None
                         actual = state.state if state else None
                         assertions.append({"key": key, "expected": value, "actual": actual})
                         _require(actual == value, f"{label}: {key} expected {value}, got {actual}")
+                    fault_key = f"{drum}_fault"
+                    fault_entity = binary_sensor_ids.get(fault_key)
+                    fault_state = hass.states.get(fault_entity) if fault_entity else None
+                    fault_actual = fault_state.state if fault_state else None
+                    assertions.append({"key": fault_key, "expected": "off", "actual": fault_actual})
+                    _require(fault_actual == "off", f"{label}: {fault_key} expected off, got {fault_actual}")
                 for key, entity_id in sorted(sensor_ids.items()):
                     state = hass.states.get(entity_id)
                     if state is not None:

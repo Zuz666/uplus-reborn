@@ -312,7 +312,11 @@ async def test_debug_off_dispatched_failure_keeps_original_evidence_without_retr
             writer.write(_state_response(_standby_words(), frame_type=0x02))
             await writer.drain()
             requests.append(await _read_request(reader))
-            writer.write(_frame_response(0x74, b"", sequence=1))
+            writer.write(
+                _frame_response(
+                    0x74, bytes.fromhex("0f5a0000000000000000000000000000"), sequence=1
+                )
+            )
             await writer.drain()
             requests.append(await _read_request(reader))
             if failure == "malformed":
@@ -492,7 +496,15 @@ async def test_control_logs_proof_boundaries_without_identifiers_or_retry(
             )
             await writer.drain()
             requests.append(await _read_request(reader))
-            writer.write(_private_response(_frame_response(0x74, b"", sequence=1)))
+            writer.write(
+                _private_response(
+                    _frame_response(
+                        0x74,
+                        bytes.fromhex("0f5a0000000000000000000000000000"),
+                        sequence=1,
+                    )
+                )
+            )
             await writer.drain()
             requests.append(await _read_request(reader))
             frame_type = (
@@ -847,7 +859,11 @@ async def test_cleanup_cancellation_preserves_dispatched_outcome(
             writer.write(_state_response(_standby_words(), frame_type=0x02))
             await writer.drain()
             requests.append(await _read_request(reader))
-            writer.write(_frame_response(0x74, b"", sequence=1))
+            writer.write(
+                _frame_response(
+                    0x74, bytes.fromhex("0f5a0000000000000000000000000000"), sequence=1
+                )
+            )
             await writer.drain()
             requests.append(await _read_request(reader))
             if correlated:

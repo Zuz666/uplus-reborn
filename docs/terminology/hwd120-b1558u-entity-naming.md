@@ -173,6 +173,15 @@ The appliance-power control is disabled by default; this name does not enable it
 | Upper Cycle count | Верхний число циклов |
 | Lower Cycle count | Нижний число циклов |
 
+### Diagnostic — drum faults
+
+| English | Russian |
+| --- | --- |
+| Upper fault | Верхний неисправность |
+| Lower fault | Нижний неисправность |
+| Upper fault code | Верхний код ошибки |
+| Lower fault code | Нижний код ошибки |
+
 ### Configuration
 
 | English | Russian |
@@ -223,6 +232,7 @@ not shortened by these entity-name rules.
 | Power-on session water/energy / вода/энергия с момента включения | Power-on water/energy / Вода/Энергия с включения | Preserve power-on session scope, not per-programme consumption |
 | Cumulative water/electricity / суммарный расход воды/потребление электроэнергии | Cumulative water/electricity / Всего воды/электроэнергии | Preserve cumulative scope, units and statistics |
 | Cycle count / число циклов | Unchanged | Keep the quantity and drum distinction |
+| Fault; fault code / неисправность; код ошибки | Unchanged | Keep the drum problem indicator separate from the primary fault-code selector |
 | Power; Appliance power / питание; питание машины | Unchanged | Keep reported status and appliance control distinct |
 | Sound; Child lock / звук; Защита от детей | Sound; Child lock / Звук; Защита от детей | Retain selected full settings |
 
