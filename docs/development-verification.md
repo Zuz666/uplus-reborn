@@ -200,7 +200,7 @@ coordinator, entities, decoder or transport. Each run uses a fresh temporary
 config and unloads/stops afterward.
 
 Use `tools/delivery.py docker` to run against the immutable container images
-(`--target core-current` for Home Assistant 2026.10.4 on Python 3.14; `--target test`
+(`--target core-current` for Home Assistant 2026.11.2 on Python 3.14; `--target test`
 for minimum supported Core 2026.2.3 on Python 3.13). Images are reused by their
 stage-specific input fingerprints without checking mutable `.venv` state.
 If Docker is unavailable, stop the workflow and notify the user.
@@ -724,7 +724,7 @@ license and attribution remain separately defined by README and `docs/LICENSE`.
 | Metadata and packaging | Manifest/project/uv root agree; dated notes; committed-byte, licensed, root-layout ZIP; rejection of unsafe/incomplete/occupied candidates |
 | Standalone tooling | Windows and Ubuntu artifact/release boundary regressions, including stale SHA, duplicate tag, version rollback and failed required checks |
 | HA contracts | Full pytest and Ruff in the frozen Docker test image |
-| Real Core | 2026.2.3 and 2026.10.4: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
+| Real Core | 2026.2.3 and 2026.11.2: standby, execution, profiles including restart, discovery, discovery-identification and native exchange-trace |
 | Public surface | Markdown/Mermaid, actual issue/PR/private-report routes, hosted CI and effective protection settings |
 | HACS | Separate actual source-tree bootstrap and published-ZIP installation/upgrade; exact installed-member comparison |
 

@@ -15,6 +15,14 @@ updates:
           - home-assistant-frontend
           - pytest-homeassistant-custom-component
         update-types: [minor, patch]
+    ignore:
+      # Minimum-Core test prerequisites must match hacs.json (2026.2.3) and tools/Dockerfile.
+      - dependency-name: "aiodhcpwatcher"
+      - dependency-name: "aiodiscover"
+      - dependency-name: "cached-ipaddress"
+      - dependency-name: "home-assistant-frontend"
+      - dependency-name: "ifaddr"
+      - dependency-name: "pytest-homeassistant-custom-component"
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -44,3 +52,7 @@ updates:
     labels: [dependencies, "type:chore", "area:ci-release"]
     commit-message:
       prefix: chore(deps)
+    ignore:
+      # Minimum-Core test stage stays on Python 3.13 while hacs.json targets 2026.2.3.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

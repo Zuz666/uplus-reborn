@@ -34,7 +34,8 @@ import struct
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,6 +92,25 @@ def _requirements(output: Path) -> None:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+@contextmanager
+def _impossible_store_target(storage: Any, storage_path: Path) -> Iterator[None]:
+    """Redirect Store and HA 2026.11+ _FileStoreIO targets under the storage file."""
+    # Core creates dirname(path) before its WriteError-catching file adapter.
+    # A real existing storage file cannot also be that directory, yielding a
+    # propagated OSError even when the container runs as root.
+    impossible = str(storage_path / "impossible-commit")
+    targets = [storage]
+    io_impl = getattr(storage, "_io", None)
+    if io_impl is not None and hasattr(io_impl, "path"):
+        targets.append(io_impl)
+    with ExitStack() as stack:
+        for target in targets:
+            original_path = target.path
+            target.path = impossible
+            stack.callback(setattr, target, "path", original_path)
+        yield
 
 
 def _inner(frame_type: int, payload: bytes) -> bytes:
@@ -831,21 +851,13 @@ async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: 
         }
         choices_before_failure = await profile_choices()
         selector_before_failure = hass.states.get(selector_id).as_dict()
-        actual_path = storage.path
-        # Core creates dirname(Store.path) before its WriteError-catching file
-        # adapter. A real existing storage file cannot also be that directory,
-        # so this yields an actual propagated filesystem commit failure even
-        # when the container runs as root. No persistence method is replaced.
-        storage.path = str(storage_path / "impossible-commit")
-        try:
+        with _impossible_store_target(storage, storage_path):
             try:
                 await call("rename_profile", profile_id=managed_id, name="Must not commit")
             except OSError:
                 pass
             else:
                 raise RuntimeError("Impossible actual HA storage target did not fail")
-        finally:
-            storage.path = actual_path
         await hass.async_block_till_done()
         _require(c.profiles.profiles() == records_before_failure
                  and all(
