@@ -511,7 +511,27 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
                         "request=%s kind=%s event=%s cause=%s retried=false",
                         request, kind, outcome, cause,
                     )
-                    if unknown or isinstance(error, (CannotConnect, InvalidFrame)):
+                    if unknown:
+                        self._record_failure(error, request)
+                        self.async_set_update_error(
+                            UpdateFailed(
+                                self._failure_message("Authoritative state unavailable")
+                            )
+                        )
+                    elif (
+                        isinstance(error, InvalidFrame)
+                        and error.reason == "invalid_alarm_payload"
+                    ) or (
+                        isinstance(error, UnsafeState)
+                        and error.reason == "alarm_state_unknown"
+                    ):
+                        if (
+                            self._read_available
+                            and self.data is not None
+                            and self.data.alarms is not None
+                        ):
+                            self.async_set_updated_data(replace(self.data, alarms=None))
+                    elif isinstance(error, (CannotConnect, InvalidFrame)):
                         self._record_failure(error, request)
                         self.async_set_update_error(
                             UpdateFailed(

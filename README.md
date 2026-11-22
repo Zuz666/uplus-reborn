@@ -692,7 +692,7 @@ and privacy guidance; never attach credentials or raw private captures.
 | Sensor | Upper execution state | Running, Paused, Standby, Completed or Delayed; independent of the retained phase |
 | Sensor | Upper remaining time | Minutes; unknown in standby or when omitted |
 | Sensor | Upper cycle count | Diagnostic total-increasing counter |
-| Binary sensor | Upper fault | Diagnostic `problem`; `on` when at least one mapped/unmapped upper alarm fault bit is set (`programme_end` `50500H` excluded); `unknown` if alarm query fails |
+| Binary sensor | Upper fault | Diagnostic `problem`; `on` when at least one mapped/unmapped upper alarm fault bit is set (`programme_end` `50500H` excluded); `unknown` when no usable alarm snapshot is available |
 | Sensor | Upper fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
 
 ### Lower drum entities
@@ -705,7 +705,7 @@ and privacy guidance; never attach credentials or raw private captures.
 | Sensor | Lower execution state | Same phase-aware execution contract as the upper drum |
 | Sensor | Lower remaining time | Minutes; unknown in standby or when omitted |
 | Sensor | Lower cycle count | Diagnostic total-increasing counter |
-| Binary sensor | Lower fault | Diagnostic `problem`; `on` when at least one mapped/unmapped lower alarm fault bit is set (`programme_end` `50501B` excluded); `unknown` if alarm query fails |
+| Binary sensor | Lower fault | Diagnostic `problem`; `on` when at least one mapped/unmapped lower alarm fault bit is set (`programme_end` `50501B` excluded); `unknown` when no usable alarm snapshot is available |
 | Sensor | Lower fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
 
 ### Reported cycle settings
@@ -794,9 +794,12 @@ Both reported door-lock flags, both drums' program/phase/execution
 state/remaining time and the 25 reported-setting entities remain primary.
 Together with 48 controls the integration registers 96 entities when controls are
 enabled. `upper_execution_state` and `lower_execution_state` stay strictly
-derived from `6d01` even during an active fault or an unconfirmed `0x74` alarm
-reply; when `0x74` fails or times out during polling, only the four Diagnostic
-fault entities turn `unknown` while the 92 existing entities stay online.
+derived from `6d01` even during an active fault or an unconfirmed alarm state;
+when polling gets a valid `6d01` reply without a usable alarm snapshot, the
+entry and existing status readings stay online and the four Diagnostic fault
+entities turn `unknown`, while `Start` and `Resume` buttons become
+unavailable because their safety validators fail closed until alarm state is
+confirmed.
 Operational controls remain separate from
 integration configuration. Retained entities keep their existing enabled
 defaults; upgrades do not enable user-disabled entities or undo visibility

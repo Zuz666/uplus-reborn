@@ -1060,14 +1060,11 @@ class _LocalSession:
         frame: _InnerFrame,
         *,
         stage: str,
-        strict: bool,
         decision: str = "opportunistic_report",
     ) -> AlarmSnapshot | None:
         try:
             alarm = _decode_alarm_frame(frame)
         except InvalidFrame:
-            if strict:
-                raise
             self.latest_alarm = None
             self._record_alarm_unavailable(
                 stage=stage, cause="invalid_alarm_payload"
@@ -1150,9 +1147,7 @@ class _LocalSession:
         while True:
             envelope, frame = await self.receive_inner()
             if frame.frame_type == _FRAME_ALARM_REPORT:
-                self._handle_opportunistic_alarm(
-                    envelope, frame, stage="query", strict=False
-                )
+                self._handle_opportunistic_alarm(envelope, frame, stage="query")
                 continue
             if result := _state_result(envelope, frame):
                 if envelope.sequence == sequence:
@@ -1183,7 +1178,7 @@ class _LocalSession:
                     envelope, frame = await self.receive_inner()
                     if frame.frame_type == _FRAME_ALARM_REPORT:
                         observed = self._handle_opportunistic_alarm(
-                            envelope, frame, stage=stage, strict=False
+                            envelope, frame, stage=stage
                         )
                         continue
                     if (
@@ -1256,7 +1251,6 @@ class _LocalSession:
                 envelope,
                 inner,
                 stage="initialization",
-                strict=True,
                 decision=decision,
             )
             current = replace(current, alarms=alarm)
@@ -1289,15 +1283,23 @@ class _LocalSession:
                 envelope.sequence == sequence
                 and frame.frame_type == _CONTROL_INIT_RESPONSE
             ):
-                alarm = _decode_alarm_frame(frame)
-                self.latest_alarm = alarm
-                self.observe_alarm(
-                    envelope,
-                    frame,
-                    alarm,
-                    stage="initialization",
-                    decision="correlated",
-                )
+                try:
+                    alarm = _decode_alarm_frame(frame)
+                except InvalidFrame:
+                    alarm = None
+                    self.latest_alarm = None
+                    self._record_alarm_unavailable(
+                        stage="initialization", cause="invalid_alarm_payload"
+                    )
+                else:
+                    self.latest_alarm = alarm
+                    self.observe_alarm(
+                        envelope,
+                        frame,
+                        alarm,
+                        stage="initialization",
+                        decision="correlated",
+                    )
                 current = replace(current, alarms=alarm)
                 # Reports already received before dispatch cannot prove its result.
                 while self.pending:
@@ -1380,7 +1382,7 @@ class _LocalSession:
                 envelope, frame = await self.receive_inner()
             if frame.frame_type == _FRAME_ALARM_REPORT:
                 self.post_dispatch_alarm = self._handle_opportunistic_alarm(
-                    envelope, frame, stage="confirmation", strict=False
+                    envelope, frame, stage="confirmation"
                 )
                 continue
             result = _state_result(envelope, frame)

@@ -2301,3 +2301,83 @@ async def test_per_drum_fault_interlocks_services_and_diagnostics_provenance(
         assert "50501a" in repr(diag["device"]["provenance"]["alarms"])
         assert DEVICE_ID not in repr(diag)
         assert HOST not in repr(diag)
+
+
+async def test_malformed_init_alarm_keeps_health_and_unaffected_entities_available(
+    hass: HomeAssistant, standby_snapshot: DeviceSnapshot
+) -> None:
+    """Malformed or unconfirmed init alarms degrade only fault/start-resume state."""
+    healthy_mixed = replace(
+        standby_snapshot,
+        lower=replace(
+            standby_snapshot.lower,
+            program="spin",
+            program_value=0x1C,
+            phase="spinning",
+            phase_value=0x0B,
+            cycle_active=True,
+        ),
+        alarms=_alarm_snapshot(),
+    )
+    entry = _entry(controls=True)
+    entry.add_to_hass(hass)
+    with patch.object(UwtClient, "read_state", AsyncMock(return_value=healthy_mixed)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        registry = er.async_get(hass)
+        coordinator = entry.runtime_data
+        coordinator.stage_program("upper", "spin")
+        await hass.async_block_till_done()
+
+        assert _state(hass, _entity_id(registry, "button", "upper_start")) != STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "button", "lower_pause")) != STATE_UNAVAILABLE
+        assert _state(hass, _entity_id(registry, "binary_sensor", "upper_fault")) == "off"
+
+        for error, expected_exc in (
+            (InvalidFrame("bad alarm", reason="invalid_alarm_payload"), HomeAssistantError),
+            (UnsafeState("unknown", reason="alarm_state_unknown"), ServiceValidationError),
+        ):
+            coordinator.async_set_updated_data(healthy_mixed)
+            await hass.async_block_till_done()
+            with (
+                patch.object(UwtClient, "start_program", AsyncMock(side_effect=error)),
+                pytest.raises(expected_exc),
+            ):
+                await async_execute_control(
+                    coordinator.async_start_program(
+                        "upper", default_intent("upper", "spin")
+                    )
+                )
+            await hass.async_block_till_done()
+            assert coordinator.health.available is True
+            assert coordinator.data is not None
+            assert coordinator.data.alarms is None
+            assert _state(hass, _entity_id(registry, "sensor", "upper_execution_state")) == "standby"
+            assert _state(hass, _entity_id(registry, "binary_sensor", "power")) == "on"
+            assert _state(hass, _entity_id(registry, "switch", "buzzer")) != STATE_UNAVAILABLE
+            assert _state(hass, _entity_id(registry, "button", "lower_pause")) != STATE_UNAVAILABLE
+            assert _state(hass, _entity_id(registry, "button", "upper_start")) == STATE_UNAVAILABLE
+            for drum in ("upper", "lower"):
+                assert _state(hass, _entity_id(registry, "binary_sensor", f"{drum}_fault")) == STATE_UNKNOWN
+                assert _state(hass, _entity_id(registry, "sensor", f"{drum}_fault_code")) == STATE_UNKNOWN
+
+        # Non-alarm framing failures still invalidate coordinator health.
+        coordinator.async_set_updated_data(healthy_mixed)
+        await hass.async_block_till_done()
+        with (
+            patch.object(
+                UwtClient,
+                "start_program",
+                AsyncMock(side_effect=InvalidFrame("bad checksum", reason="invalid_checksum")),
+            ),
+            pytest.raises(HomeAssistantError),
+        ):
+            await async_execute_control(
+                coordinator.async_start_program(
+                    "upper", default_intent("upper", "spin")
+                )
+            )
+        await hass.async_block_till_done()
+        assert coordinator.health.available is False
+        assert _state(hass, _entity_id(registry, "sensor", "upper_execution_state")) == STATE_UNAVAILABLE
+

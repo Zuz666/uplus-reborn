@@ -363,8 +363,10 @@ operation partial and reports the omitted 1 MiB.
 
 **Default retention sizing: measured coordinator/TCP sample from #80.**
 
-New/default budgets are 1800 operations, 18000 events and 4,194,304 raw bytes,
-with a separate six-hour finite deadline; explicitly saved values remain.
+Current default budgets are 1800 operations, 30600 events and 4,194,304 raw
+bytes (expanded from the historical #80 18000-event default after adding
+short-session alarm queries), with a separate six-hour finite deadline;
+explicitly saved values remain.
 They are configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
 The original 300/6000 sample below is historical reference, not current defaults
 or evidence of new maximum RAM costs. All three budgets apply together, including
