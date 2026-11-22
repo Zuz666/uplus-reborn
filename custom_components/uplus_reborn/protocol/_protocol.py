@@ -63,6 +63,7 @@ _OPTION_COMMANDS: Final = {
 _CONTROL_INIT_REQUEST: Final = 0x73
 _CONTROL_INIT_RESPONSE: Final = 0x74
 _FRAME_ALARM_REPORT: Final = 0x04
+_FRAME_UNSOLICITED_EMPTY: Final = 0x72
 _RESPONSE_KINDS: Final = {
     _FRAME_STATUS: "status",
     _FRAME_REPORT: "report",
@@ -332,7 +333,9 @@ class _InnerFrame:
 
 def _response_kind(frame: _InnerFrame) -> str:
     """Describe a frame type without guessing unsupported response semantics."""
-    return _RESPONSE_KINDS.get(frame.frame_type, "unexpected")
+    if frame.frame_type == _FRAME_UNSOLICITED_EMPTY and not frame.payload:
+        return "unsolicited_empty"
+    return _RESPONSE_KINDS.get(frame.frame_type, "unclassified")
 
 
 class _EnvelopeDecoder:
@@ -1054,7 +1057,38 @@ class _LocalSession:
         if self.observer is not None and self.observer.active:
             self.observer.event("alarm_unavailable", stage=stage, cause=cause)
 
-    def _handle_opportunistic_alarm(
+    @staticmethod
+    def _is_unsolicited_empty(envelope: _Envelope, frame: _InnerFrame) -> bool:
+        return (
+            envelope.sequence == 0
+            and frame.frame_type == _FRAME_UNSOLICITED_EMPTY
+            and not frame.payload
+        )
+
+    async def _retry_alarm_query(self, *, request_kind: str, stage: str) -> int:
+        sequence = self._allocate_sequence()
+        self.log_event(
+            "alarm_query_retry",
+            stage=stage,
+            reason="unsolicited_empty_seq0_collision",
+            next_sequence=sequence,
+        )
+        if self.observer is not None and self.observer.active:
+            self.observer.event(
+                "alarm_query_retry",
+                stage=stage,
+                reason="unsolicited_empty_seq0_collision",
+                sequence=sequence,
+            )
+        self.begin_request(request_kind, sequence)
+        await self._send(
+            sequence=sequence,
+            frame_type=_CONTROL_INIT_REQUEST,
+            payload=b"",
+        )
+        return sequence
+
+    def _decode_and_observe_alarm(
         self,
         envelope: _Envelope,
         frame: _InnerFrame,
@@ -1147,7 +1181,7 @@ class _LocalSession:
         while True:
             envelope, frame = await self.receive_inner()
             if frame.frame_type == _FRAME_ALARM_REPORT:
-                self._handle_opportunistic_alarm(envelope, frame, stage="query")
+                self._decode_and_observe_alarm(envelope, frame, stage="query")
                 continue
             if result := _state_result(envelope, frame):
                 if envelope.sequence == sequence:
@@ -1165,6 +1199,8 @@ class _LocalSession:
         seed: AlarmSnapshot | None = None,
     ) -> AlarmSnapshot | None:
         observed = seed
+        saw_unsolicited_empty = False
+        retried = False
         try:
             sequence = self._allocate_sequence()
             self.begin_request("alarm_query", sequence)
@@ -1176,38 +1212,41 @@ class _LocalSession:
                 )
                 while True:
                     envelope, frame = await self.receive_inner()
+                    if self._is_unsolicited_empty(envelope, frame):
+                        saw_unsolicited_empty = True
+                        continue
                     if frame.frame_type == _FRAME_ALARM_REPORT:
-                        observed = self._handle_opportunistic_alarm(
+                        observed = self._decode_and_observe_alarm(
                             envelope, frame, stage=stage
                         )
                         continue
-                    if (
-                        envelope.sequence == sequence
-                        and frame.frame_type == _CONTROL_INIT_RESPONSE
-                    ):
-                        try:
-                            alarm = _decode_alarm_frame(frame)
-                        except InvalidFrame:
-                            self._record_alarm_unavailable(
-                                stage=stage, cause="invalid_alarm_payload"
-                            )
-                            return None
-                        self.latest_alarm = alarm
-                        self.observe_alarm(
-                            envelope,
-                            frame,
-                            alarm,
-                            stage=stage,
-                            decision="correlated",
-                        )
-                        self.log_event(
-                            "correlated", response_kind=_response_kind(frame)
-                        )
-                        return alarm
                     if frame.frame_type == _CONTROL_INIT_RESPONSE:
+                        if envelope.sequence == sequence:
+                            alarm = self._decode_and_observe_alarm(
+                                envelope,
+                                frame,
+                                stage=stage,
+                                decision="correlated",
+                            )
+                            if alarm is None:
+                                return None
+                            self.log_event(
+                                "correlated", response_kind=_response_kind(frame)
+                            )
+                            return alarm
                         self.log_event(
                             "uncorrelated", response_sequence=envelope.sequence
                         )
+                        if (
+                            envelope.sequence == 0
+                            and saw_unsolicited_empty
+                            and not retried
+                        ):
+                            retried = True
+                            saw_unsolicited_empty = False
+                            sequence = await self._retry_alarm_query(
+                                request_kind="alarm_query", stage=stage
+                            )
         except InvalidFrame as error:
             self._record_alarm_unavailable(
                 stage=stage, cause=classify_error(error)
@@ -1247,7 +1286,7 @@ class _LocalSession:
         check: Callable[[DeviceSnapshot], None] | None,
     ) -> tuple[AlarmSnapshot | None, DeviceSnapshot]:
         if inner.frame_type == _FRAME_ALARM_REPORT:
-            alarm = self._handle_opportunistic_alarm(
+            alarm = self._decode_and_observe_alarm(
                 envelope,
                 inner,
                 stage="initialization",
@@ -1277,56 +1316,60 @@ class _LocalSession:
         )
         current = expected
         alarm = expected.alarms
+        saw_unsolicited_empty = False
+        retried = False
         while True:
             envelope, frame = await self.receive_inner()
-            if (
-                envelope.sequence == sequence
-                and frame.frame_type == _CONTROL_INIT_RESPONSE
-            ):
-                try:
-                    alarm = _decode_alarm_frame(frame)
-                except InvalidFrame:
-                    alarm = None
-                    self.latest_alarm = None
-                    self._record_alarm_unavailable(
-                        stage="initialization", cause="invalid_alarm_payload"
-                    )
-                else:
-                    self.latest_alarm = alarm
-                    self.observe_alarm(
+            if self._is_unsolicited_empty(envelope, frame):
+                saw_unsolicited_empty = True
+                continue
+            if frame.frame_type == _CONTROL_INIT_RESPONSE:
+                if envelope.sequence == sequence:
+                    alarm = self._decode_and_observe_alarm(
                         envelope,
                         frame,
-                        alarm,
                         stage="initialization",
                         decision="correlated",
                     )
-                current = replace(current, alarms=alarm)
-                # Reports already received before dispatch cannot prove its result.
-                while self.pending:
-                    pending = self.pending.popleft()
-                    inner = self._decode_uwt_response(pending)
-                    if inner is None:
-                        continue
-                    alarm, current = self._apply_init_frame(
-                        pending,
-                        inner,
-                        alarm,
-                        current,
-                        decision="pre_dispatch_pending_observation",
-                        check=check,
+                    current = replace(current, alarms=alarm)
+                    # Reports already received before dispatch cannot prove its result.
+                    while self.pending:
+                        pending = self.pending.popleft()
+                        inner = self._decode_uwt_response(pending)
+                        if inner is None:
+                            continue
+                        alarm, current = self._apply_init_frame(
+                            pending,
+                            inner,
+                            alarm,
+                            current,
+                            decision="pre_dispatch_pending_observation",
+                            check=check,
+                        )
+                    self.log_event("correlated", response_kind=_response_kind(frame))
+                    if self.observer is not None and self.observer.active:
+                        self.observer.event(
+                            "correlated",
+                            stage="initialization",
+                            response_sequence=envelope.sequence,
+                            response_kind=_response_kind(frame),
+                        )
+                    self.heartbeat_due = (
+                        asyncio.get_running_loop().time() + _HEARTBEAT_INTERVAL
                     )
-                self.log_event("correlated", response_kind=_response_kind(frame))
-                if self.observer is not None and self.observer.active:
-                    self.observer.event(
-                        "correlated",
-                        stage="initialization",
-                        response_sequence=envelope.sequence,
-                        response_kind=_response_kind(frame),
+                    return current
+                self.log_event("uncorrelated", response_sequence=envelope.sequence)
+                if (
+                    envelope.sequence == 0
+                    and saw_unsolicited_empty
+                    and not retried
+                ):
+                    retried = True
+                    saw_unsolicited_empty = False
+                    sequence = await self._retry_alarm_query(
+                        request_kind="control_init", stage="initialization"
                     )
-                self.heartbeat_due = (
-                    asyncio.get_running_loop().time() + _HEARTBEAT_INTERVAL
-                )
-                return current
+                continue
             alarm, current = self._apply_init_frame(
                 envelope,
                 frame,
@@ -1381,7 +1424,7 @@ class _LocalSession:
             else:
                 envelope, frame = await self.receive_inner()
             if frame.frame_type == _FRAME_ALARM_REPORT:
-                self.post_dispatch_alarm = self._handle_opportunistic_alarm(
+                self.post_dispatch_alarm = self._decode_and_observe_alarm(
                     envelope, frame, stage="confirmation"
                 )
                 continue
@@ -1571,8 +1614,11 @@ class UwtClient:
     async def read_state(self) -> DeviceSnapshot:
         """Open one session, query `4d01` then best-effort `0x73`, and return fresh state.
 
-        Neither query is retried. The connection is closed immediately after the
-        correlated `0x74` response (or best-effort alarm degradation).
+        The `4d01` state query is never retried. The read-only `0x73` alarm query
+        retries at most once on a newly allocated sequence within the existing
+        deadline if an in-flight empty `0x72` (`sequence=0`) collides and yields
+        an unmatched `0x74` (`sequence=0`). The connection is closed immediately
+        after the correlated `0x74` response (or best-effort alarm degradation).
         """
 
         return (await self._read_state_result()).snapshot
