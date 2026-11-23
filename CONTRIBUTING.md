@@ -43,7 +43,9 @@ imports, entity domains, or logger names from either.
 - public user/protocol documentation: `README.md`, `CONTRIBUTING.md`, `docs/`
 - Python dependencies and reproducible resolution: `pyproject.toml`, `uv.lock`
 - documentation-tool dependencies and commands: `package.json`, `package-lock.json`
-- automated checks: `.github/workflows/validate.yml`, `.github/workflows/docs.yml`
+- automated checks: `.github/workflows/ci.yml` (aggregate gate), `validate.yml`,
+  `docs.yml`, `delivery.yml`, `codeql.yml`, `release.yml`, `hacs-acceptance.yml`,
+  `pr-labels.yml`, `labels.yml`, `core-canary.yml`
 
 The manifest is the canonical source for the integration domain, display name,
 version, dependencies, discovery declarations, documentation URL, issue
@@ -58,7 +60,10 @@ suppressing the metadata check.
 
 ## Development and verification
 
-Use `uv` to manage the Python environment and dependency lockfile. The repository's **Developer commands** section in [README.md](README.md#developer-commands) contains the current setup, test, lint, protocol-CLI, and documentation-check commands.
+Use `uv` to manage the Python environment and dependency lockfile. The
+[prerequisites and developer commands guide](docs/development-verification.md#prerequisites-and-clean-checkout-setup)
+contains the current setup, test, lint, protocol-CLI, and documentation-check
+commands. `README.md` stays focused on user-facing installation and operation.
 
 Before proposing a feature or bug fix, run the specific verification that demonstrates the changed behavior. Select the smallest relevant check first, then run any broader affected checks required by the repository's existing conventions. For changes that need live hardware evidence, describe the safe, reproducible observation in the pull request without publishing sensitive data. Do not commit incomplete or unverified work merely to create a boundary.
 
@@ -67,14 +72,15 @@ Before proposing a feature or bug fix, run the specific verification that demons
 A clean public checkout must be sufficient to install dependencies, run the
 documented checks, and contribute a change. Private maintainer workspaces,
 agent instructions, research skills, captures, accounts, and live appliances
-are not prerequisites. Keep the necessary development instructions here and
-in README rather than in an ignored file.
+are not prerequisites. Keep necessary contributor instructions in this file and
+under [`docs/`](docs/development-verification.md) rather than in ignored files.
 
-Use the frozen-lockfile commands in README for ordinary development. When a
-dependency change is intentional, update its manifest and lockfile together
-and verify the affected environment. Python uses `uv`; documentation tooling
-uses npm. Do not install APK-analysis or capture dependencies into integration
-runtime requirements.
+Use the frozen-lockfile commands in
+[development verification](docs/development-verification.md#prerequisites-and-clean-checkout-setup)
+for ordinary development. When a dependency change is intentional, update its
+manifest and lockfile together and verify the affected environment. Python uses
+`uv`; documentation tooling uses npm. Do not install APK-analysis or capture
+dependencies into integration runtime requirements.
 
 ### Model-specific protocol documentation
 
@@ -276,66 +282,42 @@ root agent-instruction links.
 
 Support Windows and Linux for shared tooling, with explicit paths and argument
 handling rather than shell-specific glob expansion. Keep the same standard
-scope and repository configuration locally and in CI. Native local Ruff via
-`python tools/delivery.py lint` is the narrow exception to Docker-based Python
-verification: it checks working-tree files under `custom_components`, `tests`
-and `tools`, selecting the exact Ruff from `uv.lock` through uv's isolated tool
-cache rather than a mutable project `.venv` or a global installation.
+scope and repository configuration locally and in CI.
 
-Native Windows Ruff does not enforce EXE001/EXE002; its success is local feedback,
-not executable-permission proof. Canonical Linux CI/container lint remains
-required before merge. The entrypoint is read-only for source files and the Git
-index, permits ordinary tool caches, and does not forward arbitrary Ruff
-arguments or provide fixing/formatting. See the
+See the
 [public verification contract](docs/development-verification.md#native-local-ruff-windows-and-linux)
-for version-selection failures and evidence limits.
-
-Run `python tools/delivery.py lint` before the standalone tooling suite to
-bootstrap the locked uv tool cache. Native CLI safety regressions then run
-offline against real Ruff, including hostile configuration/environment cases.
-
-HA pytest, POSIX checks and real Core still run in reproducible Docker Linux
-containers (`tools/Dockerfile`). If required Docker is unavailable, stop those
-checks; native Ruff remains usable. WSL and mutable project `.venv` environments
-are not alternative execution paths.
+for native local Ruff (`python tools/delivery.py lint`), platform EXE001/EXE002
+limits, and Docker test/Core execution rules. Run `python tools/delivery.py lint`
+before the standalone tooling suite to bootstrap the locked uv tool cache so
+native CLI safety regressions can run offline against real Ruff. Missing required
+Docker stops HA pytest, POSIX checks, and real Core rather than falling back to
+WSL or mutable project `.venv` environments.
 
 Current public tool inventory:
 
 - `tools/generate_brand_icon.py` regenerates the checked-in Haier Duo
-  brand icons (`icon.png` at 256px and `icon@2x.png` at 512px). It is optional
-  and not required for tests or installation. From the root on Windows or Linux,
-  run `uv run --no-project --with pillow==12.0.0 python tools/generate_brand_icon.py`.
-  The standalone command pins Pillow for reproducible rendering without
-  installing Home Assistant or research dependencies.
+  brand icons (`icon.png` at 256px and `icon@2x.png` at 512px) using
+  `uv run --no-project --with pillow==12.0.0 python tools/generate_brand_icon.py`.
 - `tools/release_evidence.py` produces CI candidate/matrix receipts and selects
   or audits authenticated exact-master source evidence. See
-  [the handoff contract](docs/release-workflow.md#trusted-master-consumption);
-  local JSON success and PR artifacts never authorize publication.
+  [the handoff contract](docs/release-workflow.md#trusted-master-consumption).
 - `tools/hacs_acceptance.py` runs explicit real published HACS installation and
   persistent-data upgrade acceptance from a clean Windows/Linux checkout with
-  Docker. Its pinned fixture and shared Core phase require no private workspace.
-  See [the release runbook](docs/release-workflow.md#repeatable-published-hacs-acceptance);
-  this networked scenario is separate from ordinary offline tests.
-- `npm run test:docs` runs `tools/check-docs.mjs`: Markdown lint plus strict
-  Mermaid validation over one sorted, public-only file selection. Both checks
-  run regardless of the first result and never mutate documents.
-- `npm run test:docs:tooling` exercises real linters and the runner's selection,
-  nested-fence handling, LF/CRLF preservation, portable paths, symlink exclusion
-  and failure propagation using disposable fixtures.
+  Docker. See [the release runbook](docs/release-workflow.md#repeatable-published-hacs-acceptance).
+- `npm run test:docs` (`tools/check-docs.mjs`) runs pinned `markdownlint-cli2`
+  plus strict Mermaid validation on the sorted, public-only file selection,
+  reporting both checks without modifying files.
+- `npm run test:docs:tooling` runs isolated behavioral fixtures covering
+  nested-fence handling, LF/CRLF preservation, portable paths, and symlink
+  exclusion.
+- `npm run test:labels` tests PR-label classification and metadata safety.
 
-Documentation tooling requires Node.js 22 or newer; CI covers Node.js 22 on
-Windows and Ubuntu. Use `npm ci --ignore-scripts` to install the locked tools.
-The default Markdown rules are enabled, except hard line length (`MD013`) and
-table-column alignment (`MD060`), to preserve the existing prose and compact
-protocol tables. The independently written `tools/closed-fences.cjs` rule checks
-explicit closure using parser tokens rather than line-prefix guesses.
-
-The Mermaid CLI receives normalized diagram fences over stdin, extracted with
-the Markdown parser pinned by `markdownlint-cli2`. This covers nested containers
-and avoids treating examples inside other code blocks as diagrams. Output maps
-back to original filenames and line numbers. Do not replace this with a broad
-glob or a private helper, suppress failures to make CI green, or add automatic
-diagram rewriting. No fix command is provided; review source edits explicitly.
+Documentation tooling requires Node.js 22+ (`npm ci --ignore-scripts`). Default
+Markdown rules apply except hard line length (`MD013`) and table-column
+alignment (`MD060`); `tools/closed-fences.cjs` enforces explicit closing code
+fences via parser tokens. Mermaid fences are extracted with the Markdown parser
+so nested containers are checked and diagnostics map back to exact source lines;
+never suppress failures or add automatic rewriting.
 
 ### Choosing code and verification scope
 
