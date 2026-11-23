@@ -718,9 +718,12 @@ extracts the candidate ZIP, replaces the complete integration directory, and
 starts a fresh Core process with the same configuration/Recorder database.
 Acceptance compares every registered domain/unique-ID identity, device/entry
 identity, names/icons/areas/preferences, sensor units/classes, saved profiles,
-historical states and statistic identity/values. Ephemeral loopback ports are
-excluded from identity comparison. Output paths must be new; receipts retain
-phase failures and logs, and the temporary configuration is removed.
+historical states and statistic identity/values. Same-version restarts require an
+exact registry match, while version upgrades preserve every existing identity,
+preference and sensor contract and verify that any newly added entities attach
+to the existing device and honor `pref_disable_new_entities`. Ephemeral
+loopback ports are excluded from identity comparison. Output paths must be new;
+receipts retain phase failures and logs, and the temporary configuration is removed.
 
 Recorder initialization precedes entity listeners. All appliance traffic remains
 synthetic loopback; this verifies package loading and data preservation, not a

@@ -40,7 +40,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 if __package__:
     from .delivery import extract_artifact, load_artifact
@@ -637,7 +637,15 @@ async def _exercise_programme_intents(
         c.async_set_updated_data(c.data)
 
 
-async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: dict[str, Any], *, restart: bool) -> None:
+async def _exercise_profiles(
+    hass: Any,
+    entry: Any,
+    peer: ReadOnlyPeer,
+    result: dict[str, Any],
+    *,
+    restart: bool,
+    profile_management: bool = True,
+) -> None:
     """Exercise real actions/storage, including narrowly scoped adapter failures."""
     from homeassistant.core import Context
     from homeassistant.exceptions import ServiceValidationError
@@ -902,26 +910,27 @@ async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: 
             "temporary_profile_removed": managed_id,
         }
 
-    # Cancel the scheduled poll through public coordinator APIs before measuring
-    # local operations, then restore its interval. Polling is not mutation traffic.
-    poll_interval = c.update_interval
-    c.update_interval = None
-    c.async_set_updated_data(c.data)
-    try:
-        await hass.async_block_till_done()
-        management_queries = len(peer.queries)
-        authoritative_before_management = c.data
-        await manage_profiles()
-        _require(len(peer.queries) == management_queries
-                 and not peer.profile_controls and peer.profile_initializations == 0,
-                 "Local profile management dispatched a peer read or control")
-        _require(c.data == authoritative_before_management,
-                 "Local profile management changed authoritative appliance state")
-        result["profile_management"]["operation_peer_queries"] = 0
-        result["profile_management"]["scheduled_polling_excluded"] = True
-    finally:
-        c.update_interval = poll_interval
+    if profile_management:
+        # Cancel the scheduled poll through public coordinator APIs before measuring
+        # local operations, then restore its interval. Polling is not mutation traffic.
+        poll_interval = c.update_interval
+        c.update_interval = None
         c.async_set_updated_data(c.data)
+        try:
+            await hass.async_block_till_done()
+            management_queries = len(peer.queries)
+            authoritative_before_management = c.data
+            await manage_profiles()
+            _require(len(peer.queries) == management_queries
+                     and not peer.profile_controls and peer.profile_initializations == 0,
+                     "Local profile management dispatched a peer read or control")
+            _require(c.data == authoritative_before_management,
+                     "Local profile management changed authoritative appliance state")
+            result["profile_management"]["operation_peer_queries"] = 0
+            result["profile_management"]["scheduled_polling_excluded"] = True
+        finally:
+            c.update_interval = poll_interval
+            c.async_set_updated_data(c.data)
     for drum, profile_id in (("upper", "missing"), ("lower", upper["profile_id"])):
         try:
             await call("start_profile", drum, profile_id=profile_id)
@@ -971,7 +980,7 @@ async def _exercise_profiles(hass: Any, entry: Any, peer: ReadOnlyPeer, result: 
         "transient_names_cleared": True,
         "stable_action_choices": True, "start_exact_spin_400_once": True,
         "drafts_independent": True, "reload_persistence": True,
-        "native_action_management_and_failures": True,
+        "native_action_management_and_failures": profile_management,
     }
 
 
@@ -985,6 +994,8 @@ async def _exercise(
     serve_timeout: float = 300.0,
     serve_port: int | None = None,
     record_history: bool = False,
+    fault_entities: Literal["enabled", "disabled", "absent"] = "enabled",
+    profile_management: bool = True,
     after_scenario: Callable[[Any, Any, ReadOnlyPeer], Awaitable[None]] | None = None,
 ) -> None:
     # Imports are intentionally delayed until the immutable artifact is installed
@@ -1000,6 +1011,10 @@ async def _exercise(
     from homeassistant.helpers import entity_registry as er
     from homeassistant.setup import async_setup_component
 
+    _require(
+        fault_entities in ("enabled", "disabled", "absent"),
+        f"Unsupported fault_entities mode: {fault_entities}",
+    )
     result["core_version"] = core_version
     peer = ProgrammeIntentPeer() if scenario == "programme-intents" else ReadOnlyPeer()
     hass = HomeAssistant(str(root))
@@ -1130,14 +1145,15 @@ async def _exercise(
             registry = er.async_get(hass)
             registered = er.async_entries_for_config_entry(registry, entry.entry_id)
             result["registered_entity_count"] = len(registered)
-            sensor_ids = {
-                row.unique_id.removeprefix(f"{DEVICE_ID}_"): row.entity_id
+            sensor_entries = {
+                row.unique_id.removeprefix(f"{DEVICE_ID}_"): row
                 for row in registered if row.domain == "sensor" and row.platform == DOMAIN
             }
-            binary_sensor_ids = {
-                row.unique_id.removeprefix(f"{DEVICE_ID}_"): row.entity_id
+            binary_sensor_entries = {
+                row.unique_id.removeprefix(f"{DEVICE_ID}_"): row
                 for row in registered if row.domain == "binary_sensor" and row.platform == DOMAIN
             }
+            sensor_ids = {key: row.entity_id for key, row in sensor_entries.items()}
 
             if scenario == "offline":
                 _require(coordinator.data is None and not coordinator.last_update_success,
@@ -1215,19 +1231,54 @@ async def _exercise(
                     for key, value in (
                         (f"{drum}_phase", "standby" if expected == "standby" else "spinning"),
                         (f"{drum}_execution_state", expected),
-                        (f"{drum}_fault_code", "none"),
                     ):
                         entity_id = sensor_ids.get(key)
                         state = hass.states.get(entity_id) if entity_id else None
                         actual = state.state if state else None
                         assertions.append({"key": key, "expected": value, "actual": actual})
                         _require(actual == value, f"{label}: {key} expected {value}, got {actual}")
-                    fault_key = f"{drum}_fault"
-                    fault_entity = binary_sensor_ids.get(fault_key)
-                    fault_state = hass.states.get(fault_entity) if fault_entity else None
-                    fault_actual = fault_state.state if fault_state else None
-                    assertions.append({"key": fault_key, "expected": "off", "actual": fault_actual})
-                    _require(fault_actual == "off", f"{label}: {fault_key} expected off, got {fault_actual}")
+                    fault_targets = (
+                        (f"{drum}_fault_code", sensor_entries, "none"),
+                        (f"{drum}_fault", binary_sensor_entries, "off"),
+                    )
+                    if fault_entities == "enabled":
+                        for key, entries, expected_fault in fault_targets:
+                            row = entries.get(key)
+                            state = hass.states.get(row.entity_id) if row is not None else None
+                            actual = state.state if state else None
+                            assertions.append({"key": key, "expected": expected_fault, "actual": actual})
+                            _require(actual == expected_fault, f"{label}: {key} expected {expected_fault}, got {actual}")
+                    elif fault_entities == "disabled":
+                        for key, entries, _ in fault_targets:
+                            row = entries.get(key)
+                            state = hass.states.get(row.entity_id) if row is not None else None
+                            disabled_value = (
+                                row.disabled_by.value
+                                if row is not None and hasattr(row.disabled_by, "value")
+                                else (row.disabled_by if row is not None else None)
+                            )
+                            actual = (
+                                state.state
+                                if state is not None
+                                else (f"disabled:{disabled_value}" if disabled_value is not None else None)
+                            )
+                            assertions.append({
+                                "key": key,
+                                "expected": "disabled:integration",
+                                "actual": actual,
+                            })
+                            _require(
+                                row is not None
+                                and row.disabled_by == er.RegistryEntryDisabler.INTEGRATION
+                                and state is None,
+                                f"{label}: {key} expected disabled:integration, got {actual}",
+                            )
+                    else:
+                        for key, entries, _ in fault_targets:
+                            present = key in entries
+                            actual = "present" if present else "absent"
+                            assertions.append({"key": key, "expected": "absent", "actual": actual})
+                            _require(not present, f"{label}: {key} expected absent, got {actual}")
                 for key, entity_id in sorted(sensor_ids.items()):
                     state = hass.states.get(entity_id)
                     if state is not None:
@@ -1246,7 +1297,14 @@ async def _exercise(
                     await observe(label, state, refresh=True)
             if scenario.startswith("profiles"):
                 result["profile_entry_id"] = entry.entry_id
-                await _exercise_profiles(hass, entry, peer, result, restart=scenario == "profiles_restart")
+                await _exercise_profiles(
+                    hass,
+                    entry,
+                    peer,
+                    result,
+                    restart=scenario == "profiles_restart",
+                    profile_management=profile_management,
+                )
                 coordinator = entry.runtime_data
             if scenario == "programme-intents":
                 await _exercise_programme_intents(hass, entry, peer, result)

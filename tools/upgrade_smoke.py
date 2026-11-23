@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,118 @@ from zipfile import BadZipFile, ZipFile
 
 import ha_smoke as smoke
 from delivery import extract_artifact, load_artifact, verify_installed
+
+VERSION_RE = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
+FAULT_ENTITIES_MIN_VERSION = (1, 1, 0)
+PROFILE_MANAGEMENT_MIN_VERSION = (1, 1, 0)
+
+
+def parse_version(raw: str) -> tuple[int, int, int]:
+    """Parse a strict X.Y.Z release version string into a numeric tuple."""
+    if not isinstance(raw, str) or not VERSION_RE.fullmatch(raw):
+        raise ValueError(f"Expected X.Y.Z release version, got {raw!r}")
+    major, minor, patch = map(int, raw.split("."))
+    return major, minor, patch
+
+
+def phase_exercise_options(installed_version: str, previous: dict | None) -> dict[str, object]:
+    """Select Core smoke expectations compatible with baseline and upgraded versions."""
+    current = parse_version(installed_version)
+    profile_management = current >= PROFILE_MANAGEMENT_MIN_VERSION
+    if current < FAULT_ENTITIES_MIN_VERSION:
+        fault_entities = "absent"
+    elif previous is not None:
+        previous_version = parse_version(previous["integration_version"])
+        disable_new = bool(previous["upgrade"]["registry"]["entry"]["pref_disable_new_entities"])
+        fault_entities = (
+            "disabled"
+            if previous_version < FAULT_ENTITIES_MIN_VERSION and disable_new
+            else "enabled"
+        )
+    else:
+        fault_entities = "enabled"
+    return {
+        "fault_entities": fault_entities,
+        "profile_management": profile_management,
+    }
+
+
+def verify_upgrade_registry(
+    old_registry: dict,
+    new_registry: dict,
+    *,
+    old_version: str,
+    new_version: str,
+) -> list[str]:
+    """Verify preserved identities/preferences/contracts across restarts or upgrades."""
+    old_ver = parse_version(old_version)
+    new_ver = parse_version(new_version)
+    smoke._require(new_ver >= old_ver, f"Unexpected downgrade from {old_version} to {new_version}")
+    if new_ver == old_ver:
+        smoke._require(
+            new_registry == old_registry,
+            "Restart changed identity, preferences or sensor units/classes",
+        )
+        return []
+    smoke._require(
+        new_registry["entry"] == old_registry["entry"],
+        "Upgrade changed config entry identity or preferences",
+    )
+    smoke._require(
+        new_registry["devices"] == old_registry["devices"],
+        "Upgrade changed device identity or user metadata",
+    )
+    old_entities = old_registry["entities"]
+    new_entities = new_registry["entities"]
+    removed = sorted(set(old_entities) - set(new_entities))
+    smoke._require(not removed, f"Upgrade removed existing entities: {removed}")
+    for key, old_row in old_entities.items():
+        smoke._require(
+            new_entities[key] == old_row,
+            f"Upgrade changed existing entity identity or preferences: {key}",
+        )
+    added = sorted(set(new_entities) - set(old_entities))
+    disable_new = bool(old_registry["entry"]["pref_disable_new_entities"])
+    known_devices = set(old_registry["devices"])
+    for key in added:
+        row = new_entities[key]
+        smoke._require(
+            row["device_id"] in known_devices,
+            f"Upgrade attached new entity to unknown device: {key}",
+        )
+        if disable_new:
+            smoke._require(
+                row["disabled_by"] == "integration",
+                f"Upgrade did not respect pref_disable_new_entities for new entity: {key}",
+            )
+            smoke._require(
+                row["hidden_by"] is None
+                and row["name"] is None
+                and row["icon"] is None
+                and row["area_id"] is None,
+                f"New disabled entity carried unexpected user metadata: {key}",
+            )
+    old_contracts = old_registry["sensor_contracts"]
+    new_contracts = new_registry["sensor_contracts"]
+    for uid, contract in old_contracts.items():
+        smoke._require(
+            new_contracts.get(uid) == contract,
+            f"Upgrade changed existing sensor unit/class contract: {uid}",
+        )
+    extra_contracts = sorted(set(new_contracts) - set(old_contracts))
+    if disable_new:
+        smoke._require(
+            not extra_contracts,
+            f"Disabled new sensors unexpectedly published live contracts: {extra_contracts}",
+        )
+    else:
+        added_set = set(added)
+        for uid in extra_contracts:
+            smoke._require(
+                f"sensor:{uid}" in added_set,
+                f"Upgrade published sensor contract for unexpected entity: {uid}",
+            )
+    return added
 
 
 def _registry_snapshot(hass, entry) -> dict:
@@ -66,7 +179,14 @@ def _registry_snapshot(hass, entry) -> dict:
     return json.loads(json.dumps(result, default=dict))
 
 
-async def _checkpoint(hass, entry, peer, result: dict, previous: dict | None) -> None:
+async def _checkpoint(
+    hass,
+    entry,
+    peer,
+    result: dict,
+    previous: dict | None,
+    installed_version: str,
+) -> None:
     from homeassistant.components import recorder
     from homeassistant.components.recorder import history, statistics
     from homeassistant.helpers import area_registry as ar
@@ -149,7 +269,12 @@ async def _checkpoint(hass, entry, peer, result: dict, previous: dict | None) ->
         smoke._require(any(row.get("sum") == 9.0 for row in hourly.get(water, [])), "Historical statistics were not recorded")
     else:
         old = previous["upgrade"]
-        smoke._require(evidence["registry"] == old["registry"], "Upgrade changed identity, preferences or sensor units/classes")
+        evidence["added_entities"] = verify_upgrade_registry(
+            old["registry"],
+            evidence["registry"],
+            old_version=previous["integration_version"],
+            new_version=installed_version,
+        )
         smoke._require(all(row in recorded for row in old["history"]), "Upgrade lost or rescaled historical states")
         smoke._require(hourly == old["statistics"], "Upgrade changed historical consumption statistics")
         smoke._require(evidence["statistic_identity"] == old["statistic_identity"], "Upgrade changed statistic identity or units")
@@ -170,14 +295,17 @@ def _phase(root: Path, output: Path, previous_path: Path | None) -> int:
     sys.path.insert(0, str(root))
     logging.basicConfig(level=logging.WARNING)
     try:
+        installed_version = json.loads((root / smoke.PACKAGE / "manifest.json").read_text(encoding="utf-8"))["version"]
+        result["integration_version"] = installed_version
+        exercise_options = phase_exercise_options(installed_version, previous)
+
         async def probe(hass, entry, peer):
-            await _checkpoint(hass, entry, peer, result, previous)
+            await _checkpoint(hass, entry, peer, result, previous, installed_version)
 
         asyncio.run(smoke._exercise(
             root, "profiles_restart" if previous else "profiles", result,
-            record_history=True, after_scenario=probe,
+            record_history=True, after_scenario=probe, **exercise_options,
         ))
-        result["integration_version"] = json.loads((root / smoke.PACKAGE / "manifest.json").read_text())["version"]
         result["success"] = True
     except Exception as error:
         logging.getLogger(__name__).exception("Core upgrade phase failed")
