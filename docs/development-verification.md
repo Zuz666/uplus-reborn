@@ -557,13 +557,17 @@ An unexecuted phase is `not_run`; failures remain failures through teardown,
 with the initiating scenario error retained separately from a later cleanup error.
 
 PR CI selects fast only for a complete, revision-bound comparison positively
-classified as unrelated. Discovery/callers, shared dependencies, environment,
-verification inputs and unknown/incomplete/stale comparisons select full.
-Both sides of renames and deletions count; an unrelated final commit cannot hide
-an earlier relevant change. Non-PR/master/manual contexts remain full.
-The selector supports forcing full, not bypassing applicable full coverage.
-The runner validates that a CI selection belongs to its committed bundle.
-No job or Core target is skipped, and the release-source matrix is unchanged.
+classified as unrelated (such as documentation, proven discovery-unrelated
+release, HACS, or documentation tooling, or pure version-only release-metadata
+preparation PRs changing only package version fields and `CHANGELOG.md`).
+Discovery/callers, unexempted tools, shared dependencies, environment,
+non-version metadata edits, verification inputs and unknown/incomplete/stale
+comparisons select full. Both sides of renames and deletions count; an
+unrelated final commit cannot hide an earlier relevant change. Non-PR/master/manual
+contexts remain full. The selector supports forcing full, not bypassing
+applicable full coverage. The runner validates that a CI selection belongs to
+its committed bundle. No job or Core target is skipped, and the release-source
+matrix is unchanged.
 
 Each Core job appends a receipt-based GitHub Job Summary for the existing five
 scenarios, including status, real elapsed duration, discovery mode/reason and
@@ -692,8 +696,11 @@ Base images are digest-pinned. Minimum-Core frontend/DHCP requirements are
 resolved in the committed uv test group and checked against Core's manifests;
 the image build never installs an unlocked supplemental dependency set.
 Scheduled/manual stable, beta and dev Core canaries use deliberately moving
-images and preserve failures as visible drift evidence. They are not required
-release baselines and do not silently expand supported Core versions.
+images, verify both `ha_smoke.py --scenario profiles` and the offline
+`hacs_fixture.py self-check` installer API check, and preserve failures as visible
+drift evidence. The current-Core CI job runs the same offline installer self-check
+without changing the 18-job release matrix. They are not required release baselines
+and do not silently expand supported Core versions.
 
 Native EN/RU UI acceptance uses Full HD (1920 × 1080, DPR 1); reuse previously
 accepted evidence when names, frontend/layout and relevant environment are
@@ -727,7 +734,10 @@ receipts retain phase failures and logs, and the temporary configuration is remo
 
 Recorder initialization precedes entity listeners. All appliance traffic remains
 synthetic loopback; this verifies package loading and data preservation, not a
-HACS download or hardware behavior. Real HACS acceptance is still separate.
+HACS download or hardware behavior. Current-Core PR CI also runs an advisory
+baseline-to-candidate `--allow-additive` upgrade guard automatically whenever
+integration code, `tools/Dockerfile`, `hacs.json`, or delivery/upgrade tooling
+changes. Real published Marketplace/HACS acceptance remains separate.
 
 For actual published downloads, use the maintained
 [`hacs_acceptance.py` command](release-workflow.md#repeatable-published-hacs-acceptance).

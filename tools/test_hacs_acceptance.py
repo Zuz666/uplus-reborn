@@ -21,7 +21,13 @@ from hacs_acceptance import (
     pinned_core_version,
     verify_release_package,
 )
-from hacs_fixture import InstallerGuard, extract_hacs, run_phase, safe_error
+from hacs_fixture import (
+    InstallerGuard,
+    extract_hacs,
+    run_phase,
+    safe_error,
+    sanitize_text,
+)
 
 
 class ReleasePackageTests(unittest.TestCase):
@@ -127,6 +133,39 @@ class InstallerIsolationTests(unittest.TestCase):
                 run_phase("installer", [sys.executable, "-c", code, str(directory / "installer.json")],
                           directory, result, installer=True)
             self.assertTrue(result["phases"]["installer"]["receipt"]["read_token_available"])
+            self.assertNotIn("stderr", result["phases"]["installer"])
+
+    def test_failed_phase_retains_sanitized_stderr_tail_without_leaking_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            code = (
+                "import sys; "
+                "sys.stderr.write('HEAD_' * 1200 + '\\n'); "
+                "sys.stderr.write('https://release-assets.githubusercontent.com/file?sig=secret-sig\\n'); "
+                "sys.stderr.write('Authorization: Bearer topsecret123\\n'); "
+                "sys.stderr.write('ghp_1234567890abcdef\\n'); "
+                "sys.stderr.write('TAIL_TRACEBACK: KeyError: network\\n'); "
+                "raise SystemExit(1)"
+            )
+            result = {"phases": {}}
+            with (
+                patch.dict(os.environ, {"GH_TOKEN": "fixture-read-token", "GITHUB_TOKEN": "fixture-token"}),
+                self.assertRaisesRegex(RuntimeError, "installer failed"),
+            ):
+                run_phase("installer", [sys.executable, "-c", code], directory, result, installer=True)
+            stderr = result["phases"]["installer"]["stderr"]
+            self.assertLessEqual(len(stderr), 4000)
+            self.assertTrue(stderr.startswith("...[truncated]\n"))
+            self.assertIn("TAIL_TRACEBACK: KeyError: network", stderr)
+            self.assertIn("https://release-assets.githubusercontent.com/file?[redacted]", stderr)
+            self.assertIn("Authorization: Bearer [redacted]", stderr)
+            self.assertNotIn("sig=secret-sig", stderr)
+            self.assertNotIn("topsecret123", stderr)
+            self.assertNotIn("ghp_1234567890abcdef", stderr)
+            with patch.dict(os.environ, {"GH_TOKEN": "fixture-read-token"}):
+                sanitized_env = sanitize_text("token is fixture-read-token and github_pat_abcXYZ123")
+            self.assertNotIn("fixture-read-token", sanitized_env)
+            self.assertNotIn("github_pat_abcXYZ123", sanitized_env)
 
 
 class LauncherFailureTests(unittest.TestCase):

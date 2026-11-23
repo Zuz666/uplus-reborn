@@ -33,8 +33,8 @@ VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
 ASSET = "uplus_reborn.zip"
 
 
-def previous_stable(releases: list[dict], version: str) -> str | None:
-    """Freeze the greatest published stable version below the new target."""
+def previous_stable(releases: list[dict], version: str, *, include_equal: bool = False) -> str | None:
+    """Freeze the greatest published stable version below (or at most) target."""
     if not VERSION.fullmatch(version):
         raise ValueError("Expected a stable release version")
     target = tuple(map(int, version.split(".")))
@@ -45,7 +45,8 @@ def previous_stable(releases: list[dict], version: str) -> str | None:
         if released.get("draft") or released.get("prerelease") or not tag.startswith("v") or not VERSION.fullmatch(tag[1:]):
             continue
         candidate = tuple(map(int, tag[1:].split(".")))
-        if chosen_version < candidate < target:
+        within_bound = candidate <= target if include_equal else candidate < target
+        if chosen_version < candidate and within_bound:
             chosen, chosen_version = tag, candidate
     return chosen
 
@@ -478,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     selector = commands.add_parser("baseline-select")
     selector.add_argument("--repository", required=True)
     selector.add_argument("--version", required=True)
+    selector.add_argument("--include-equal", action="store_true")
     selector.add_argument("--github-output", type=Path)
     selector.add_argument("--output", type=Path)
     status = commands.add_parser("status")
@@ -508,7 +510,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "baseline-select":
             if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository):
                 raise ValueError("Expected public owner/repository")
-            tag = previous_stable(github.pages(f"repos/{args.repository}/releases?per_page=100"), args.version)
+            tag = previous_stable(
+                github.pages(f"repos/{args.repository}/releases?per_page=100"),
+                args.version,
+                include_equal=args.include_equal,
+            )
             result = {"schema": 1, "repository": args.repository, "version": args.version,
                       "tag": tag, "first_release": tag is None}
             if args.github_output is not None:

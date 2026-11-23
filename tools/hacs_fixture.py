@@ -24,14 +24,37 @@ from delivery import archive_member_name, verify_installed
 
 HOSTS = frozenset({"api.github.com", "github.com", "codeload.github.com",
                    "raw.githubusercontent.com", "release-assets.githubusercontent.com"})
+CALVER_CORE_RE = re.compile(r"(\d{4})\.([1-9]\d*|0)\.(?:0|[1-9]\d*)(?:[a-zA-Z0-9._-]*)?\Z")
+
+
+def installer_mode_for_core(core_version: str) -> str:
+    """Select built-in Marketplace on HA 2026.11+ or legacy HACS on earlier Core."""
+    match = CALVER_CORE_RE.fullmatch(core_version)
+    if match is None:
+        raise ValueError(f"Invalid Home Assistant Core version: {core_version!r}")
+    year, month = int(match.group(1)), int(match.group(2))
+    return "marketplace" if (year, month) >= (2026, 11) else "hacs"
+
+
+def sanitize_text(text: str, *, limit: int = 4000, tail: bool = False) -> str:
+    """Redact signed URLs and GitHub tokens while bounding log size."""
+    value = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[redacted]", text)
+    value = re.sub(r"(?i)(authorization\s*[:=]\s*(?:bearer|token)\s+)\S+", r"\1[redacted]", value)
+    value = re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b", "[redacted]", value)
+    for key in ("GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.environ.get(key)
+        if token:
+            value = value.replace(token, "[redacted]")
+    if len(value) <= limit:
+        return value
+    if tail:
+        prefix = "...[truncated]\n"
+        return prefix + value[-(limit - len(prefix)):] if limit > len(prefix) else value[-limit:]
+    return value[:limit]
 
 
 def safe_error(error: Exception) -> str:
-    value = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[redacted]", f"{type(error).__name__}: {error}")
-    token = os.environ.get("GH_TOKEN")
-    if token:
-        value = value.replace(token, "[redacted]")
-    return value[:1000]
+    return sanitize_text(f"{type(error).__name__}: {error}", limit=1000, tail=False)
 
 
 class InstallerGuard(smoke.LoopbackGuard):
@@ -165,8 +188,8 @@ async def install(args, expected, addresses, guard, result):
         await hass.async_stop(force=True)
 
 
-async def _prepare_marketplace(hass, loader, session, args, result):
-    """Initialize HA 2026.11+ built-in Marketplace for bounded read-only registration."""
+async def _init_marketplace_manager(hass, loader, session, result):
+    """Initialize HA 2026.11+ built-in Marketplace with an explicit HTTP session."""
     from homeassistant.components.lovelace import LOVELACE_DATA
     from homeassistant.components.marketplace import base as marketplace_base
     from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE_DOMAIN
@@ -197,6 +220,12 @@ async def _prepare_marketplace(hass, loader, session, args, result):
     marketplace.status.startup = False
     marketplace.enable_category(RepositoryCategory.INTEGRATION)
     result.update(installer="marketplace", marketplace_version=str(marketplace.version))
+    return marketplace, RepositoryCategory
+
+
+async def _prepare_marketplace(hass, loader, session, args, result):
+    """Register and install target repository through HA 2026.11+ built-in Marketplace."""
+    marketplace, RepositoryCategory = await _init_marketplace_manager(hass, loader, session, result)
     errors = await marketplace.async_register_repository(args.repository, RepositoryCategory.INTEGRATION)
     repository = marketplace.repositories.get_by_full_name(args.repository)
     smoke._require(repository is not None and not errors and not repository.validate.errors,
@@ -310,10 +339,97 @@ def run_phase(name, command, output, result, *, installer=False):
     )
     path = output / f"{name}.json"
     phase = json.loads(path.read_text()) if path.exists() else {}
-    result["phases"][name] = {"returncode": completed.returncode,
-                              "duration_seconds": time.monotonic() - phase_started, "receipt": phase}
-    smoke._require(completed.returncode == 0 and phase.get("success"),
-                   f"{name} failed: {phase.get('error', 'worker failed without a receipt')}")
+    ok = completed.returncode == 0 and bool(phase.get("success"))
+    phase_entry = {
+        "returncode": completed.returncode,
+        "duration_seconds": time.monotonic() - phase_started,
+        "receipt": phase,
+    }
+    if not ok:
+        stderr_tail = sanitize_text((completed.stderr or "").strip(), limit=4000, tail=True)
+        if stderr_tail:
+            phase_entry["stderr"] = stderr_tail
+    result["phases"][name] = phase_entry
+    smoke._require(ok, f"{name} failed: {phase.get('error', 'worker failed without a receipt')}")
+
+
+async def _run_self_check(root: Path, result: dict) -> None:
+    """Verify Core Marketplace/HACS installer APIs offline inside the container."""
+    import aiohttp
+    from homeassistant import bootstrap, loader
+    from homeassistant.config_entries import ConfigEntries
+    from homeassistant.const import __version__ as core_version
+    from homeassistant.core import HomeAssistant
+
+    mode = installer_mode_for_core(core_version)
+    result.update(core_version=core_version, installer=mode)
+    hass = HomeAssistant(str(root))
+    loader.async_setup(hass)
+    hass.config.skip_pip = True
+    hass.config_entries = ConfigEntries(hass, {})
+    try:
+        await bootstrap.async_load_base_functionality(hass)
+        await loader.async_get_custom_components(hass)
+        if mode == "marketplace":
+            from homeassistant.components.marketplace.repositories.integration import (
+                IntegrationRepository,
+            )
+
+            async with aiohttp.ClientSession() as session:
+                marketplace, _ = await _init_marketplace_manager(hass, loader, session, result)
+            manager_attrs = ("async_register_repository", "enable_category", "repositories", "version")
+            for attr in manager_attrs:
+                smoke._require(hasattr(marketplace, attr), f"MarketplaceManager missing {attr}")
+            smoke._require(
+                callable(getattr(marketplace.repositories, "get_by_full_name", None)),
+                "MarketplaceManager.repositories missing get_by_full_name",
+            )
+            repo_attrs = (
+                "get_repository_manifest",
+                "can_install",
+                "async_install_repository",
+                "display_available_version",
+                "pending_update",
+            )
+            for attr in repo_attrs:
+                smoke._require(hasattr(IntegrationRepository, attr), f"IntegrationRepository missing {attr}")
+            result["verified_symbols"] = [*manager_attrs, "repositories.get_by_full_name", *repo_attrs]
+        else:
+            blocked = getattr(loader, "BLOCKED_CUSTOM_INTEGRATIONS", {})
+            smoke._require("hacs" not in blocked, "Core blocked custom integration 'hacs'")
+            result["verified_symbols"] = ["hacs_not_blocked"]
+    finally:
+        await hass.async_stop(force=True)
+
+
+def self_check_main(args) -> int:
+    """Run an offline, credential-free Core installer compatibility self-check."""
+    result = {"schema": 1, "scenario": "installer-self-check", "success": False, "temporary_config_removed": False}
+    started = time.monotonic()
+    guard = smoke.LoopbackGuard()
+    sys.addaudithook(guard.audit)
+    try:
+        with tempfile.TemporaryDirectory(prefix="uplus-installer-check-") as temporary:
+            directory = Path(temporary)
+            asyncio.run(_run_self_check(directory, result))
+        result["success"] = True
+    except Exception as error:
+        result["error"] = safe_error(error)
+        logging.getLogger(__name__).exception("Installer self-check failed")
+    finally:
+        result["duration_seconds"] = time.monotonic() - started
+        result["temporary_config_removed"] = "directory" in locals() and not directory.exists()
+        result["network_guard"] = {"blocked": guard.blocked, "allowed_loopback_connects": guard.allowed_connects}
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("x", encoding="utf-8") as receipt:
+            json.dump(result, receipt, indent=2, default=smoke._json_default)
+            receipt.write("\n")
+    print(json.dumps({
+        key: result[key]
+        for key in ("success", "core_version", "installer", "temporary_config_removed", "error")
+        if key in result
+    }))
+    return 0 if result["success"] else 1
 
 
 def main(args):
@@ -378,6 +494,11 @@ def main(args):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.ERROR)
+    if len(sys.argv) > 1 and sys.argv[1] == "self-check":
+        check_parser = argparse.ArgumentParser(description=__doc__)
+        check_parser.add_argument("self_check")
+        check_parser.add_argument("--output", type=Path, required=True)
+        raise SystemExit(self_check_main(check_parser.parse_args()))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--tag", required=True)

@@ -27,6 +27,7 @@ from delivery import (
     require_docker,
 )
 from github_api import api, gh, tag_commit
+from hacs_fixture import installer_mode_for_core
 from release import ASSET, VERSION
 
 TOOLS = Path(__file__).resolve().parent
@@ -34,7 +35,6 @@ MAX_PACKAGE_BYTES = 16 * 1024 * 1024
 CORE_CURRENT_IMAGE_RE = re.compile(
     r"(?m)^FROM ghcr\.io/home-assistant/home-assistant:([^@ ]+)@sha256:[0-9a-f]{64} AS core-current$"
 )
-CALVER_CORE_RE = re.compile(r"(\d{4})\.([1-9]\d*|0)\.(?:0|[1-9]\d*)(?:[a-zA-Z0-9._-]*)?\Z")
 
 
 def pinned_core_version(dockerfile_text: str) -> str:
@@ -43,15 +43,6 @@ def pinned_core_version(dockerfile_text: str) -> str:
     if match is None:
         raise ValueError("Missing pinned current Core version in tools/Dockerfile")
     return match.group(1)
-
-
-def installer_mode_for_core(core_version: str) -> str:
-    """Select built-in Marketplace on HA 2026.11+ or legacy HACS on earlier Core."""
-    match = CALVER_CORE_RE.fullmatch(core_version)
-    if match is None:
-        raise ValueError(f"Invalid Home Assistant Core version: {core_version!r}")
-    year, month = int(match.group(1)), int(match.group(2))
-    return "marketplace" if (year, month) >= (2026, 11) else "hacs"
 
 
 def verify_release_package(directory: Path, released: dict, commit: str, tree: dict) -> dict:

@@ -12,10 +12,42 @@ import json
 import os
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+SEMVER = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
 UNRELATED_FILES = frozenset({"README.md", "CONTRIBUTING.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"})
+UNRELATED_TOOLS = frozenset({
+    "tools/check-docs.mjs",
+    "tools/check-docs.test.mjs",
+    "tools/closed-fences.cjs",
+    "tools/ci_summary.py",
+    "tools/test_ci_summary.py",
+    "tools/generate_brand_icon.py",
+    "tools/github_api.py",
+    "tools/hacs-fixture.json",
+    "tools/hacs_acceptance.py",
+    "tools/hacs_fixture.py",
+    "tools/test_hacs_acceptance.py",
+    "tools/pr-labels.cjs",
+    "tools/pr-labels.test.cjs",
+    "tools/publish_release.py",
+    "tools/test_publish_release.py",
+    "tools/release.py",
+    "tools/test_release.py",
+    "tools/test_release_operations.py",
+    "tools/release_evidence.py",
+    "tools/test_release_evidence.py",
+    "tools/test_native_lint.py",
+    "tools/upgrade_smoke.py",
+    "tools/test_upgrade_smoke.py",
+})
+VERSION_METADATA_FILES = frozenset({
+    "custom_components/uplus_reborn/manifest.json",
+    "pyproject.toml",
+    "uv.lock",
+})
 RELEVANT_FILES = frozenset({
     "pyproject.toml", "uv.lock", "package.json", "package-lock.json", "hacs.json",
     "Dockerfile", "docker-compose.yml", "compose.yml", ".python-version",
@@ -51,16 +83,17 @@ def _commit(repo: Path, revision: str) -> str:
     return value
 
 
-def _paths(output: bytes) -> set[str]:
+def _path_statuses(output: bytes) -> list[tuple[str, str]]:
     """Decode NUL-separated status/path pairs; renames are delete plus add."""
     if not output:
-        return set()
+        return []
     parts = output.split(b"\0")
     if parts.pop() != b"" or len(parts) % 2:
         raise ComparisonUnavailable("incomplete_comparison")
-    paths = set()
+    changes: list[tuple[str, str]] = []
     for index in range(0, len(parts), 2):
-        if parts[index] not in {b"A", b"D", b"M"}:
+        raw_status = parts[index]
+        if raw_status not in {b"A", b"D", b"M"}:
             raise ComparisonUnavailable("unknown_changes")
         try:
             path = parts[index + 1].decode("utf-8")
@@ -68,14 +101,93 @@ def _paths(output: bytes) -> set[str]:
             raise ComparisonUnavailable("unknown_changes") from error
         if not path or any(part in {"", ".", ".."} for part in path.split("/")):
             raise ComparisonUnavailable("unknown_changes")
-        paths.add(path)
-    return paths
+        changes.append((raw_status.decode("ascii"), path))
+    return changes
 
 
-def _impact(paths: set[str]) -> str:
-    unknown = not paths
-    for path in paths:
-        # Whole runtime and verification closures are relevant, including callers,
+def _is_version_only_diff(repo: Path, left: str, right: str, path: str) -> bool:
+    """Return True only if committed `path` changed solely its SemVer version field."""
+    try:
+        old_text = _git(repo, "show", f"{left}:{path}").decode("utf-8")
+        new_text = _git(repo, "show", f"{right}:{path}").decode("utf-8")
+    except (ComparisonUnavailable, UnicodeDecodeError):
+        return False
+    if path == "custom_components/uplus_reborn/manifest.json":
+        try:
+            old_obj, new_obj = json.loads(old_text), json.loads(new_text)
+        except ValueError:
+            return False
+        if not isinstance(old_obj, dict) or not isinstance(new_obj, dict):
+            return False
+        old_ver, new_ver = old_obj.get("version"), new_obj.get("version")
+        if not (
+            isinstance(old_ver, str)
+            and isinstance(new_ver, str)
+            and SEMVER.fullmatch(old_ver)
+            and SEMVER.fullmatch(new_ver)
+        ):
+            return False
+        return {**old_obj, "version": new_ver} == new_obj
+    if path == "pyproject.toml":
+        try:
+            old_obj, new_obj = tomllib.loads(old_text), tomllib.loads(new_text)
+        except tomllib.TOMLDecodeError:
+            return False
+        old_proj, new_proj = old_obj.get("project"), new_obj.get("project")
+        if not isinstance(old_proj, dict) or not isinstance(new_proj, dict):
+            return False
+        if old_proj.get("name") != "uplus-reborn" or new_proj.get("name") != "uplus-reborn":
+            return False
+        old_ver, new_ver = old_proj.get("version"), new_proj.get("version")
+        if not (
+            isinstance(old_ver, str)
+            and isinstance(new_ver, str)
+            and SEMVER.fullmatch(old_ver)
+            and SEMVER.fullmatch(new_ver)
+        ):
+            return False
+        old_proj["version"] = new_ver
+        return old_obj == new_obj
+    if path == "uv.lock":
+        try:
+            old_obj, new_obj = tomllib.loads(old_text), tomllib.loads(new_text)
+        except tomllib.TOMLDecodeError:
+            return False
+        old_pkgs, new_pkgs = old_obj.get("package"), new_obj.get("package")
+        if not isinstance(old_pkgs, list) or not isinstance(new_pkgs, list):
+            return False
+        old_roots = [p for p in old_pkgs if isinstance(p, dict) and p.get("name") == "uplus-reborn"]
+        new_roots = [p for p in new_pkgs if isinstance(p, dict) and p.get("name") == "uplus-reborn"]
+        if len(old_roots) != 1 or len(new_roots) != 1:
+            return False
+        old_root, new_root = old_roots[0], new_roots[0]
+        if old_root.get("source") != {"virtual": "."} or new_root.get("source") != {"virtual": "."}:
+            return False
+        old_ver, new_ver = old_root.get("version"), new_root.get("version")
+        if not (
+            isinstance(old_ver, str)
+            and isinstance(new_ver, str)
+            and SEMVER.fullmatch(old_ver)
+            and SEMVER.fullmatch(new_ver)
+        ):
+            return False
+        old_root["version"] = new_ver
+        return old_obj == new_obj
+    return False
+
+
+def _classify_changes(repo: Path, changes: list[tuple[str | None, str, str, str]]) -> str:
+    if not changes:
+        return "unknown_changes"
+    has_unknown = False
+    for left, right, status, path in changes:
+        if path in VERSION_METADATA_FILES:
+            if status == "M" and left is not None and _is_version_only_diff(repo, left, right, path):
+                continue
+            return "relevant_changes"
+        if path in UNRELATED_TOOLS:
+            continue
+        # Remaining runtime and verification closures are relevant, including callers,
         # shared code, bootstrap/environment inputs and selector/workflow changes.
         if path.startswith(("custom_components/", "tests/", "tools/", ".github/")) or path in RELEVANT_FILES:
             return "relevant_changes"
@@ -83,8 +195,8 @@ def _impact(paths: set[str]) -> str:
             continue
         if path.startswith("docs/") and path.endswith(".md"):
             continue
-        unknown = True
-    return "unknown_changes" if unknown else "unrelated_changes"
+        has_unknown = True
+    return "unknown_changes" if has_unknown else "unrelated_changes"
 
 
 def _pr_comparison(repo: Path, environment: dict[str, str], selection: dict) -> str:
@@ -127,23 +239,36 @@ def _pr_comparison(repo: Path, environment: dict[str, str], selection: dict) -> 
         raise ComparisonUnavailable("incomplete_comparison")
     comparison = ancestors[0]
     selection["comparison_commit"] = comparison
-    paths = set()
+    changes: list[tuple[str | None, str, str, str]] = []
     for left, right in ((comparison, head), (base, candidate)):
-        paths.update(_paths(_git(
+        for status, path in _path_statuses(_git(
             repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
             "--name-status", "-z", left, right, "--",
-        )))
+        )):
+            changes.append((left, right, status, path))
     # Include every PR commit, even relevant edits subsequently reverted or moved
-    # out of the final tree. Merge commits include both parent comparisons.
+    # out of the final tree. Merge commits include each parent comparison.
     commits = _git(repo, "rev-list", f"{comparison}..{head}").decode("ascii").split()
     for commit in commits:
         if not COMMIT.fullmatch(commit):
             raise ComparisonUnavailable("incomplete_comparison")
-        paths.update(_paths(_git(
-            repo, "diff-tree", "--no-ext-diff", "--no-textconv", "--no-renames",
-            "--no-commit-id", "--root", "-m", "-r", "--name-status", "-z", commit, "--",
-        )))
-    return _impact(paths)
+        parents = _git(repo, "show", "-s", "--format=%P", commit).decode("ascii").split()
+        if not parents:
+            for status, path in _path_statuses(_git(
+                repo, "diff-tree", "--no-ext-diff", "--no-textconv", "--no-renames",
+                "--no-commit-id", "--root", "-r", "--name-status", "-z", commit, "--",
+            )):
+                changes.append((None, commit, status, path))
+        else:
+            for parent in parents:
+                if not COMMIT.fullmatch(parent):
+                    raise ComparisonUnavailable("incomplete_comparison")
+                for status, path in _path_statuses(_git(
+                    repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                    "--name-status", "-z", parent, commit, "--",
+                )):
+                    changes.append((parent, commit, status, path))
+    return _classify_changes(repo, changes)
 
 
 def select_timing(repo: Path, environment: dict[str, str], *, force_full: bool = False) -> dict:

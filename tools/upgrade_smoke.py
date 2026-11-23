@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import platform
 import re
 import subprocess
@@ -23,11 +24,75 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 import ha_smoke as smoke
-from delivery import extract_artifact, load_artifact, verify_installed
+from delivery import (
+    append_github_output,
+    extract_artifact,
+    load_artifact,
+    verify_installed,
+)
 
 VERSION_RE = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
+COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 FAULT_ENTITIES_MIN_VERSION = (1, 1, 0)
 PROFILE_MANAGEMENT_MIN_VERSION = (1, 1, 0)
+UPGRADE_RELEVANT_FILES = frozenset({
+    "tools/ha_smoke.py",
+    "tools/upgrade_smoke.py",
+    "tools/Dockerfile",
+    "tools/delivery.py",
+    "tools/release.py",
+    "hacs.json",
+})
+
+
+def is_upgrade_relevant_path(path: str) -> bool:
+    """Return True if changing `path` requires running the PR upgrade guard."""
+    return path.startswith("custom_components/") or path in UPGRADE_RELEVANT_FILES
+
+
+def select_pr_upgrade_applicability(repo: Path, environment: dict[str, str]) -> dict:
+    """Conservatively decide whether the PR upgrade guard applies; fails closed."""
+    if environment.get("GITHUB_EVENT_NAME") != "pull_request":
+        return {"schema": 1, "run_upgrade": True, "reason": "non_pull_request", "matched_paths": []}
+    try:
+        event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+        pr = event["pull_request"]
+        base, head = pr["base"]["sha"], pr["head"]["sha"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"schema": 1, "run_upgrade": True, "reason": "unavailable_comparison", "matched_paths": []}
+    if not (isinstance(base, str) and COMMIT_RE.fullmatch(base) and isinstance(head, str) and COMMIT_RE.fullmatch(head)):
+        return {"schema": 1, "run_upgrade": True, "reason": "unavailable_comparison", "matched_paths": []}
+    merge_base = subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(repo), "merge-base", base, head],
+        capture_output=True, text=True, check=False,
+    )
+    comparison = merge_base.stdout.strip()
+    if merge_base.returncode != 0 or not COMMIT_RE.fullmatch(comparison):
+        return {"schema": 1, "run_upgrade": True, "reason": "incomplete_comparison", "matched_paths": []}
+    paths: set[str] = set()
+    for left, right in ((comparison, head), (base, "HEAD")):
+        diff = subprocess.run(
+            ["git", "--no-replace-objects", "-C", str(repo), "diff", "--no-ext-diff", "--no-textconv",
+             "--no-renames", "--name-only", "-z", left, right, "--"],
+            capture_output=True, check=False,
+        )
+        if diff.returncode != 0:
+            return {"schema": 1, "run_upgrade": True, "reason": "incomplete_comparison", "matched_paths": []}
+        for raw in diff.stdout.split(b"\0"):
+            if raw:
+                try:
+                    paths.add(raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    return {"schema": 1, "run_upgrade": True, "reason": "unknown_changes", "matched_paths": []}
+    if not paths:
+        return {"schema": 1, "run_upgrade": True, "reason": "unknown_changes", "matched_paths": []}
+    matched = sorted(path for path in paths if is_upgrade_relevant_path(path))
+    return {
+        "schema": 1,
+        "run_upgrade": bool(matched),
+        "reason": "relevant_changes" if matched else "unrelated_changes",
+        "matched_paths": matched,
+    }
 
 
 def parse_version(raw: str) -> tuple[int, int, int]:
@@ -66,12 +131,13 @@ def verify_upgrade_registry(
     *,
     old_version: str,
     new_version: str,
+    allow_additive: bool = False,
 ) -> list[str]:
     """Verify preserved identities/preferences/contracts across restarts or upgrades."""
     old_ver = parse_version(old_version)
     new_ver = parse_version(new_version)
     smoke._require(new_ver >= old_ver, f"Unexpected downgrade from {old_version} to {new_version}")
-    if new_ver == old_ver:
+    if new_ver == old_ver and not allow_additive:
         smoke._require(
             new_registry == old_registry,
             "Restart changed identity, preferences or sensor units/classes",
@@ -186,6 +252,8 @@ async def _checkpoint(
     result: dict,
     previous: dict | None,
     installed_version: str,
+    *,
+    allow_additive: bool = False,
 ) -> None:
     from homeassistant.components import recorder
     from homeassistant.components.recorder import history, statistics
@@ -274,6 +342,7 @@ async def _checkpoint(
             evidence["registry"],
             old_version=previous["integration_version"],
             new_version=installed_version,
+            allow_additive=allow_additive,
         )
         smoke._require(all(row in recorded for row in old["history"]), "Upgrade lost or rescaled historical states")
         smoke._require(hourly == old["statistics"], "Upgrade changed historical consumption statistics")
@@ -282,7 +351,7 @@ async def _checkpoint(
     result["upgrade"] = evidence
 
 
-def _phase(root: Path, output: Path, previous_path: Path | None) -> int:
+def _phase(root: Path, output: Path, previous_path: Path | None, *, allow_additive: bool = False) -> int:
     previous = json.loads(previous_path.read_text(encoding="utf-8")) if previous_path else None
     result = {
         "observations": [], "success": False,
@@ -300,7 +369,9 @@ def _phase(root: Path, output: Path, previous_path: Path | None) -> int:
         exercise_options = phase_exercise_options(installed_version, previous)
 
         async def probe(hass, entry, peer):
-            await _checkpoint(hass, entry, peer, result, previous, installed_version)
+            await _checkpoint(
+                hass, entry, peer, result, previous, installed_version, allow_additive=allow_additive,
+            )
 
         asyncio.run(smoke._exercise(
             root, "profiles_restart" if previous else "profiles", result,
@@ -318,11 +389,41 @@ def _phase(root: Path, output: Path, previous_path: Path | None) -> int:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "phase":
-        return _phase(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) > 4 else None)
+        phase_parser = argparse.ArgumentParser(description=__doc__)
+        phase_parser.add_argument("phase")
+        phase_parser.add_argument("root", type=Path)
+        phase_parser.add_argument("output", type=Path)
+        phase_parser.add_argument("previous", type=Path, nargs="?")
+        phase_parser.add_argument("--allow-additive", action="store_true")
+        phase_args = phase_parser.parse_args()
+        return _phase(
+            phase_args.root,
+            phase_args.output,
+            phase_args.previous,
+            allow_additive=phase_args.allow_additive,
+        )
+    if len(sys.argv) > 1 and sys.argv[1] == "pr-applicable":
+        app_parser = argparse.ArgumentParser(description=__doc__)
+        app_parser.add_argument("pr_applicable")
+        app_parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+        app_parser.add_argument("--output", type=Path, required=True)
+        app_parser.add_argument("--github-output", type=Path)
+        app_args = app_parser.parse_args()
+        decision = select_pr_upgrade_applicability(app_args.repo, dict(os.environ))
+        app_args.output.parent.mkdir(parents=True, exist_ok=True)
+        app_args.output.write_text(json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if app_args.github_output is not None:
+            append_github_output(
+                app_args.github_output,
+                {"run_upgrade": "true" if decision["run_upgrade"] else "false"},
+            )
+        print(json.dumps(decision, sort_keys=True))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-bundle", type=Path, required=True)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--release-zip", type=Path, required=True)
+    parser.add_argument("--allow-additive", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = {"schema": 1, "scenario": "upgrade", "success": False, "temporary_config_removed": False}
@@ -360,6 +461,8 @@ def main() -> int:
                         command = [sys.executable, str(Path(__file__).resolve()), "phase", str(root), str(phase_output)]
                         if phase == "after":
                             command.append(str(directory / "before.json"))
+                            if args.allow_additive:
+                                command.append("--allow-additive")
                         completed = subprocess.run(command, capture_output=True, text=True, timeout=330, check=False)
                         result[f"{phase}_core_log"] = completed.stderr
                         if phase_output.exists():

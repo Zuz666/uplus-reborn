@@ -126,6 +126,38 @@ jobs:
               python3 tools/ha_smoke.py --bundle build/release/bundle --scenario "$scenario" \
                 --output "build/$scenario.json" "${timing[@]}"
           done
+      - name: Verify Marketplace/HACS installer compatibility offline
+        if: matrix.target == 'core-current'
+        run: |
+          uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- \
+            python3 tools/hacs_fixture.py self-check --output build/installer-self-check.json
+      - name: Check PR upgrade guard applicability
+        id: pr_upgrade
+        if: matrix.target == 'core-current' && github.event_name == 'pull_request'
+        run: |
+          uv run --no-project --python 3.13 python tools/upgrade_smoke.py pr-applicable \
+            --repo . --output build/pr-upgrade-applicable.json --github-output "$GITHUB_OUTPUT"
+      - name: Select baseline for PR upgrade guard
+        id: pr_baseline
+        if: matrix.target == 'core-current' && github.event_name == 'pull_request' && steps.pr_upgrade.outputs.run_upgrade == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("build/release/release.json"))["version"])')
+          uv run --no-project --python 3.13 python tools/release.py baseline-select \
+            --repository "$GITHUB_REPOSITORY" --version "$version" --include-equal \
+            --output build/pr-baseline-selection.json --github-output "$GITHUB_OUTPUT"
+      - name: Exercise baseline-to-candidate upgrade guard on PR
+        if: matrix.target == 'core-current' && github.event_name == 'pull_request' && steps.pr_upgrade.outputs.run_upgrade == 'true' && steps.pr_baseline.outputs.first_release != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE: ${{ steps.pr_baseline.outputs.tag }}
+        run: |
+          uv run --no-project --python 3.13 python tools/release.py baseline \
+            --repository "$GITHUB_REPOSITORY" --tag "$BASELINE" --output build/pr-baseline
+          uv run --no-project --python 3.13 python tools/delivery.py docker --target core-current -- \
+            python3 tools/upgrade_smoke.py --from-bundle build/pr-baseline --bundle build/release/bundle \
+            --release-zip build/release/uplus_reborn.zip --allow-additive --output build/pr-upgrade.json
       - name: Summarize measured Core acceptance receipts
         if: always()
         env:
