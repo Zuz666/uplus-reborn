@@ -260,6 +260,10 @@ from auto-generated dashboards.
   documents exact U+200A card-sorting spaces),
   [model terminology](docs/terminology/hwd120-b1558u.md#selected-base-terminology),
   and [Entity categories and readback](docs/reference.md#entity-categories-and-readback).
+- **Summary template sensor (EN / RU):** Ready-to-copy YAML templates combining
+  both drums' status, phase, remaining time, active options, and faults into
+  one `sensor.hwd120_b1558u_summary` entity — see
+  [Summary template sensor](docs/summary-template-sensor.md).
 
 ## Troubleshooting and diagnostics
 
@@ -298,6 +302,7 @@ observed behavior, and redacted diagnostics.
 | Documentation | Purpose |
 | --- | --- |
 | [Operational & technical reference](docs/reference.md) | Deep discovery rules, safety interlocks, readback limits, accounting, capture budgets, System Health |
+| [Summary template sensor](docs/summary-template-sensor.md) | Ready-to-copy English and Russian YAML template sensor (`sensor.hwd120_b1558u_summary`) and dashboard card |
 | [HWD120-B1558U protocol specification](docs/protocol/hwd120-b1558u.md) | UDP/TCP UWT framing, EPP state/command layouts, wire captures ([protocol index](docs/protocol.md)) |
 | [Entity-name register](docs/terminology/hwd120-b1558u-entity-naming.md) | Bilingual EN/RU entity names & ordering ([machine terminology](docs/terminology/hwd120-b1558u.md)) |
 | [Contributing guide](CONTRIBUTING.md) | Repository map, conventions, translations, PR/issue rules |

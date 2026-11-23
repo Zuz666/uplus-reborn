@@ -303,6 +303,10 @@ Existing entity IDs, unique IDs, custom names, icons, areas, disabled/hidden
 flags, display preferences, units, and Recorder history are preserved across
 integration upgrades.
 
+For users who want one combined dashboard/status entity built from these
+authoritative readback sensors, see the ready-to-copy English and Russian YAML
+examples in [Summary template sensor](summary-template-sensor.md).
+
 ## Consumption accounting
 
 All four consumption entities retain Home Assistant water/energy device
