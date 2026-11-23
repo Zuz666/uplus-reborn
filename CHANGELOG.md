@@ -5,6 +5,14 @@ are listed in
 [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases).
 Unpublished development versions are not historical public releases.
 
+## [1.1.0] - 2026-11-23
+
+- **Alarm decoding, fault sensors, and safety interlocks:** Decode appliance `0x04`/`0x74` alarm bitmaps and expose four new Diagnostic entities (`Upper/Lower fault` binary sensors and `Upper/Lower fault code` enum sensors with bounded `active_faults` attributes). Confirmed active faults block lifecycle actions on the faulted drum while leaving the healthy drum and shared switches operable; unconfirmed alarm state fails closed on `Start` and `Resume` (`#92`). Classify unsolicited `0x72` frames and perform a single bounded read-only `0x73` retry on `0x72`/`0x74(seq=0)` collisions (`#94`).
+- **Configurable diagnostic exchange tracing:** Add passive, memory-only UWT exchange tracing with configurable per-entry budgets (default `1800` operations, `30600` events, `4 MiB` raw bytes up to `8 MiB`, and 6-hour auto-stop), a two-step **Integration settings → Diagnostics** review with trace-depth estimates and one-shot **Restore diagnostic defaults**, native **Enable/Disable debug logging** lifecycle ownership, System Health capture/failure-stage visibility, and preserved `health.latest_command` cause and stain provenance (`#79`, `#80`, `#84`). Review and redact the unredacted `exchange_trace` section before sharing diagnostic downloads publicly.
+- **Local network discovery:** Share UDP discovery sends across simultaneous search dialogs and settle preview-disconnect, explicit stop, and Home Assistant shutdown cleanup (`#64`, `#65`).
+- **Documentation:** Publish the model-scoped HWD120-B1558U captured packet protocol reference (`#55`), streamline `README.md` for HACS, extract operational details to `docs/reference.md`, and add English and Russian summary template sensor examples in `docs/summary-template-sensor.md` (`#98`).
+- **Compatibility and maintenance:** Minimum Home Assistant Core remains **2026.2.3**; current isolated Core verification baseline updated to **2026.11.2**. Restart Home Assistant after upgrading; existing entity/statistic identities, preferences, units, and saved profiles are preserved. Hardened release draft numeric-ID validation (`#68`), locked native Ruff checks (`#59`), and routine CI/dependency updates. Controls remain opt-in; no additional appliance models or live hardware coverage beyond documented evidence are claimed.
+
 ## [1.0.2] - 2026-10-23
 
 - Simplify the English and Russian options dialog, with concise remote-control and polling help plus a read-only appliance connection status captured when the dialog opens. Status follows the frontend language, including when it differs from the Core language, and opening options sends no extra appliance request.
