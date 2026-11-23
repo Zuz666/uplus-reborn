@@ -255,14 +255,16 @@ the delivery tool's portable executable-path convention. Client lookup failure
 is recorded before any GitHub download; an empty `PATH` is not a portable test
 of executable absence on Windows.
 
-The runner pins official HACS bytes in `tools/hacs-fixture.json` and uses the
-digest-pinned `core-current` Docker target. Downloaded release members must match
-the immutable tag's actual Git tree, not just its checksum/provenance claims.
-It performs real HACS ZIP installation, fresh Core boot/persistence restart and
-an actual baseline-to-target upgrade. Shared `upgrade_smoke.py phase` workers
-verify identity, preferences, profiles, units, history and statistics in fresh
-Core processes. Installer HTTPS is bounded to GitHub; runtime traffic is synthetic
-loopback only. This is not account-onboarding or physical-appliance proof.
+The runner uses Home Assistant's built-in **Marketplace** installer on Core
+`2026.11+` (`core-current`), or the pinned HACS archive in
+`tools/hacs-fixture.json` on earlier Core targets. Downloaded release members
+must match the immutable tag's actual Git tree, not just its checksum/provenance
+claims. It performs real Marketplace/HACS ZIP installation, fresh Core
+boot/persistence restart and an actual baseline-to-target upgrade. Shared
+`upgrade_smoke.py phase` workers verify identity, preferences, profiles, units,
+history and statistics in fresh Core processes. Installer HTTPS is bounded to
+GitHub; runtime traffic is synthetic loopback only. This is not account-onboarding
+or physical-appliance proof.
 
 `acceptance.json` and per-phase receipts retain versions, exact members, duration,
 failures and cleanup. Docker/network/rate-limit failures are not acceptance.
