@@ -300,6 +300,150 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["mode"], "full")
         self.assertEqual(result["reason"], "forced_full")
 
+    def test_unrelated_release_hacs_and_docs_tools_select_fast(self):
+        docs_head = self.head
+        for name in (
+            "tools/upgrade_smoke.py",
+            "tools/test_upgrade_smoke.py",
+            "tools/hacs_acceptance.py",
+            "tools/hacs_fixture.py",
+            "tools/test_hacs_acceptance.py",
+            "tools/release.py",
+            "tools/release_evidence.py",
+            "tools/publish_release.py",
+            "tools/ci_summary.py",
+            "tools/check-docs.mjs",
+        ):
+            with self.subTest(path=name):
+                self.git("checkout", "--quiet", "--detach", docs_head)
+                self.change(name, "# discovery-unrelated tool update\n")
+                self.commit("Update release/docs tool")
+                self.bind_head()
+                result = self.select()
+                self.assertEqual(result["mode"], "fast")
+                self.assertEqual(result["reason"], "unrelated_changes")
+
+    def test_unclassified_new_tool_file_still_requires_full(self):
+        self.change("tools/new_unclassified_helper.py", "# unknown impact\n")
+        self.commit("Add unexempted tool")
+        self.bind_head()
+        result = self.select()
+        self.assertEqual(result["mode"], "full")
+        self.assertEqual(result["reason"], "relevant_changes")
+
+    def _seed_release_metadata_repo(self, version: str = "1.1.0") -> None:
+        self.git("checkout", "--quiet", "--detach", self.base)
+        self.change(
+            "custom_components/uplus_reborn/manifest.json",
+            json.dumps({"domain": "uplus_reborn", "name": "U+ Reborn", "version": version}, indent=2) + "\n",
+        )
+        self.change(
+            "pyproject.toml",
+            f'[project]\nname = "uplus-reborn"\nversion = "{version}"\ndependencies = ["aiodiscover>=2.7.1"]\n',
+        )
+        self.change(
+            "uv.lock",
+            f'version = 1\n\n[[package]]\nname = "uplus-reborn"\nversion = "{version}"\nsource = {{ virtual = "." }}\n\n'
+            '[[package]]\nname = "aiodiscover"\nversion = "2.7.1"\n',
+        )
+        self.change("CHANGELOG.md", f"# Changelog\n\n## [{version}] - 2026-11-23\n\n- Current.\n")
+        self.base = self.commit("Seed release metadata")
+        self.event["pull_request"]["base"]["sha"] = self.base
+        self.git("checkout", "--quiet", "-B", "release-prep")
+
+    def _bump_release_metadata(self, version: str) -> None:
+        self.change(
+            "custom_components/uplus_reborn/manifest.json",
+            json.dumps({"domain": "uplus_reborn", "name": "U+ Reborn", "version": version}, indent=2) + "\n",
+        )
+        self.change(
+            "pyproject.toml",
+            f'[project]\nname = "uplus-reborn"\nversion = "{version}"\ndependencies = ["aiodiscover>=2.7.1"]\n',
+        )
+        self.change(
+            "uv.lock",
+            f'version = 1\n\n[[package]]\nname = "uplus-reborn"\nversion = "{version}"\nsource = {{ virtual = "." }}\n\n'
+            '[[package]]\nname = "aiodiscover"\nversion = "2.7.1"\n',
+        )
+        self.change("CHANGELOG.md", f"# Changelog\n\n## [{version}] - 2026-11-24\n\n- Bump.\n")
+
+    def test_version_only_release_preparation_pr_selects_fast_while_master_stays_full(self):
+        self._seed_release_metadata_repo("1.1.0")
+        self._bump_release_metadata("1.2.0")
+        self.commit("chore(release): prepare 1.2.0")
+        self.bind_head()
+
+        head_result = self.select()
+        self.assertEqual(head_result["mode"], "fast")
+        self.assertEqual(head_result["reason"], "unrelated_changes")
+
+        self.make_merge_candidate()
+        merge_result = self.select(environment={"GITHUB_REF": "refs/pull/66/merge"})
+        self.assertEqual(merge_result["mode"], "fast")
+        self.assertEqual(merge_result["reason"], "unrelated_changes")
+
+        push_result = self.select(event_name="push", environment={"GITHUB_REF": "refs/heads/master", "GITHUB_SHA": self.candidate})
+        self.assertEqual(push_result["mode"], "full")
+        self.assertEqual(push_result["reason"], "non_pull_request")
+
+    def test_non_version_change_in_release_metadata_or_earlier_commit_requires_full(self):
+        self._seed_release_metadata_repo("1.1.0")
+        seed = self.base
+
+        # 1. Extra key change in manifest.json
+        self.git("checkout", "--quiet", "--detach", seed)
+        self.change(
+            "custom_components/uplus_reborn/manifest.json",
+            json.dumps({"domain": "uplus_reborn", "name": "U+ Reborn", "iot_class": "cloud_polling", "version": "1.2.0"}, indent=2) + "\n",
+        )
+        self.commit("Alter manifest field")
+        self.bind_head()
+        self.assertEqual(self.select()["reason"], "relevant_changes")
+
+        # 2. Dependency change in pyproject.toml
+        self.git("checkout", "--quiet", "--detach", seed)
+        self.change(
+            "pyproject.toml",
+            '[project]\nname = "uplus-reborn"\nversion = "1.2.0"\ndependencies = ["aiodiscover>=3.0.0"]\n',
+        )
+        self.commit("Alter pyproject dependency")
+        self.bind_head()
+        self.assertEqual(self.select()["reason"], "relevant_changes")
+
+        # 3. Other package bump in uv.lock
+        self.git("checkout", "--quiet", "--detach", seed)
+        self.change(
+            "uv.lock",
+            'version = 1\n\n[[package]]\nname = "uplus-reborn"\nversion = "1.2.0"\nsource = { virtual = "." }\n\n'
+            '[[package]]\nname = "aiodiscover"\nversion = "2.8.0"\n',
+        )
+        self.commit("Alter dependency lock")
+        self.bind_head()
+        self.assertEqual(self.select()["reason"], "relevant_changes")
+
+        # 4. Non-virtual root source in uv.lock
+        self.git("checkout", "--quiet", "--detach", seed)
+        self.change(
+            "uv.lock",
+            'version = 1\n\n[[package]]\nname = "uplus-reborn"\nversion = "1.2.0"\nsource = { editable = "." }\n\n'
+            '[[package]]\nname = "aiodiscover"\nversion = "2.7.1"\n',
+        )
+        self.commit("Non-virtual root in uv.lock")
+        self.bind_head()
+        self.assertEqual(self.select()["reason"], "relevant_changes")
+
+        # 5. Reverted dependency edit in earlier PR commit still requires full
+        self.git("checkout", "--quiet", "--detach", seed)
+        self.change(
+            "pyproject.toml",
+            '[project]\nname = "uplus-reborn"\nversion = "1.2.0"\ndependencies = ["aiodiscover>=3.0.0"]\n',
+        )
+        self.commit("Temporary dependency bump")
+        self._bump_release_metadata("1.2.0")
+        self.commit("Revert dependency bump leaving version only")
+        self.bind_head()
+        self.assertEqual(self.select()["reason"], "relevant_changes")
+
 
 if __name__ == "__main__":
     unittest.main()

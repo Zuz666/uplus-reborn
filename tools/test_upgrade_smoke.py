@@ -6,9 +6,21 @@ Run with: python -m unittest discover -s tools -p "test_*.py" -v
 from __future__ import annotations
 
 import copy
+import json
+import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from upgrade_smoke import parse_version, phase_exercise_options, verify_upgrade_registry
+from upgrade_smoke import (
+    is_upgrade_relevant_path,
+    parse_version,
+    phase_exercise_options,
+    select_pr_upgrade_applicability,
+    verify_upgrade_registry,
+)
 
 
 def _sample_registry(*, pref_disable_new_entities: bool = True) -> dict:
@@ -268,6 +280,77 @@ class VerifyUpgradeRegistryTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(RuntimeError, "unexpected entity"):
             verify_upgrade_registry(old, orphan, old_version="1.0.2", new_version="1.1.0")
+
+    def test_allow_additive_accepts_same_version_new_disabled_entity_while_protecting_existing(self) -> None:
+        old = _sample_registry(pref_disable_new_entities=True)
+        new = copy.deepcopy(old)
+        new["entities"]["sensor:020000000001_new_metric"] = _new_entity(
+            "sensor.uplus_new_metric", "new_metric", disabled_by="integration",
+        )
+        added = verify_upgrade_registry(
+            old, new, old_version="1.1.0", new_version="1.1.0", allow_additive=True,
+        )
+        self.assertEqual(added, ["sensor:020000000001_new_metric"])
+
+        altered = copy.deepcopy(new)
+        altered["entities"]["sensor:020000000001_water"]["entity_id"] = "sensor.changed"
+        with self.assertRaisesRegex(RuntimeError, "changed existing entity"):
+            verify_upgrade_registry(
+                old, altered, old_version="1.1.0", new_version="1.1.0", allow_additive=True,
+            )
+
+
+class PrUpgradeApplicabilityTests(unittest.TestCase):
+    def test_relevance_predicate_and_git_selection(self) -> None:
+        self.assertTrue(is_upgrade_relevant_path("custom_components/uplus_reborn/__init__.py"))
+        self.assertTrue(is_upgrade_relevant_path("tools/upgrade_smoke.py"))
+        self.assertFalse(is_upgrade_relevant_path("README.md"))
+        self.assertFalse(is_upgrade_relevant_path("tools/release_evidence.py"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            for cmd in (
+                ["git", "-C", str(repo), "init", "-q"],
+                ["git", "-C", str(repo), "config", "user.name", "Upgrade Test"],
+                ["git", "-C", str(repo), "config", "user.email", "upgrade@example.invalid"],
+                ["git", "-C", str(repo), "config", "commit.gpgsign", "false"],
+            ):
+                subprocess.run(cmd, check=True)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            (repo / "custom_components" / "uplus_reborn").mkdir(parents=True)
+            (repo / "custom_components" / "uplus_reborn" / "__init__.py").write_text("v = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+
+            subprocess.run(["git", "-C", str(repo), "checkout", "-qb", "pr-docs"], check=True)
+            (repo / "README.md").write_text("updated docs\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "docs"], check=True)
+            docs_head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+
+            event_path = root / "event.json"
+            event_path.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "head": {"sha": docs_head}}}), encoding="utf-8")
+            with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(event_path)}):
+                docs_decision = select_pr_upgrade_applicability(repo, dict(os.environ))
+            self.assertFalse(docs_decision["run_upgrade"])
+            self.assertEqual(docs_decision["reason"], "unrelated_changes")
+
+            (repo / "custom_components" / "uplus_reborn" / "__init__.py").write_text("v = 2\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "runtime"], check=True)
+            rt_head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            event_path.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "head": {"sha": rt_head}}}), encoding="utf-8")
+            with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(event_path)}):
+                rt_decision = select_pr_upgrade_applicability(repo, dict(os.environ))
+            self.assertTrue(rt_decision["run_upgrade"])
+            self.assertEqual(rt_decision["matched_paths"], ["custom_components/uplus_reborn/__init__.py"])
+
+            missing = select_pr_upgrade_applicability(repo, {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(root / "missing.json")})
+            self.assertTrue(missing["run_upgrade"])
+            self.assertEqual(missing["reason"], "unavailable_comparison")
 
 
 if __name__ == "__main__":

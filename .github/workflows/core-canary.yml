@@ -27,16 +27,31 @@ jobs:
           python-version: "3.13"
       - name: Build committed package
         run: uv run --no-project --python 3.13 python tools/delivery.py build --commit HEAD --output build/canary-bundle
-      - name: Exercise moving Core without changing required baselines
+      - name: Pull moving Core image and inspect digest
+        id: pull
         env:
           CHANNEL: ${{ matrix.channel }}
         run: |
           image="ghcr.io/home-assistant/home-assistant:$CHANNEL"
           docker pull "$image"
           docker image inspect --format '{{json .RepoDigests}}' "$image"
+      - name: Exercise moving Core without changing required baselines
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          image="ghcr.io/home-assistant/home-assistant:$CHANNEL"
           docker run --rm --init --network none --entrypoint python3 \
             -v "$PWD:/workspace" -w /workspace "$image" \
             tools/ha_smoke.py --bundle build/canary-bundle --scenario profiles --output "build/canary-$CHANNEL.json"
+      - name: Verify Marketplace or HACS installer API compatibility offline
+        if: ${{ !cancelled() && steps.pull.outcome == 'success' }}
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          image="ghcr.io/home-assistant/home-assistant:$CHANNEL"
+          docker run --rm --init --network none --entrypoint python3 \
+            -v "$PWD:/workspace" -w /workspace "$image" \
+            tools/hacs_fixture.py self-check --output "build/canary-installer-$CHANNEL.json"
       - name: Retain drift evidence, including failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

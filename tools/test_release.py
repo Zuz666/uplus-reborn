@@ -27,6 +27,7 @@ class StableBaselineTests(unittest.TestCase):
             {"tag_name": "v1.0.11", "draft": True},
         ]
         self.assertEqual(previous_stable(releases, "1.1.0"), "v1.0.10")
+        self.assertEqual(previous_stable(releases, "1.1.0", include_equal=True), "v1.1.0")
 
     def test_first_release_has_no_fabricated_upgrade_baseline(self):
         self.assertIsNone(previous_stable([{"tag_name": "v1.0.0"}], "1.0.0"))
