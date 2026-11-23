@@ -731,8 +731,9 @@ HACS download or hardware behavior. Real HACS acceptance is still separate.
 
 For actual published downloads, use the maintained
 [`hacs_acceptance.py` command](release-workflow.md#repeatable-published-hacs-acceptance).
-It verifies immutable tag/source/asset identity, then uses real HACS and the same
-fresh-process user-data invariants. The
+It verifies immutable tag/source/asset identity, then uses Home Assistant's
+built-in **Marketplace** installer on Core `2026.11+` (or the pinned HACS
+archive on earlier targets) and the same fresh-process user-data invariants. The
 [read-only workflow](../.github/workflows/hacs-acceptance.yml) can repeat an
 existing release's acceptance independently of publication, including historical
 tags that are no longer latest. Its ephemeral GitHub read token is available to

@@ -31,6 +31,27 @@ from release import ASSET, VERSION
 
 TOOLS = Path(__file__).resolve().parent
 MAX_PACKAGE_BYTES = 16 * 1024 * 1024
+CORE_CURRENT_IMAGE_RE = re.compile(
+    r"(?m)^FROM ghcr\.io/home-assistant/home-assistant:([^@ ]+)@sha256:[0-9a-f]{64} AS core-current$"
+)
+CALVER_CORE_RE = re.compile(r"(\d{4})\.([1-9]\d*|0)\.(?:0|[1-9]\d*)(?:[a-zA-Z0-9._-]*)?\Z")
+
+
+def pinned_core_version(dockerfile_text: str) -> str:
+    """Return the pinned core-current Home Assistant version from tools/Dockerfile."""
+    match = CORE_CURRENT_IMAGE_RE.search(dockerfile_text)
+    if match is None:
+        raise ValueError("Missing pinned current Core version in tools/Dockerfile")
+    return match.group(1)
+
+
+def installer_mode_for_core(core_version: str) -> str:
+    """Select built-in Marketplace on HA 2026.11+ or legacy HACS on earlier Core."""
+    match = CALVER_CORE_RE.fullmatch(core_version)
+    if match is None:
+        raise ValueError(f"Invalid Home Assistant Core version: {core_version!r}")
+    year, month = int(match.group(1)), int(match.group(2))
+    return "marketplace" if (year, month) >= (2026, 11) else "hacs"
 
 
 def verify_release_package(directory: Path, released: dict, commit: str, tree: dict) -> dict:
@@ -117,8 +138,11 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         parser.error("Output directory is occupied; retain previous evidence")
     started = time.monotonic()
+    core_version = pinned_core_version((TOOLS / "Dockerfile").read_text(encoding="utf-8"))
+    installer_mode = installer_mode_for_core(core_version)
     result = {"schema": 1, "scenario": "published-hacs", "status": "running", "success": False,
               "repository": args.repository, "tag": args.tag, "baseline": args.baseline,
+              "installer": installer_mode,
               "account_onboarding": False, "live_appliance_access": False}
     result["python_version"] = platform.python_version()
     result["tool_hashes"] = {
@@ -136,12 +160,19 @@ def main(argv: list[str] | None = None) -> int:
         inputs, receipts = output / "inputs", output / "receipts"
         inputs.mkdir()
         receipts.mkdir()
-        fixture = json.loads((TOOLS / "hacs-fixture.json").read_text(encoding="utf-8"))
-        gh("release", "download", fixture["hacs_version"], "--repo", "hacs/integration",
-           "--pattern", "hacs.zip", "--dir", str(inputs))
-        if hashlib.sha256((inputs / "hacs.zip").read_bytes()).hexdigest() != fixture["hacs_sha256"]:
-            raise ValueError("Official HACS archive digest differs from the reviewed fixture")
-        _write_json(inputs / "fixture.json", fixture)
+        if installer_mode == "marketplace":
+            _write_json(inputs / "fixture.json", {
+                "schema": 1,
+                "installer": "marketplace",
+                "expected_core_version": core_version,
+            })
+        else:
+            fixture = json.loads((TOOLS / "hacs-fixture.json").read_text(encoding="utf-8"))
+            gh("release", "download", fixture["hacs_version"], "--repo", "hacs/integration",
+               "--pattern", "hacs.zip", "--dir", str(inputs))
+            if hashlib.sha256((inputs / "hacs.zip").read_bytes()).hexdigest() != fixture["hacs_sha256"]:
+                raise ValueError("Official HACS archive digest differs from the reviewed fixture")
+            _write_json(inputs / "fixture.json", {**fixture, "installer": "hacs"})
         result["target"] = fetch_release(args.repository, args.tag, inputs / "target")
         if args.baseline:
             result["previous"] = fetch_release(args.repository, args.baseline, inputs / "baseline")

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from urllib.parse import urljoin, urlparse
 from zipfile import ZipFile
 
@@ -55,12 +56,8 @@ class InstallerGuard(smoke.LoopbackGuard):
 
 async def install(args, expected, addresses, guard, result):
     import aiohttp
-    from aiogithubapi import GitHub, GitHubAPI
-    from aiogithubapi.const import ACCEPT_HEADERS
     from aiohttp.abc import AbstractResolver
     from awesomeversion import AwesomeVersion
-    from custom_components.hacs.base import HacsBase
-    from custom_components.hacs.enums import HacsCategory
     from homeassistant import bootstrap, loader
     from homeassistant.config_entries import ConfigEntries
     from homeassistant.const import __version__ as core_version
@@ -102,54 +99,60 @@ async def install(args, expected, addresses, guard, result):
         await bootstrap.async_load_base_functionality(hass)
         await loader.async_get_custom_components(hass)
         connector = aiohttp.TCPConnector(resolver=PinnedResolver(), family=socket.AF_INET)
+        fixture = json.loads(Path("/inputs/fixture.json").read_text())
+        installer_mode = fixture.get("installer", "hacs")
+        smoke._require(installer_mode in {"hacs", "marketplace"}, f"Unsupported installer mode: {installer_mode}")
         async with aiohttp.ClientSession(connector=connector, trace_configs=[trace]) as session:
-            fixture = json.loads(Path("/inputs/fixture.json").read_text())
-            hacs = HacsBase()
-            hacs.hass = hass
-            hacs.integration = await loader.async_get_integration(hass, "hacs")
-            hacs.version = hacs.integration.version
-            smoke._require(str(hacs.version) == fixture["hacs_version"], "Wrong official HACS version")
-            result["hacs_version"] = str(hacs.version)
-            hacs.core.config_path = str(args.root)
-            hacs.core.ha_version = AwesomeVersion(core_version)
-            hacs.system.running = True
-            hacs.status.startup = False
-            hacs.session = session
-            token = os.environ.get("GH_TOKEN") or None
-            hacs.github = GitHub(token, session, headers={"User-Agent": "HACS/" + fixture["hacs_version"],
-                                                         "Accept": ACCEPT_HEADERS["preview"]})
-            hacs.githubapi = GitHubAPI(token=token, session=session, client_name="HACS/" + fixture["hacs_version"])
-            await hacs.async_register_repository(args.repository, HacsCategory.INTEGRATION, ref=args.tag)
-            repository = hacs.repositories.get_by_full_name(args.repository)
-            smoke._require(repository is not None and not repository.validate.errors, "HACS registration failed")
-            smoke._require(repository.repository_manifest.zip_release
-                           and repository.repository_manifest.filename == "uplus_reborn.zip"
-                           and repository.data.domain == smoke.DOMAIN, "Wrong HACS installation contract")
+            if installer_mode == "marketplace":
+                smoke._require(
+                    fixture.get("expected_core_version") is None or core_version == fixture["expected_core_version"],
+                    "Unexpected Core version for Marketplace fixture",
+                )
+                repository, version_target, min_attr, install_fn = await _prepare_marketplace(
+                    hass, loader, session, args, result,
+                )
+            else:
+                repository, version_target, min_attr, install_fn = await _prepare_hacs(
+                    hass, loader, session, args, fixture, core_version, result,
+                )
+            smoke._require(
+                repository.repository_manifest.zip_release
+                and repository.repository_manifest.filename == "uplus_reborn.zip"
+                and repository.data.domain == smoke.DOMAIN,
+                "Wrong HACS/Marketplace installation contract",
+            )
             result["available_version"] = repository.display_available_version
             if args.expect_latest:
-                smoke._require(repository.display_available_version == args.latest, "HACS latest selection differs")
-            native_version = hacs.core.ha_version
+                smoke._require(
+                    repository.display_available_version == args.latest,
+                    "Installer latest selection differs",
+                )
+            native_version = version_target.version
             minimum = repository.repository_manifest.homeassistant
-            smoke._require(minimum is not None, "Missing HACS minimum Core")
+            smoke._require(minimum is not None, "Missing minimum Home Assistant Core version")
             try:
-                hacs.core.ha_version = AwesomeVersion("0.0.0")
-                smoke._require(not repository.can_download, "HACS ignored the minimum Core")
-                hacs.core.ha_version = AwesomeVersion(minimum)
-                smoke._require(repository.can_download, "HACS rejected the declared minimum")
+                version_target.version = AwesomeVersion("0.0.0")
+                smoke._require(not getattr(repository, min_attr), "Installer ignored the minimum Core")
+                version_target.version = AwesomeVersion(minimum)
+                smoke._require(getattr(repository, min_attr), "Installer rejected the declared minimum")
             finally:
-                hacs.core.ha_version = native_version
-            smoke._require(repository.can_download, "Current fixture Core is below the supported minimum")
+                version_target.version = native_version
+            smoke._require(getattr(repository, min_attr), "Current fixture Core is below the supported minimum")
             result["minimum_selection_verified"] = minimum
             if args.previous:
                 previous = json.loads(args.previous.read_text())
                 repository.data.update_data(previous["repository_data"])
-                smoke._require(repository.data.installed and repository.data.installed_version == args.baseline,
-                               "Missing actual baseline installer metadata")
-                smoke._require(repository.pending_update, "HACS did not detect the update")
+                smoke._require(
+                    repository.data.installed and repository.data.installed_version == args.baseline,
+                    "Missing actual baseline installer metadata",
+                )
+                smoke._require(repository.pending_update, "Installer did not detect the update")
                 result["pending_update_before"] = repository.pending_update
-            await repository.async_install(version=args.tag)
-            smoke._require(repository.data.installed and repository.data.installed_version == args.tag,
-                           "HACS installed the wrong version")
+            await install_fn()
+            smoke._require(
+                repository.data.installed and repository.data.installed_version == args.tag,
+                "Installer installed the wrong version",
+            )
             verify_installed(expected, args.root)
             manifest = json.loads((args.root / smoke.PACKAGE / "manifest.json").read_text())
             smoke._require(manifest["version"] == args.tag[1:], "Installed manifest version differs")
@@ -160,6 +163,103 @@ async def install(args, expected, addresses, guard, result):
     finally:
         guard.github_enabled = False
         await hass.async_stop(force=True)
+
+
+async def _prepare_marketplace(hass, loader, session, args, result):
+    """Initialize HA 2026.11+ built-in Marketplace for bounded read-only registration."""
+    from homeassistant.components.lovelace import LOVELACE_DATA
+    from homeassistant.components.marketplace import base as marketplace_base
+    from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE_DOMAIN
+    from homeassistant.components.marketplace.enums import (
+        LovelaceMode,
+        RepositoryCategory,
+    )
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.const import CONF_TOKEN
+
+    integration = await loader.async_get_integration(hass, MARKETPLACE_DOMAIN)
+    smoke._require(integration.is_built_in, "Expected built-in Home Assistant Marketplace")
+    hass.data[LOVELACE_DATA] = SimpleNamespace(resource_mode=LovelaceMode.STORAGE)
+    token = os.environ.get("GH_TOKEN") or None
+    entry = ConfigEntry(
+        version=1, minor_version=1, domain=MARKETPLACE_DOMAIN,
+        title="Marketplace", source="system", unique_id=MARKETPLACE_DOMAIN,
+        data={CONF_TOKEN: token} if token else {}, options={},
+        discovery_keys=MappingProxyType({}), subentries_data=(),
+    )
+    original_clientsession = marketplace_base.async_get_clientsession
+    marketplace_base.async_get_clientsession = lambda _hass, *_args, **_kwargs: session
+    try:
+        marketplace = marketplace_base.MarketplaceManager(hass, entry)
+    finally:
+        marketplace_base.async_get_clientsession = original_clientsession
+    smoke._require(marketplace.session is session, "Marketplace bypassed pinned HTTP session")
+    marketplace.status.startup = False
+    marketplace.enable_category(RepositoryCategory.INTEGRATION)
+    result.update(installer="marketplace", marketplace_version=str(marketplace.version))
+    errors = await marketplace.async_register_repository(args.repository, RepositoryCategory.INTEGRATION)
+    repository = marketplace.repositories.get_by_full_name(args.repository)
+    smoke._require(repository is not None and not errors and not repository.validate.errors,
+                   "Marketplace registration failed")
+    target_manifest = await repository.get_repository_manifest(version=args.tag)
+    smoke._require(target_manifest is not None, "Missing hacs.json for target tag")
+    repository.repository_manifest = target_manifest
+
+    class _VersionTarget:
+        @property
+        def version(self):
+            return marketplace.version
+
+        @version.setter
+        def version(self, value) -> None:
+            marketplace.version = value
+
+    async def install_tag() -> None:
+        await repository.async_install_repository(ref=args.tag)
+
+    return repository, _VersionTarget(), "can_install", install_tag
+
+
+async def _prepare_hacs(hass, loader, session, args, fixture, core_version, result):
+    """Initialize standalone custom HACS (< 2026.11 Core) for bounded registration."""
+    from aiogithubapi import GitHub, GitHubAPI
+    from aiogithubapi.const import ACCEPT_HEADERS
+    from awesomeversion import AwesomeVersion
+    from custom_components.hacs.base import HacsBase
+    from custom_components.hacs.enums import HacsCategory
+
+    hacs = HacsBase()
+    hacs.hass = hass
+    hacs.integration = await loader.async_get_integration(hass, "hacs")
+    hacs.version = hacs.integration.version
+    smoke._require(str(hacs.version) == fixture["hacs_version"], "Wrong official HACS version")
+    result.update(installer="hacs", hacs_version=str(hacs.version))
+    hacs.core.config_path = str(args.root)
+    hacs.core.ha_version = AwesomeVersion(core_version)
+    hacs.system.running = True
+    hacs.status.startup = False
+    hacs.session = session
+    token = os.environ.get("GH_TOKEN") or None
+    hacs.github = GitHub(token, session, headers={"User-Agent": "HACS/" + fixture["hacs_version"],
+                                                 "Accept": ACCEPT_HEADERS["preview"]})
+    hacs.githubapi = GitHubAPI(token=token, session=session, client_name="HACS/" + fixture["hacs_version"])
+    await hacs.async_register_repository(args.repository, HacsCategory.INTEGRATION, ref=args.tag)
+    repository = hacs.repositories.get_by_full_name(args.repository)
+    smoke._require(repository is not None and not repository.validate.errors, "HACS registration failed")
+
+    class _VersionTarget:
+        @property
+        def version(self):
+            return hacs.core.ha_version
+
+        @version.setter
+        def version(self, value) -> None:
+            hacs.core.ha_version = value
+
+    async def install_tag() -> None:
+        await repository.async_install(version=args.tag)
+
+    return repository, _VersionTarget(), "can_download", install_tag
 
 
 def installer_main(args):
@@ -239,18 +339,27 @@ def main(args):
             command.append(str(output / f"{previous}.json"))
         run_phase(name, command, output, result)
 
+    def prepare_root(path: Path, mode: str, fixture: dict) -> None:
+        if mode == "hacs":
+            extract_hacs(path, Path("/inputs/hacs.zip"), fixture)
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+
     try:
         fixture = json.loads(Path("/inputs/fixture.json").read_text())
+        installer_mode = fixture.get("installer", "hacs")
+        smoke._require(installer_mode in {"hacs", "marketplace"}, f"Unsupported installer mode: {installer_mode}")
+        result["installer"] = installer_mode
         with tempfile.TemporaryDirectory(prefix="uplus-hacs-") as temporary:
             directory = Path(temporary)
             fresh = directory / "fresh"
-            extract_hacs(fresh, Path("/inputs/hacs.zip"), fixture)
+            prepare_root(fresh, installer_mode, fixture)
             install_phase("fresh_install", fresh, "target")
             core_phase("fresh_boot", fresh)
             core_phase("fresh_restart", fresh, "fresh_boot")
             if args.baseline:
                 upgrade = directory / "upgrade"
-                extract_hacs(upgrade, Path("/inputs/hacs.zip"), fixture)
+                prepare_root(upgrade, installer_mode, fixture)
                 install_phase("baseline_install", upgrade, "baseline")
                 core_phase("upgrade_before", upgrade)
                 install_phase("upgrade_install", upgrade, "target", "baseline_install")

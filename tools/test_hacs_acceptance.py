@@ -15,7 +15,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from hacs_acceptance import main, verify_release_package
+from hacs_acceptance import (
+    installer_mode_for_core,
+    main,
+    pinned_core_version,
+    verify_release_package,
+)
 from hacs_fixture import InstallerGuard, extract_hacs, run_phase, safe_error
 
 
@@ -182,6 +187,24 @@ class UpstreamArchiveTests(unittest.TestCase):
                 })
             self.assertFalse((directory / "unsafe").exists())
             self.assertFalse((directory / "outside").exists())
+
+
+class CoreInstallerSelectionTests(unittest.TestCase):
+    def test_selects_marketplace_for_2026_11_plus_and_hacs_earlier(self):
+        dockerfile = (Path(__file__).with_name("Dockerfile")).read_text(encoding="utf-8")
+        pinned = pinned_core_version(dockerfile)
+        self.assertEqual(pinned, "2026.11.2")
+        self.assertEqual(installer_mode_for_core(pinned), "marketplace")
+        self.assertEqual(installer_mode_for_core("2026.11.0"), "marketplace")
+        self.assertEqual(installer_mode_for_core("2026.10.2"), "hacs")
+        self.assertEqual(installer_mode_for_core("2026.2.3"), "hacs")
+
+    def test_rejects_missing_or_invalid_core_versions(self):
+        with self.assertRaisesRegex(ValueError, "Missing pinned current Core"):
+            pinned_core_version("FROM python:3.13 AS test\n")
+        for bad in ("", "latest", "2026", "2026.11", "v2026.11.2"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "Invalid Home Assistant Core"):
+                installer_mode_for_core(bad)
 
 
 if __name__ == "__main__":
