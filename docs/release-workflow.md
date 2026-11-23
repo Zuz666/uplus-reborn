@@ -20,10 +20,11 @@ coverage. See [CONTRIBUTING](../CONTRIBUTING.md) and
 3. Review the prepared dated `## [VERSION] - YYYY-MM-DD` changelog section.
    Curate user-visible changes, migrations/breaking changes and known limits.
    Do not fabricate historical releases or substitute generated commit titles.
-4. Keep `hacs.json` in source-tree mode during first-repository bootstrap. After
-   an actual bootstrap installation succeeds, set `zip_release: true`,
-   `filename: uplus_reborn.zip` and `hide_default_branch: true` in the release PR.
-   ZIP mode has no guaranteed source-branch fallback before a release exists.
+4. `hacs.json` has used ZIP-release mode (`zip_release: true`,
+   `filename: uplus_reborn.zip`, `hide_default_branch: true`) since the `1.0.0`
+   release; keep those settings for subsequent releases. (Source-tree mode is
+   only for bootstrapping a brand-new repository before its first release exists,
+   since ZIP mode has no guaranteed source-branch fallback beforehand.)
 5. Review the exact diff and sensitive material. Include the MIT license in the
    integration package; documentation remains separately CC BY 4.0. Keep private
    instructions, plans, captures, APKs, credentials and generated files out.

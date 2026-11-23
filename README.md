@@ -10,870 +10,180 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://www.hacs.xyz/docs/faq/custom_repositories/)
 [![CI](https://img.shields.io/github/actions/workflow/status/Zuz666/uplus-reborn/ci.yml?branch=master&label=CI&style=flat-square)](https://github.com/Zuz666/uplus-reborn/actions/workflows/ci.yml)
 
-Local Home Assistant integration for the legacy **Haier HWD120-B1558U** dual-drum washer-dryer and its Haier U+ ecosystem.
+Local Home Assistant integration for the **Haier HWD120-B1558U** dual-drum
+washer-dryer.
 
-U+ Reborn talks directly to the appliance over the local network. Runtime operation does not require a Haier account, Internet access, the abandoned Haier U+ app, or a cloud service. The optional cloud-assisted setup uses the legacy Euro service once to discover an already-added appliance; account credentials are never stored.
-
-For contribution and release guidance, see [CONTRIBUTING.md](CONTRIBUTING.md),
-the [release runbook](docs/release-workflow.md) and [security policy](SECURITY.md).
+U+ Reborn communicates directly with your appliance over your local network
+(TCP port `56800`) — no Haier account, cloud connection, or legacy U+ app is
+required at runtime. Optional cloud lookup is supported once during initial
+setup, and account credentials are never stored.
 
 > [!WARNING]
-> This is an independent reverse-engineering project. It is not affiliated with, endorsed by, or supported by Haier. Only the HWD120-B1558U hardware and the explicitly listed commands have been tested. Do not use it with another model.
+> Independent reverse-engineering project — not affiliated with or endorsed by
+> Haier. Only **Haier HWD120-B1558U** is hardware-tested and supported. Do not
+> use this integration with other appliance models.
 
-## Current scope
+## Features
 
-Implemented for one HWD120-B1558U:
+- **100% local runtime:** Direct LAN polling and control on TCP port `56800`,
+  with automatic offline/online recovery when the washer switches off and back
+  on.
+- **Flexible setup:** Account-free local UDP discovery (`🔎︎ Find on local
+  network`), automatic DHCP discovery, optional one-time Haier Euro account
+  lookup (`☁︎ Use Haier account`), or manual setup (`✎︎ Connect manually`).
+- **Dual-drum live monitoring:** Read-only entities for both upper and lower
+  drums — live programme, phase, execution state (`Running`, `Paused`,
+  `Standby mode`, `Completed`, `Delayed`), remaining time, door lock flag,
+  active cycle settings, fault indicators/codes, cycle counts, and water/energy
+  counters.
+- **Opt-in remote control:** Disabled by default; supports independent next-run
+  drafts for all **12 upper** and **20 lower** programmes, wash parameters,
+  cycle options, ordinary stain recipes, **Smart washing** fabric/stain
+  recipes, **Start / Pause / Resume / Cancel / Standby**, plus shared **Sound**,
+  **Child lock**, and optional **Appliance power**.
+- **Saved programme profiles:** Save, restore, manage, and automate named
+  per-drum presets directly from the Home Assistant device page or actions.
+- **English and Russian localization:** Built-in UI translations for both
+  languages; automation keys stay identical across locales.
 
-- local UWT connection on TCP port `56800`;
-- account-free native UDP LAN discovery with a catalog of supported, unsupported and already-configured devices;
-- DHCP discovery of the appliance IP and MAC-derived UWT device ID;
-- optional cloud-assisted discovery of the appliance name, device ID, and current LAN address;
-- checksum-validated status polling;
-- power, physical Remote Control mode, and local-control lock;
-- upper/lower reported door-lock flags (not physical door-position sensors);
-- read-only upper/lower program and phase labels from the exact appliance
-  profile, with hardware-observed phase corrections;
-- upper/lower cycle counters and applicable remaining time;
-- separate reported cycle settings for panel/U+/HA starts, without overwriting
-  local next-run drafts;
-- liter water and appliance-reported kWh session/cumulative counters compatible with Home Assistant long-term consumption statistics;
-- opt-in, independent local drafts for all **12 upper / 20 lower programs**;
-- source-defined wash time, temperature, rinses, spin speed, delay, lower
-  drying, and per-program wash options;
-- six ordinary stain-removal choices on the manual-supported programs, plus
-  smart fabric/stain recipes with multi-stain automation actions;
-- named, persistent per-drum program profiles, with local restore and explicit
-  one-shot automation Start;
-- Start, Pause, Resume, Cancel and completed-state Reset for both drums;
-- buzzer, child lock and an explicitly enabled power switch.
+### Not supported
 
-See the [protocol command-evidence matrix](docs/protocol/hwd120-b1558u.md#supported-command-matrix)
-for source encodings and the narrower physical capture evidence.
+- Initial Wi-Fi pairing/provisioning (connect the washer to your LAN first).
+- Runtime cloud status or control fallback.
+- Other Haier appliance models (only `HWD120-B1558U` is supported).
+- Bypassing the washer's physical **Remote Control** setting.
 
-Not implemented:
+> [!NOTE]
+> Programme definitions cover the entire exact-model HWD120-B1558U profile with
+> full offline test coverage, while physical hardware testing covers
+> representative programmes, options, and controls rather than every possible
+> combination. See the
+> [protocol command matrix](docs/protocol/hwd120-b1558u.md#supported-command-matrix)
+> for exact hardware vs. source coverage.
 
-- automatic pairing;
-- runtime cloud status/control fallback;
-- controls for other appliance models;
-- bypassing the appliance's physical Remote Control requirement;
-- saved program profiles or actions to save, restore or start a named profile.
+## Requirements and installation
 
-Control encoding follows the inspected exact-model application source. Most
-wash/dry programs and combinations have offline rather than physical acceptance
-evidence. Unknown wire fields are not guessed into controls or status entities.
+### Prerequisites
 
-## Compatibility and evidence boundaries
+- **Home Assistant Core `2026.2.3` or newer** (tested in CI against `2026.2.3`
+  and `2026.11.2`; local brand icons require Home Assistant `2026.3+`).
+- **HWD120-B1558U** already connected to your routed local network with TCP port
+  `56800` reachable from Home Assistant.
 
-The minimum supported Home Assistant Core is **2026.2.3**. Real isolated
-Core **2026.10.1** acceptance has exercised native UI/API, entity migration,
-options, lifecycle and the actual TCP path against a synthetic appliance.
-Software fixtures are not hardware verification or actual HACS installation.
+### Install via HACS (recommended)
 
-Automated runtime checks target **2026.10.2**; this does not relabel the earlier
-native UI evidence.
+Check [GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases) and
+[CHANGELOG](CHANGELOG.md) for current release notes.
 
-Representative hardware observations cover upper/lower Spin, concurrent ordinary
-programs, both-drum Pause/Resume/Cancel, a lower smart recipe, delayed Start,
-timed lower Dry and upper completed-state Reset. Reported buzzer/child-lock
-round trips do not independently establish sound or immediate panel lockout.
-Most program/option combinations remain source-derived and offline-verified.
+1. In Home Assistant, open **HACS**, click the top-right **⋮** menu, and choose
+   **Custom repositories**.
+2. Add `https://github.com/Zuz666/uplus-reborn` with category **Integration**.
+3. Open **U+ Reborn** and download the latest stable release.
+4. Restart Home Assistant.
 
-Selected RPM, numeric delay, physical door position and complete metering
-coverage have separate evidence limits; a successful command must not invent
-their readback. Owner-ended intermittent rotation does not prove autonomous
-completion. Unknown command outcomes are never retroactively rewritten as
-success or retried automatically.
+For development or isolated testing without HACS packaging, copy
+`custom_components/uplus_reborn` into your Home Assistant `custom_components`
+directory and restart Home Assistant.
 
-See the [HWD120-B1558U protocol specification](docs/protocol/hwd120-b1558u.md) for the maintained contracts
-and coverage boundaries. Installation/restart chronology is not a development
-checklist; use the commands below for independent development.
+## Setup
 
-## Potential laundry models in the legacy APK
+Go to **Settings → Devices & services → Add integration → U+ Reborn** and choose
+one of three setup routes (or accept a prompt from **automatic DHCP
+discovery** if your appliance uses MAC prefix `98AAFC*`):
 
-The **Add appliance** flow in Haier U+ 2.6.0 lists these washing-machine and
-washer-dryer models:
+1. **`🔎︎ Find on local network` (recommended):** Scans your local IPv4 subnets
+   over UDP port `7083` without a Haier account. Click **Show found devices**,
+   pick your HWD120-B1558U from the catalog, select **View device / last activity
+   → Confirm**, then **Add this supported device** (validated via a read-only
+   TCP check).
+2. **`☁︎ Use Haier account`:** Signs in once to the legacy Haier U+ Euro service
+   (`uws-euro.haieriot.net`) for an appliance already added in the Haier U+ app,
+   retrieves its name, Device ID, and local IP (or accepts a manual host if
+   needed), validates locally over TCP, and immediately discards your
+   credentials.
+3. **`✎︎ Connect manually`:** Enter the appliance's local IP address, port
+   `56800`, and **Device ID** — its Wi-Fi MAC address from your router as **12
+   uppercase hexadecimal characters without separators** (e.g., `02:11:22:33:44:55`
+   becomes `021122334455`), then confirm **HWD120-B1558U**.
 
-- `HW120_BD14889U1`
-- `HWD100-BD1499U1`
-- `HWD120-B1558U`
-
-U+ Reborn is currently scoped to laundry appliances. Only the
-`HWD120-B1558U` has been tested on real hardware; presence in the APK is
-**not** a compatibility claim for the other two models.
-
-Owners of `HW120_BD14889U1` or `HWD100-BD1499U1` can help add support. Open an
-issue with the exact model, firmware/app metadata, observed behavior, and
-redacted diagnostics. Protocol work may then use owner-supervised,
-one-variable-at-a-time captures to prove state and command meanings. Do not
-post device IDs, account tokens, APKs, decompiled sources, or unsanitized
-packet captures.
-
-The APK also contains handlers for other appliance families. Those devices
-remain outside the current project scope, but may be considered in the future.
+Need to update the appliance IP later? If DHCP discovery updates do not apply on
+your network, use the integration entry's **Reconfigure** menu — your entities,
+names, saved profiles, and Recorder history are preserved. For UDP firewall,
+catalog identification, and discovery details, see
+[Local network discovery](docs/reference.md#local-network-discovery).
 
 ## Control model
 
-Remote controls are absent by default. Enable them under the integration's
-**Configure** menu. Physical **Remote Control** must be enabled at the washer
-after power-on.
-
-Each drum has an independent, in-memory draft. Select a program, then adjust
-its available settings and option switches. Program changes restore source
-defaults; **Spin defaults to 1000 RPM**, not the earlier 400 RPM preset.
-Selecting **None**, reloading the integration or restarting Home Assistant
-clears the draft. Editing a draft sends no appliance traffic and does not alter
-the reported program sensor. A confirmed Start clears only the target drum's
-consumed draft.
-
-Alternatively, select a smart washing fabric and a stain. The source recipe determines
-the program and scalar settings; manual settings/options are unavailable in
-smart mode. The atomic action below supports multiple stains.
-
-Smart washing fabric uses a magic-wand icon to distinguish recipe selection from
-ordinary parameter controls.
-
-For the model's programme and option names, see the
-[HWD120-B1558U terminology reference](docs/terminology/hwd120-b1558u.md#selected-base-terminology).
-The [bilingual entity-name register](docs/terminology/hwd120-b1558u-entity-naming.md) explains compact labels,
-drum prefixes and the narrow spaces used for native-card grouping.
-English and Russian translations are included. Choose the frontend language in
-your Home Assistant user profile; programme and option keys used by automations
-do not change with the displayed language.
-Entity names are created in the Home Assistant server's language; changing only
-the user interface language does not rename existing entities.
-
-For ordinary stain removal, choose **Kids´Wear** or **Casual** on the upper
-drum, or **Cotton**, **Mix** or **Synthetic** on the lower drum. The existing
-**Stains** selector then offers **Blood**, **Grass**, **Wine**, **Juice**,
-**Soil** and **Milk**, without requiring Smart washing fabric.
-
-An ordinary stain selects a complete recipe: temperature and the wash-stage
-duration, including heating, are fixed rather than independently editable.
-The Stains entity exposes `next_run_temperature_c` and
-`next_run_wash_stage_minutes` attributes. Rinses, speed and compatible options
-remain adjustable. Selecting a stain clears **Eco. wash**, **Night wash** and **Soak wash**;
-those options remain unavailable until the stain is cleared. Selecting
-**None** restores the program's temperature/main-wash defaults while preserving
-unrelated draft settings.
-
-These recipes combine exact-model source calculations with paired panel
-references for Wine. The complete combinations have not all been physically
-tested; see the protocol document's evidence boundaries. A retained reported
-stain code alone does not prove that an externally started program is using it.
-
-A control:
-
-1. serializes with polling and other controls and re-checks the current opt-in;
-2. reads fresh state (`4d01`) and alarm state (`0x73 -> 0x74`), checking action-relevant revision and preconditions;
-3. preserves applicable reported/shared fields while constructing one command;
-4. sends once and requires correlated response/postcondition evidence, followed by one best-effort post-confirm `0x73 -> 0x74` alarm refresh that never turns a confirmed write into an unknown outcome;
-5. reports **outcome unknown** if confirmation is lost, never retrying the write.
-
-The other drum may be active. Countdown changes do not invalidate an otherwise
-unchanged target state. Power, physical Remote Control, per-drum active-fault
-interlocks and applicable lock/state constraints still apply; there is no
-fabricated physical-door-position sensor. A confirmed active fault on a drum
-blocks all five lifecycle actions (`start`, `pause`, `resume`, `cancel`, `reset`)
-on that drum while leaving the healthy other drum and shared switches (`power`,
-`buzzer`, `child_lock`) operable; an unconfirmed alarm state (`unknown`) fails
-closed on `start` and `resume` while leaving `pause`, `cancel` and `reset`
-available in the UI (and re-checking `0x73 -> 0x74` before any control write).
-Pause/resume use the source cycle-active flag, not a claim about motor motion.
-Cancel proves a return to standby, **not draining or safe physical door opening**.
-Reset applies to the completed state; it is an appliance command.
-
-Raw response type `05` is not treated as an ACK. Separate fresh-sequence reads
-may establish the postcondition without repeating the control. If the first
-read is too early, a later candidate report can trigger another proof read
-within the original deadline. Loss of confirmation makes entities unavailable
-until ordinary polling recovers; that recovery does not retrospectively confirm
-the command.
-
-Diagnostics distinguish a confirmed operation from settings that the observed
-state cannot prove: spin speed, a selected delay value, and Refresh's displayed
-drying duration. Refresh follows the source builder by preserving the reported
-drying byte; it does not invent a wire value for the UI's sole 30-minute choice.
-
-Phase names are generic profile labels, not program-exclusive physical actions:
-timed **Dry** may initially report **Washing** before **Drying**. Its selected
-drying mode is checked separately; the reported main-wash value is zero, not
-the requested drying duration.
-
-Power is disabled by default even after opting into controls. Power-off loses
-physical Remote Control; the switch is not a guaranteed way to wake an offline
-appliance. Do not substitute power-off for Cancel. Treat source-only programs
-and option combinations as unvalidated on hardware, not as physically certified.
-
-## Saved program profiles
-
-Profiles save the **complete next-run draft**, not reported settings, live
-counters or appliance-wide Sound/Child lock/Power. Ordinary programs and Smart
-recipes retain all supported scalar values, enabled **and disabled** options,
-stains, lower drying and end time delay. Saving never starts a cycle.
-
-### Native management and selection
-
-1. Enable remote controls in the integration options.
-2. Select a program or Smart washing fabric and configure its draft on the device page.
-3. Enter **Upper new profile name** or **Lower new profile name** and commit the
-   text field, then press the matching **Upper save profile** or **Lower save
-   profile** button. Both controls are on the native device page.
-4. Use **Upper saved profile** or **Lower saved profile** on the device page
-   to restore it. This atomically replaces the whole draft, including clearing
-   options not present in the profile. It sends no appliance command and does
-   not alter the reported cycle settings.
-5. Use the native **Update program profile**, **Rename program profile** and
-   **Delete program profile** actions to manage it. Update explicitly replaces
-   its complete intent from the current draft. Rename changes only its label.
-
-No YAML or custom card is needed for this workflow. Names are unique per drum
-(case-insensitive, 1–100 characters); None, Unknown and Unavailable are reserved.
-A duplicate name is an error, never permission to overwrite. Profile action
-dropdowns show appliance/drum/name labels and retain stable IDs behind them.
-Choose a matching device and drum; cross-drum or cross-appliance use is rejected.
-
-The name fields are independent, transient inputs (up to 100 characters). They
-retain your text after a successful save or an error, and clear with drafts on
-reload, restart or a control opt-in transition. Entering text never renames an
-existing profile. Saving leaves both drafts and selected profiles untouched;
-the new record immediately becomes a restore choice. These local controls work
-while appliance polling is unavailable, but still require controls opt-in.
-Blank/reserved names, duplicates and missing drafts produce errors, not defaults
-or overwrites. Start is always separate. **Save program profile**
-(`uplus_reborn.save_profile`) remains available in Developer tools → Actions and
-automations as an alternative to the device-page controls.
-
-After any manual draft edit the profile selector shows **None (independent
-draft)**. The saved copy does not change. Selecting None only detaches the
-profile label; it leaves the draft intact. Deleting a selected profile likewise
-leaves its already-restored draft intact but removes the saved-profile match.
-Renaming keeps the identity and any exact selected match.
-
-Profiles survive integration reload, Core restart and upgrades locally in HA
-storage, independently of the transient drafts. Reload/restart still clears
-both drafts and selections; nothing is restored or started implicitly.
-Removing the config entry deletes its profiles. Include HA storage in backups.
-An incompatible stored intent is never filled from defaults: apply/start fails;
-the record remains available for rename, explicit update from a valid draft,
-or deletion.
-
-### Profile automations
-
-The native automation/script action editor offers the same device, drum and
-profile dropdowns. The optional response from Save, Update and Rename includes
-`profile_id`, `name`, `drum` and `revision`. Each drum's saved-profile selector
-also exposes `profiles` (name → stable ID) and the exact selected `profile_id`.
-Use the ID in YAML; a rename does not break references. A deleted ID fails
-clearly rather than choosing another profile.
-
-Apply only—local restore, **no Start**:
-
-```yaml
-action: uplus_reborn.apply_profile
-data:
-  device_id: YOUR_HA_DEVICE_REGISTRY_ID
-  drum: lower
-  profile_id: YOUR_SAVED_LOWER_PROFILE_ID
-```
-
-Explicitly start a saved revision, without using or modifying UI drafts:
-
-```yaml
-action: uplus_reborn.start_profile
-data:
-  device_id: YOUR_HA_DEVICE_REGISTRY_ID
-  drum: upper
-  profile_id: YOUR_SAVED_UPPER_PROFILE_ID
-```
-
-Start resolves one immutable revision before queuing on the existing
-`start_program` control path. Concurrent draft edits, profile updates or deletion
-cannot change that invocation. Control opt-in is rechecked inside the lock;
-physical power/Remote Control, fresh target state, locks, errors, correlation
-and confirmation still apply. An uncertain write is never retried automatically.
-Local profile persistence/restore does not establish new hardware evidence.
-
-## Requirements
-
-- Home Assistant `2026.2.3` or newer;
-- HWD120-B1558U reachable from Home Assistant over the same routed LAN;
-- TCP `56800` allowed from Home Assistant to the appliance.
-
-The Core version above is a compatibility minimum, not a security recommendation.
-Keep production Home Assistant on a current patched release; historical Core
-verification environments are not deployment images.
-
-Bundled brand images require
-[Home Assistant 2026.3 or newer](https://contributors.home-assistant.io/blog/2026/02/24/brands-proxy-api/).
-Earlier supported versions do not load those local images; this cosmetic
-difference does not raise the functional minimum.
-
-For cloud-assisted setup, the appliance **must already be added to the owner's
-account through the Haier U+ app**. U+ Reborn does not pair or provision an
-appliance. The legacy app/service is used only during setup to retrieve the
-existing appliance name and ID; Home Assistant stores neither the account email
-nor password. If the legacy Euro service is unavailable, use DHCP discovery or
-the manual setup route.
-
-For the verified HWD120-B1558U, the UWT device ID is the appliance's Wi-Fi MAC
-address: **12 uppercase hexadecimal characters without separators**. DHCP
-discovery derives it automatically. For manual setup, obtain the MAC from
-your router's connected-device or DHCP client list; the Haier U+ app and cloud
-services are not required. The appliance must already be connected to your LAN.
-Treat its MAC/device ID as private configuration and do not publish it in bug
-reports or packet captures.
-
-## Installation
-
-### HACS
-
-Stable HACS installation requires a published GitHub Release and its download
-archive; the default branch is not a stable download. Check
-[GitHub Releases](https://github.com/Zuz666/uplus-reborn/releases)
-and the [release notes and known limitations](CHANGELOG.md) before installation.
-
-1. In HACS, open the top-right menu and select **Custom repositories**.
-2. Add `https://github.com/Zuz666/uplus-reborn` with type **Integration**.
-3. Open **U+ Reborn** and download the published stable version.
-4. Restart Home Assistant.
-
-### Development installation
-
-For development and isolated testing, copy `custom_components/uplus_reborn`
-into the Home Assistant configuration directory as
-`custom_components/uplus_reborn`, then restart Home Assistant.
-This bypasses HACS repository validation and packaging; it is not proof of a
-HACS installation. Supported user distribution is through HACS.
-
-## Configuration
-
-### Find on local network
-
-1. Open **Settings → Devices & services → Add integration → U+ Reborn**.
-2. Choose **🔎︎ Find on local network**. The first active search sends immediately
-   after listeners are ready, then active searches share queries every 20 seconds
-   per usable enabled IPv4 source. A later search waits for the next shared round;
-   joining does not send an extra query or reset the schedule.
-3. Choose a **Discovered device** from the catalog dropdown, select **View device / last activity**
-   and press **Confirm**. Unsupported and already-configured devices remain
-   inspectable. Dropdown selection alone does not navigate, add or TCP-probe.
-4. For a new supported HWD120-B1558U, choose **Add this supported device** and
-   confirm. Addition requires a fresh checksum-valid, read-only TCP state check.
-
-The native preview pairs **Sent / Replies / Found / Msg** with slash-separated
-values: shared UDP submissions observed during this search, valid replies,
-distinct devices and the latest event. No earlier search's counter or device
-history is imported. **Sent = 0** while waiting for the next round is normal;
-delayed replies can arrive before this search observes its first round.
-Simultaneous searches can show the same Sent value; adding their counters is not
-a network traffic total. Time and observed query rounds stay in the stopped
-activity journal, not the live preview. **Device replied** means an already-found
-device replied again. Updates do not reload the form.
-The animated washer ↔ Home Assistant illustration uses thick alternating blue
-signal arrows and two expanding washer echoes after the illustrative incoming
-pulse. It is decorative, not delivery or acknowledgement proof.
-Reduced-motion settings show a static image.
-**Show found devices** is available immediately, including with no replies.
-It stops this search and opens the catalog without selecting/adding a device or
-starting a TCP check. There is no duration choice or automatic timeout.
-Stopping one search does not stop another. The last active search releases the
-shared sender and sockets. A fatal shared-sender failure stops active searches
-with diagnostics but retains each search's own valid observations for explicit
-catalog inspection; it does not prove those devices are currently reachable.
-A new search after failure is explicit, not an automatic restart.
-
-The catalog has three separate radio actions: **View device / last activity**, **Continue
-searching**, and **Enter manually**, followed by one **Confirm** button. Search
-and manual input do not require a selected device, including in an empty catalog.
-Continue searching starts a fresh interval; retained rows keep their truthful
-current-search freshness. Device details use **Back to discovery** for that route.
-
-Repeated valid replies increase the reply count, not the distinct-device count.
-**Last search activity** is the final dropdown entry, not another device. Select
-it with **View device / last activity → Confirm** to open the frozen journal of up to 12 recent
-events, cumulative counters and all coverage warnings, then return to the catalog.
-It is available even with no responding devices, is excluded from device counts
-and never permits Add or a TCP probe. Nothing is stored beyond this setup dialog.
-
-Closing the dialog or losing its preview connection stops only its search.
-Another dialog keeps its own collection; no runtime discovery loop remains.
-If the connection is lost, inspect the retained catalog and explicitly return
-to discovery to start again. Submission to the local stack is not delivery proof.
-
-Device rows include a model or candidate group, full Device ID, IP address and
-independent configured/support/conflict/freshness statuses. Native HA dropdowns
-can shorten long labels on narrow screens; the device card retains full identity.
-The compact card shows model candidates, a short identification source, category,
-address, last response and addition restrictions. **Technical details** opens the
-complete read-only protocol/source evidence; **Back to device** keeps the selected
-identity without restarting discovery or probing TCP.
-
-The bundled offline lookup combines APK category facts with eleven model names
-across seven exact Type IDs from the manufacturer's product-selection catalog
-(retrieved 2026-10-20). One match is labeled as a catalog/profile match, not a model
-name read from UDP; it does not prove global Type ID uniqueness. Shared types show
-all possible models on one device card, never an arbitrarily selected first model.
-For example, H3F-280WSAAU1, H3F-320FSAAU1 and H3F-320WSAAU1 share a Type ID.
-Category-only and unknown types remain visible without guessed model names.
-Local identification needs neither Internet access nor a Haier account.
-
-Model recognition does not expand control support beyond HWD120-B1558U, the only
-model with project hardware correlation. Unsupported and already-configured
-devices receive no extra TCP or cloud probes and cannot be added from their
-cards. Disabled/unloaded U+ Reborn entries also block duplicates; another
-integration's exact identity association is informational, not a veto.
-
-The initial setup menu also offers **☁︎ Use Haier account** and **✎︎ Connect
-manually**, with descriptions. These symbols are text and can look different
-across platforms.
-
-Discovery uses UDP destination port `7083`. Replies can target the sending
-socket's ephemeral port or UDP/7083. Allow the return traffic; do not filter
-replies solely by port 7083. Searches use actual adapter prefixes, not a guessed
-`/24`. Socket/interface failures are reported as partial coverage. No reply
-does not prove absence: VLAN/Wi-Fi isolation, blocked broadcasts and intermittent
-connectivity can prevent discovery. Enable the appropriate HA network adapter
-or use manual connection; discovery does not reconfigure your network.
-
-The catalog is onboarding/inspection only: browsing never updates existing
-addresses, reloads entries, changes preferences or clears program drafts.
-DHCP and Reconfigure retain their existing roles. No mDNS discovery, runtime
-UDP address recovery, pairing or automatic cloud fallback is added.
-
-### Cloud-assisted setup
-
-1. Add and verify the appliance in the **Haier U+ app** first.
-2. Open **Settings → Devices & services → Add integration** and choose
-   **U+ Reborn**.
-3. Choose **Find appliances with Haier U+** and enter the existing U+ account
-   email and password.
-4. Select the HWD120-B1558U returned by the account. The flow obtains its saved
-   name and device ID, then finds its current IP address on the local network.
-5. If automatic LAN discovery cannot resolve the IP, enter the appliance host
-   on the same selection form.
-6. Setup succeeds only after a direct, checksum-valid local state response.
-
-The credentials are sent directly to `uws-euro.haieriot.net` over HTTPS for
-this flow and are discarded before the config entry is created. All subsequent
-status and control traffic is local.
-
-### Automatic DHCP discovery
-
-1. Install U+ Reborn and restart Home Assistant.
-2. Home Assistant discovers supported appliances by their DHCP MAC prefix.
-3. Open the discovered U+ Reborn flow and confirm that the appliance is an
-   HWD120-B1558U.
-4. Setup succeeds only after a live checksum-valid state response.
-
-The flow obtains the current IP address and derives the UWT device ID from the
-full DHCP MAC. It uses a non-empty DHCP hostname as the entry name when one is
-available; otherwise it uses `HWD120-B1558U`. The entry can be renamed normally
-in Home Assistant. A later DHCP event updates the IP of an existing entry
-without changing its device or entity identities.
-
-### Manual fallback
-
-1. Find the appliance's current IP address and **Wi-Fi MAC address** in your
-   router's connected-device or DHCP client list. Use the appliance's address,
-   not the router/access point's MAC or the appliance serial number.
-2. Remove colons, hyphens or dots from the MAC and uppercase any letters.
-   For example, the fictional MAC `02:11:22:33:44:55` becomes `021122334455`.
-   The manual form does not perform this conversion for you.
-3. Open **Settings → Devices & services → Add integration**, search for
-   **U+ Reborn**, and choose **Enter local connection details manually**.
-4. Enter the appliance host, port `56800`, and the converted value as **Device ID**.
-5. Explicitly confirm that the appliance is **HWD120-B1558U**.
-6. Setup succeeds only after a live checksum-valid local state response.
-
-This route works without the Haier U+ app, account login or available cloud
-services. It connects to an appliance already on your LAN; it does not pair
-the appliance or configure its Wi-Fi connection.
-Without a UDP reply, TCP communication does not independently establish the
-commercial model. Known incompatible type/security or conflicting identity
-evidence in the current dialog cannot be overridden by manual confirmation.
-
-### Reconfigure the connection
-
-Use the integration entry's **Reconfigure** action if the appliance address
-changes and DHCP discovery is not available. Enter the new host and port;
-the flow must obtain a checksum-valid local state before saving them. This
-read never starts or cancels a program. The existing appliance identity,
-entity IDs, user customizations, and history are retained.
-
-A changed address reloads a loaded entry once. Reconfigure also schedules
-setup for an unloaded or failed/retrying entry after successful validation;
-an explicitly disabled entry is not silently enabled. Validating an unchanged
-address on a loaded entry does not reload it.
-
-### Configure integration options
-
-Open **Configure → Integration settings** on the integration entry. Settings are
-applied only on the final confirmation step, not while editing the first form.
-
-The dialog shows the last known appliance connection **when opened**: Connected
-after a fresh successful read, Offline after a failed read, or Not yet known
-before any result or when the last success is stale. It does not actively test
-the connection or update this label while open. Close and reopen it to see the
-latest result. Connection status is separate from physical Remote Control mode
-and permission to send commands; opening the dialog sends no extra requests.
-See [Control model](#control-model) for command behavior and safety details.
-
-- **Polling interval (seconds):** a whole number from **15 to 30**, default
-  **15**. Changing only this value updates the existing coordinator without
-  a reload, immediate query, or discarded draft. An already scheduled poll
-  keeps its current deadline; subsequent polls use the new interval.
-- **Enable remote controls:** off by default. Enables both drums' draft
-  selectors, option switches and lifecycle buttons, plus shared controls.
-  Power remains disabled in the entity registry until explicitly enabled.
-  Program-specific source constraints determine which settings are available.
-  Fixed wash-time, temperature, rinse and spin values are not editable selectors.
-  Tub Clean offers only **Night wash** as an additional option on either drum;
-  its fixed settings still participate in the complete draft and Start encoding.
-  Read-only reported cycle settings remain separate and are not hidden by this
-  editability rule.
-
-Saving options never sends an appliance command. Changing control opt-in
-reloads a loaded entry and discards both drafts. Disabling revokes permission
-immediately, including for commands waiting for a poll; enabling again starts
-with no draft, never a previously staged selection. A reload performs
-the normal read-only setup query, not an appliance control. Unloaded/failed entries
-use the saved options on their next setup. Existing registry identities,
-user names, hidden flags, and explicitly disabled entities are retained.
-
-#### Diagnostic capture preferences
-
-The **Diagnostics** group starts collapsed whenever Integration settings is opened.
-Expand its heading to view the description and preferences for the next capture.
-Expanding or collapsing the group does not save settings or start/stop capture.
-
-| Resource | Default | Editable range |
-| --- | ---: | ---: |
-| Operations, including the current one | 1800 | 1–1800 |
-| Event records across operations | 30600 | 1–30600 |
-| Original raw bytes | 4 MiB (4194304 bytes) | 1–8388608 bytes (8 MiB) |
-
-Choose a separate auto-stop duration of **30 minutes**, **1 hour**, **2 hours**,
-**4 hours** or **6 hours** (new default). Explicit saved values are preserved.
-Field descriptions distinguish values saved when the dialog opened from current
-defaults, including absent/invalid preferences using defaults. They remain the
-opening baseline while editing, not a live change indicator. Diagnostic limits
-accept whole-number text; invalid edits are rejected unless explicitly replaced
-by **Restore diagnostic defaults**.
-
-After **Next**, a read-only review labels effective changes **will change**.
-If a new capture is selected, it also shows **unchanged** limits, the auto-stop
-duration and an **estimated trace depth in seconds**. Budget-only edits show
-their changes and that estimate without a replacement warning. All three budgets constrain the
-estimate; commands, unmatched reports, fragmentation or larger exchanges can
-shorten it. Defaults at a 15-second interval estimate about 27000 seconds of poll
-slots, independently of the 21600-second deadline. Disabled automatic polling
-gives an estimate of 0, not a forecast for command-only traffic.
-
-For a four-hour investigation, 1200 operations / 20400 events / 4 MiB leave
-ordinary-poll headroom above 960 polls; six-hour defaults (1800 / 30600 / 4 MiB) leave headroom above
-1440 (at 17 events and 464 raw bytes per reference poll). These are suggested combinations, not profiles or automatic budget coupling.
-When start is selected, a short non-blocking warning appears if enabled-poll
-reference capacity is shorter than the chosen duration. No warning guarantees
-complete history: actual commands, fragmentation and additional reports cost more.
-
-Saving with **Start a new diagnostic capture and enable DEBUG** unchecked only
-saves preferences. It does not stop, reset or resize an active capture, change
-its deadline, enable DEBUG or reload the entry for capture-only edits. The
-checkbox is inside the collapsed **Diagnostics** group, unchecked on each fresh
-settings flow, and is not a saved on/off switch. **Next** only prepares the review:
-checking the box starts nothing until final confirmation. The review warns about
-replacing previous evidence whenever start is selected, even without changed
-limits; download useful evidence first. Closing before final confirmation applies
-nothing. If a simultaneous control change requires reload, the new capture starts
-on the resulting coordinator. An ordinary unchanged save shows no diagnostics
-warning; a control-consent change explicitly shows draft clearing and loaded-entry
-reload.
-
-**Restore diagnostic defaults** is a separate, initially unchecked one-shot
-checkbox inside Diagnostics. It overrides all four diagnostic inputs, even
-invalid edits, with the defaults above and the six-hour duration. Next shows all
-resulting values; already-matching values are labelled unchanged. Only final
-confirmation saves them. It does not reset polling or remote-control consent,
-start/stop capture, erase evidence, change DEBUG or resize an active capture.
-Select the separate start checkbox as well to replace the trace using the
-restored settings, with the normal replacement warning. Cancellation saves
-nothing; both checkboxes are unchecked on a fresh opening. Independently selected
-control changes still have their disclosed reload consequences.
-
-All editable integration settings are UI-only. There are no duplicate integration
-YAML options; existing YAML automations invoking integration actions are unchanged.
-See [Temporary exchange tracing](#temporary-exchange-tracing) for both start routes,
-native stop, volatile evidence and sharing precautions.
-
-### Troubleshooting availability and unsupported actions
-
-An already configured integration loads even when the washer is switched off or
-temporarily unreachable. Appliance readings and commands remain **Unavailable**;
-the connection status in **Configure** explains that power or networking may be
-the cause. Normal polling reconnects automatically when communication returns,
-without restarting Home Assistant or recreating the device. A successful read
-restores current readings, not previously attempted commands. Disabling polling
-in Home Assistant also disables this automatic polling recovery.
-
-Offline loading does not bypass initial onboarding validation or hide invalid
-protocol responses, incompatible profile storage or other setup errors.
-
-An unavailable appliance means the integration has no current successful
-local read. Check physical power, local network access, host/port, and
-**Reconfigure** if the address changed; allow normal polling to recover.
-Enabling controls does not repair connectivity. A healthy read can coexist
-with unavailable buttons because physical Remote Control, a target draft,
-an applicable lock or the action's target-state precondition is missing.
-Inspect current state before deciding what to do after an uncertain command.
-
-The phase sensor describes the program stage, not whether it is currently
-executing: pausing can leave **Spinning** unchanged. The separate per-drum
-**execution state** sensor reports Running, Paused, Standby mode, Completed or Delayed
-from the same snapshot, including panel/U+ changes without HA button presses.
-Running means protocol cycle activity, not continuously rotating motor.
-Intermittent rotation remains the phase, not a synthetic Completed state.
-
-Completed/drying-finished phases take precedence over the activity flag.
-Standby with a reservation flag is Delayed; without reservation and activity
-it is Standby, not Paused. A delayed-start phase requires the reservation flag.
-Unsupported phases, active standby without reservation and delayed-start without
-reservation produce **Unknown**. Loss of authoritative state produces
-**Unavailable**. These read-only sensors require no control opt-in.
-
-Native [button state](https://www.home-assistant.io/integrations/button/#button-states)
-is the last HA attempted-press timestamp, not the drum's execution state or proof
-of a confirmed appliance transition. HA records the timestamp before the handler,
-including a press that is rejected. **Unknown** means no last-press timestamp is
-available. Panel/U+ actions do not create HA button presses. **Unavailable** can
-also mean that an action does not apply to the current state; it does not by
-itself establish lost connectivity.
-
-Pause/Resume stay state-gated: Running normally permits Pause, Paused normally
-permits Resume, and Standby/Completed permit neither. Shared power, physical
-Remote Control and lock restrictions still apply. Read the execution-state
-sensor, not button history, to follow the program. If the appliance changes
-after the displayed state, the command can be rejected with a state-changed or
-specific prerequisite message. Wait for a fresh update before trying again;
-the integration does not retry or silently reinterpret the request.
-
-For `button.press`, target the specific Pause or Resume entity, not an entire
-device/area containing opposing lifecycle controls. Multiple targets can partly
-succeed; there is no batch rollback. HA may skip an unavailable target before
-calling the integration, so a custom error is not guaranteed for disabled actions.
-
-Use the integration entry's **Enable debug logging** action temporarily,
-observe the problem, then **Disable debug logging** to collect the log.
-Use **Download diagnostics** for cached state and any retained opt-in exchange trace.
-There is no persistent debug option in this integration. See
-[Diagnostics and issue reports](#diagnostics-and-issue-reports) for reporting
-and privacy guidance; never attach credentials or raw private captures.
-
-## Entities
-
-### Common appliance entities
-
-| Platform | Entity | Notes |
-| --- | --- | --- |
-| Binary sensor | Power | Diagnostic; appliance power flag |
-| Binary sensor | Remote control | Diagnostic; physical Remote Control mode required for commands |
-| Binary sensor | Local control lock | Diagnostic; operational interlock |
-| Sensor | Power-on session water | Diagnostic; liters; `total_increasing`; owner-observed panel-power reset; incomplete accounting |
-| Sensor | Cumulative water | Diagnostic; liters; `total_increasing`; reported cumulative accounting; persistence across mains loss unverified |
-| Sensor | Power-on session energy | Diagnostic; appliance-reported kWh; `total_increasing`; owner-observed panel-power reset; incomplete accounting |
-| Sensor | Cumulative electricity | Diagnostic; appliance-reported kWh; `total_increasing`; reported cumulative accounting; persistence across mains loss unverified |
-
-### Upper drum entities
-
-| Platform | Entity | Notes |
-| --- | --- | --- |
-| Binary sensor | Upper door lock | Raw lock flag; `on` means locked |
-| Sensor | Upper program | Authoritative read-only enum; separate from the local draft |
-| Sensor | Upper phase | Profile phase vocabulary with hardware corrections for observed values |
-| Sensor | Upper execution state | Running, Paused, Standby, Completed or Delayed; independent of the retained phase |
-| Sensor | Upper remaining time | Minutes; unknown in standby or when omitted |
-| Sensor | Upper cycle count | Diagnostic total-increasing counter |
-| Binary sensor | Upper fault | Diagnostic `problem`; `on` when at least one mapped/unmapped upper alarm fault bit is set (`programme_end` `50500H` excluded); `unknown` when no usable alarm snapshot is available |
-| Sensor | Upper fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
-
-### Lower drum entities
-
-| Platform | Entity | Notes |
-| --- | --- | --- |
-| Binary sensor | Lower door lock | Raw lock flag; `on` means locked |
-| Sensor | Lower program | Read-only enum containing every profile-advertised lower program |
-| Sensor | Lower phase | Profile phase vocabulary with hardware corrections from the observed Bedding lifecycle |
-| Sensor | Lower execution state | Same phase-aware execution contract as the upper drum |
-| Sensor | Lower remaining time | Minutes; unknown in standby or when omitted |
-| Sensor | Lower cycle count | Diagnostic total-increasing counter |
-| Binary sensor | Lower fault | Diagnostic `problem`; `on` when at least one mapped/unmapped lower alarm fault bit is set (`programme_end` `50501B` excluded); `unknown` when no usable alarm snapshot is available |
-| Sensor | Lower fault code | Diagnostic 31-value enum (`none`, 29 fault slugs, `unknown_fault`) with bounded `active_faults`, `active_fault_codes` and `fault_count` attributes |
-
-### Reported cycle settings
-
-These read-only entities appear under **Sensors**, without requiring control
-opt-in. Each reads the appliance's latest report, including when a program
-starts from its physical panel or U+. They do not change the separate
-**selected** next-run controls.
-
-| Platform | Entity, per drum unless noted | Meaning |
-| --- | --- | --- |
-| Sensor | Reported target temperature | Program target in °C, not measured water temperature; 0°C means unheated |
-| Sensor | Reported wash-stage time | Minutes reported for the complete wash stage, including applicable heating; may decrease |
-| Sensor | Reported rinse count | Appliance-reported count that can decrease during the cycle; not the originally selected total |
-| Sensor | Reported spin-stage time | Reported minutes, **not RPM** or a guaranteed original duration |
-| Sensor | Lower reported drying mode | Off, Auto or the source-defined timed mode; not inferred from a draft |
-| Binary sensor | Reported high water, Easy Iron, intensive, eco, soak, night | Separate reported option flags |
-| Binary sensor | Reported smart mode | Smart-mode flag; does not identify the chosen fabric or stain rows |
-| Binary sensor | Reported delay active | Reservation flag, not its configured duration or finish timestamp |
-
-Values remain available for applicable paused and intermittent-rotation cycles.
-In ordinary Standby, Completed, or an unknown program/phase, these setting
-values are **Unknown** rather than stale selections. A reported pending Start
-or reservation can establish cycle context while the phase still says Standby.
-Inapplicable fields and missing reports are also Unknown. Loss of current
-appliance state makes the entities **Unavailable**; recovery uses a fresh
-report, never the last command or recorder history.
-
-The report does **not yet establish** actual selected RPM, numeric delay,
-original main-wash duration, active ordinary-stain treatment, or exact Smart
-fabric/stain selections. The stain code can persist after panel deselection;
-diagnostics preserve it but it is not an active-stain sensor. These are explicit
-readback limitations, not values silently filled from the next-run draft.
-Changing options on the panel need not be visible before Start: panel choices
-can also be local staged settings.
-
-### Native controls
-
-All controls below require integration opt-in. Draft entities never send a
-command by themselves.
-
-| Platform | Surface | Behavior |
-| --- | --- | --- |
-| Select | Program and smart fabric, per drum | Choose one path; restore its defaults |
-| Select | Saved profile, per drum | Atomically restore a complete named draft; never starts a cycle |
-| Select | Wash time, temperature, rinse count, speed, delay | Source-defined choices for the ordinary program |
-| Select | Lower drying | Available only where offered by the source |
-| Select | Stain, per drum | One ordinary stain or one Smart recipe; the atomic action supports multiple Smart stains |
-| Switch | High water, Easy Iron, intensive, eco, soak, night | Local draft options, enabled only for applicable ordinary programs |
-| Button | Start, Pause, Resume, Cancel, Reset, per drum | One-shot commands with authoritative outcome handling |
-| Switch | Buzzer | Configuration; enable/disable the appliance's audible-signal setting |
-| Switch | Child lock | Configuration; enable/disable the appliance's child-lock setting |
-| Switch | Power | Shared control; disabled by default, no guaranteed remote wake |
-
-**Buzzer**, **Child lock** and **Power** are shared by the appliance, not
-separate per-drum drafts. Changing one sends a command immediately; Start is
-not required. Their displayed state comes from the appliance report, not an
-optimistic local toggle. Integration control opt-in and command preconditions
-still apply.
-
-- **Buzzer** controls the washer's sound setting, not Home Assistant
-  notifications. Which individual sounds it suppresses (for example button,
-  completion or alarm sounds) has not been physically verified; do not assume
-  that disabling it silences every alert.
-- **Child lock** reports an enabled appliance setting, not proof that the
-  panel is currently locked. The appliance manual (§3.7.1) describes the lock
-  symbol appearing one minute after program Start. That activation timing
-  has not yet been physically verified through HA. This setting does not
-  lock or unlock drum doors. Its report and **Local control lock** use
-  different coordinates but can turn on together; turning Child lock off
-  remains permitted in that state, with power and Remote Control still required.
-- **Power** is a real power command and is disabled by default in the entity
-  registry. Power-off loses physical Remote Control; an offline appliance
-  cannot be promised a remote wake-up.
-
-These shared commands are implemented from the exact-model source; implementation
-support is not a claim of physical verification. See the
-[command evidence matrix](docs/protocol/hwd120-b1558u.md#supported-command-matrix).
-
-### Categories and existing history
-
-The 48 status entities comprise **35 primary** and **13 Diagnostic** entities.
-Power, Remote control, Local control lock, session and cumulative water/energy,
-both cycle counters, and both drums' fault binary/enum entities are Diagnostic.
-Both reported door-lock flags, both drums' program/phase/execution
-state/remaining time and the 25 reported-setting entities remain primary.
-Together with 48 controls the integration registers 96 entities when controls are
-enabled. `upper_execution_state` and `lower_execution_state` stay strictly
-derived from `6d01` even during an active fault or an unconfirmed alarm state;
-when polling gets a valid `6d01` reply without a usable alarm snapshot, the
-entry and existing status readings stay online and the four Diagnostic fault
-entities turn `unknown`, while `Start` and `Resume` buttons become
-unavailable because their safety validators fail closed until alarm state is
-confirmed.
-Operational controls remain separate from
-integration configuration. Retained entities keep their existing enabled
-defaults; upgrades do not enable user-disabled entities or undo visibility
-preferences.
-
-Category changes reorganize the native device page, not the appliance data.
-Diagnostic entities are also excluded from automatically generated dashboards
-and are not exposed to voice assistants by default. They remain enabled unless
-the user disables them. Power/Remote Control/local-lock command checks are
-unchanged; inspect Diagnostics when those prerequisites block a command.
-Retained entity IDs/unique IDs, user names, icons, areas, enabled/hidden choices,
-and sensor display preferences are preserved. Existing Recorder history remains
-attached to the same entity IDs. No statistics, counter values, units, or state
-classes are migrated: all four consumption sensors retain literal L/kWh,
-their numerical meaning and `total_increasing` in Diagnostic.
-
-### Control upgrade and automations
-
-Retained selectors keep their unique IDs and existing entity IDs, including an
-upper selector previously named **Upper preset**. Its new vocabulary is the
-program slug (for example `spin`) or `none`; `upper_spin_400` is removed.
-Old upper Start/Cancel registrations migrate to the generic actions while
-preserving entity IDs and user preferences. The twelve obsolete boolean
-selectors are replaced by switches. Update automations that used those
-selectors; no compatibility aliases are provided. New entities respect Home
-Assistant's existing disabled-new-entities preference.
-
-For interactive staging, use `select.select_option` and the draft switches,
-then the target Start button. For automation, avoid shared mutable draft state:
-the `uplus_reborn.start_program` action validates and sends one complete intent
-without changing either interactive draft. Supply `device_id`, `drum`, and
-exactly one of `program` or `fabric`. Omitted ordinary settings use program
-defaults, except the fixed temperature/time of a selected stain recipe.
-Unknown, unsupported or conflicting values are rejected before dispatch.
-
-Native Smart fabric/stain selectors use lowercase option keys, such as `f1`
-and `w15`, with translated labels in the UI. Update any `select.select_option`
-automations or state comparisons that previously used `F1`/`W15`; entity IDs
-are unchanged. The atomic `uplus_reborn.start_program` action below still uses
-uppercase source recipe IDs.
-
-`device_id` is the Home Assistant device-registry ID, not the appliance's UWT
-identifier or MAC address. It must resolve to exactly one loaded U+ Reborn
-entry with controls enabled. An unknown, foreign, unloaded or ambiguous device
-is rejected rather than falling back to another registered appliance.
+Remote controls are **disabled by default**. To enable them, open the
+integration entry's **Configure → Integration settings** dialog and enable
+**Enable remote controls** (where you can also set the polling interval between
+`15` and `30` seconds; default `15`).
+
+To send commands to the washer:
+
+- **Physical Remote Control must be enabled** on the washer's front panel (the
+  appliance resets Remote Control whenever it powers off).
+- **Independent local drafts:** Select a programme using **Upper / Lower
+  Programme**, or pick a fabric recipe using **Upper / Lower Smart washing**
+  (wand icon). Picking a programme loads its source defaults (for example,
+  `Spin` defaults to `1000 RPM`). Changing selectors or option switches is local
+  only — it sends zero appliance traffic and never alters the read-only sensors.
+  Selecting `None`, reloading the integration, or restarting Home Assistant
+  clears drafts; pressing **Start** sends the command once and clears only that
+  drum's draft.
+- **Ordinary stain removal:** On upper **Kids´Wear** or **Casual**, or lower
+  **Cotton**, **Mix**, or **Synthetic**, select **Blood**, **Grass**, **Wine**,
+  **Juice**, **Soil**, or **Milk** in **Stains**. The recipe fixes washing
+  temperature and wash-stage duration (exposed on the `Stains` entity attributes
+  `next_run_temperature_c` and `next_run_wash_stage_minutes`) and disables
+  incompatible options (**Eco. wash**, **Night wash**, **Soak wash**).
+- **Smart washing:** Choose a fabric in **Smart washing** and optionally a stain;
+  manual settings and option switches are unavailable in Smart mode.
+
+> [!IMPORTANT]
+>
+> - **No blind retries:** Every command is sent **once**. If confirmation is
+>   lost, U+ Reborn reports **outcome unknown** — inspect the washer before
+>   acting again.
+> - **Cancel is standby only:** **Cancel** stops the cycle and returns to
+>   standby; it does **not** prove water drainage or a safe-to-open door. **Door
+>   lock** reflects only the reported lock flag, not physical door position.
+> - **Fault interlocks:** An active drum fault blocks lifecycle actions on the
+>   faulted drum while leaving the healthy drum and shared switches usable.
+> - **Appliance power switch:** Disabled by default. Turning the washer off
+>   removes physical Remote Control, is not a substitute for **Cancel**, and does
+>   not guarantee remote wake-up when offline.
+
+For full protocol execution, fault interlock, readback gap, and option-menu
+behavior, see
+[Control execution and safety](docs/reference.md#control-execution-and-safety).
+
+## Saved profiles and automations
+
+Save your favorite per-drum settings directly from the Home Assistant device
+page (once remote controls are enabled):
+
+1. Configure a programme or Smart washing draft for the upper or lower drum.
+2. Type a unique name into **Upper New profile** or **Lower New profile** and
+   press **Upper Save profile** or **Lower Save profile**.
+3. Restore any preset locally from **Upper Saved profile** or **Lower Saved
+   profile** without starting the washer.
+4. Manage saved presets using the native **Update programme profile**, **Rename
+   programme profile**, and **Delete programme profile** actions. Profiles live
+   in Home Assistant storage and survive reloads, restarts, and updates.
+
+### YAML automation examples
+
+Use Home Assistant's **device_id** (device-registry ID, not the Wi-Fi MAC) and
+stable `profile_id` values (visible in the saved-profile action dropdown and
+selector `profiles` attribute):
+
+Start an ordinary programme directly without altering UI drafts:
 
 ```yaml
 action: uplus_reborn.start_program
 data:
-  device_id: YOUR_DEVICE_ID
-  drum: upper
-  program: spin
-  spin_rpm: 400
-```
-
-Smart recipes accept source fabric IDs and stain IDs, but no manual scalar or
-option overrides. Even explicitly supplied `delay_hours: 0` or
-`enabled_functions: []` is rejected; omit manual settings instead.
-
-```yaml
-action: uplus_reborn.start_program
-data:
-  device_id: YOUR_DEVICE_ID
-  drum: upper
-  fabric: F1
-  stains: [W1, W15]
-```
-
-Ordinary stain removal uses semantic names rather than Smart `W` identifiers:
-
-```yaml
-action: uplus_reborn.start_program
-data:
-  device_id: YOUR_DEVICE_ID
+  device_id: YOUR_HA_DEVICE_ID
   drum: lower
   program: mix
   stains: [wine]
@@ -881,338 +191,124 @@ data:
   spin_rpm: 800
 ```
 
-Use zero or one of `blood`, `grass`, `wine`, `juice`, `soil`, `milk` with an
-ordinary program. Do not combine an ordinary stain with manual
-`temperature_c`/`wash_minutes` overrides or `eco`, `night`, `soak` functions:
-an atomic request with those conflicts is rejected, not silently normalized.
+Start a multi-stain Smart washing recipe (automation calls use uppercase source
+keys like `F1`, `W1`, `W15` and omit all manual settings/options):
 
-Available ordinary fields are `wash_minutes`, `temperature_c`, `rinses`,
-`spin_rpm`, `drying_mode`, `delay_hours`, `enabled_functions` and `stains`.
-Delay is the source UI's whole-hour **end time**, not an arbitrary start-delay
-duration. Use the native action editor and capability diagnostics for
-applicable values. There are no general raw-write or cloud-control actions.
-
-## Consumption accounting
-
-All four consumption entities retain Home Assistant water/energy device classes,
-literal appliance-reported L/kWh values, and `total_increasing` state classes.
-They are reported accounting, not independently calibrated or complete utility
-meters. The owner observed accumulation between programs and session-counter
-reset on panel power-off; neither pair has proven complete appliance coverage.
-
-The exact target profile uses unsigned 16-bit current fields and unsigned
-32-bit cumulative fields, with identity transforms, not a `/10` or `/1000`
-conversion. A synchronized completed upper Spin run correlated raw `2` with
-U+ `2 Liter` and raw `1` with U+ `1.0 kWh`; the target app's current-counter
-finish display does not scale those values. Cumulative L/kWh units are
-owner-confirmed, but an exact-target cumulative presenter and exact numeric
-cumulative-screen correlation were not recovered.
-
-The current fields sit amid the upper profile group, but are not upper-only:
-lower Spin changed them from `0`/`0` to `2`/`1`. Conversely, a lower-only
-Bedding cycle left them at `3`/`0` while cumulative totals increased by
-`+62`/`+25` at completion. The neutral **Power-on session** label does not
-promise per-cycle, per-drum, or whole-appliance coverage. The two drums do not
-have independently established consumption meters.
-
-Commit timing depends on the observed program and termination path. One upper
-Spin/400 run increased cumulative water by raw `+3` and electricity by raw `+1`
-during intermittent rotation (`0x0e`), with one minute remaining. Another
-committed water during that phase but left energy unchanged through completion
-and reported unlock. Stopping the observed lower Spin committed water `+2`
-but no cumulative energy. There is no universal commit-at-zero or
-commit-at-`Completed` rule. The owner observed that panel power-off may discard
-a pending cumulative update; counter persistence across mains loss is unknown.
-
-**Optional dashboards:** use **Cumulative electricity** for Energy and
-**Cumulative water** for Water only if these accounting limitations are
-acceptable. Dashboard compatibility is not certification of calibration or
-complete coverage. Do not add the session and cumulative pairs together or
-configure both as independent sources for the same appliance consumption.
-
-**Compatibility decision:** preserve existing values, L/kWh units, unique IDs,
-entity IDs, statistic IDs, and `total_increasing` semantics. This audit does not
-rescale values, relabel energy as Wh, synthesize resets, duplicate counters per
-drum, or rewrite statistical history. Category/presentation changes are
-separate from this numerical contract. See the
-[protocol accounting contract](docs/protocol/hwd120-b1558u.md#consumption-accounting-contract)
-for raw-word layouts and wire evidence boundaries.
-
-## Diagnostics and issue reports
-
-Download diagnostics from the integration entry before filing an issue. Ordinary
-configuration/state sections redact host and device ID. If temporary DEBUG
-capture has been enabled, the separate **`exchange_trace` section is not
-anonymized**: it can contain local addresses, MAC/device identifiers, opaque
-identifier bytes and complete original local UWT traffic. Review and redact that
-section before posting a download publicly.
-
-`health.latest_command` records the latest command outcome and sanitized cause.
-A Start refused because no program was staged is `not_dispatched` with cause
-`program_not_staged`; it does not represent an appliance command or polling error.
-State provenance attributes stain codes to each drum's `reported_settings`, not
-command-builder context. A retained stain code alone does not prove an active
-stain treatment. Native System Health retains its separate cached read-health
-summary.
-
-Include:
-
-- Home Assistant version;
-- integration version;
-- exact appliance model and firmware shown by the legacy app, if available;
-- what the physical display showed;
-- what action was attempted;
-- redacted integration diagnostics.
-
-Do not publish account tokens, APK files, decompiled sources, device identifiers,
-or unsanitized packet captures/diagnostic traces. Full local traces can be useful
-for private diagnosis; the integration never uploads them automatically.
-
-### Temporary exchange tracing
-
-Start from **Integration settings → Diagnostics**, check **Start a new diagnostic
-capture and enable DEBUG**, then review the selected budgets and replacement
-warning after **Next**. Final confirmation starts the capture.
-Alternatively, the integration entry's native **Enable debug logging** action
-starts finite captures on loaded entries using each entry's saved preferences.
-Capture observes only existing polls and control attempts; it opens no extra
-connections, changes no polling interval and never repeats commands. Neither
-start route authorizes appliance controls.
-
-Each entry groups requests, actual transmitted/received byte chunks, decoded
-observations and processing decisions by poll or control operation. TCP chunks
-are not frame boundaries, and a submitted write is not proof of appliance receipt
-or command success. Reports processed during command confirmation are included.
-This is an **integration exchange trace**, not a complete physical cycle history
-or an alternative source of authoritative state.
-
-Capture is memory-only, with independently bounded metadata and all three
-[selected per-entry budgets](#diagnostic-capture-preferences) enforced together.
-New defaults (1800 operations, 30600 events, 4 MiB raw bytes) accommodate 1440
-ordinary polls (`4d01 -> 6d01` + `0x73 -> 0x74`, 17 events and 464 raw bytes
-each) plus control evidence in the representative synthetic scenario; a four-hour
-1200/20400/4 MiB combination accommodates 960. These accelerated capacity
-observations are not real elapsed hours or guarantees under arbitrary traffic.
-Raw bytes are hex-encoded on download: the raw-byte limit is **not a total RAM
-or JSON limit**. Oldest operations are evicted first. A full buffer continues
-recording until stopped; partial captures, omitted events/bytes and overflow are
-marked honestly. See the [sizing evidence](docs/development-verification.md#real-isolated-core-fixture-docker)
-for measured traffic and metadata/export memory.
-
-The timer stops collection and preserves evidence for later **Download
-diagnostics**. Native **Disable debug logging** is always an integration-wide
-stop for every entry, including captures started from options. Downloads are
-nondestructive and network-free. A fresh start replaces the old trace even
-without an intervening appliance event; start/stop mid-operation is explicitly
-partial. Unchecking the options checkbox is not a stop action.
-Diagnostics distinguish the planned deadline from actual stop time/reason.
-Retained-range endpoints describe recorded observations, not uninterrupted
-coverage; partial operations, omissions and actual eviction-trigger counters
-explain loss. Repeated stop/download preserves this metadata. DEBUG state is
-reported separately: frozen evidence can coexist with independently enabled DEBUG.
-
-Entries have separate stores, limits and deadlines despite sharing native DEBUG.
-One expiry does not stop the others. The last active capture restores logging
-that it enabled, provided ownership is still unambiguous; earlier independent
-DEBUG is left enabled. Core does not identify the source of logger-change
-notifications. After an external notification, even an unrelated/same-level
-change, automatic restoration is relinquished rather than overwriting a newer
-user choice. Recording still stops on time, but DEBUG may remain on until
-**Disable debug logging**. Own notifications do not relinquish ownership.
-Explicit native Disable takes priority, including during a checked Save's reload.
-Unload/reload/Core restart stops and clears capture without automatic resumption,
-even if DEBUG remains enabled; saved preferences are not ongoing consent.
-Cloud onboarding, discovery, standalone CLI sessions and unrelated traffic are
-not part of this capture. Full traces are not anonymized; review before sharing.
-
-### System Health
-
-Open **Settings → System → Repairs → ⋮ → System information** to view
-U+ Reborn's native System Health section. It reports the integration version,
-configured/loaded/available entry counts, local polling mode, and anonymous
-per-entry lifecycle, configured polling interval, freshness, age of the last
-successful observation, and last sanitized failure category.
-Known transport failure stage (`connect` or `response`), independently assigned
-request/session correlations and measured duration survive in health/diagnostics
-and ordinary error reporting even without DEBUG. Missing evidence stays absent;
-this does not add requests, alter timeouts or retry commands.
-
-Capture fields show a colored Unicode/text status marker, snapshot timestamp,
-end timestamp and remaining seconds **when the report was collected**, plus each
-effective operation/event/raw-byte limit and its retained/free capacity. Active
-limits can differ from saved preferences for the next capture. Full capacity
-means oldest evidence is being replaced, not necessarily that recording stopped.
-These are native scalar snapshots, not a live countdown or CPU/RAM progress bars:
-close and reopen System Information to refresh them.
-
-The device card's **Visit** link opens this System Information dialog. Its native
-**Manage** link opens **Settings → Devices & services → Integrations**.
-
-Disabled or unloaded entries are not reported as actively available. An entry
-that has never been read successfully has no observation age. Stale or
-unavailable cached data is not a new appliance observation; a historical
-failure category can remain visible after recovery without making the entry
-currently unavailable.
-
-U+ Reborn's System Health callback reads cached integration state only: it
-does not request a refresh or connect to the appliance or cloud. Other
-integrations' sections may perform their own checks. Download the separate
-integration diagnostics for more detailed cached state and any retained opt-in
-exchange trace; review its privacy guidance before sharing.
-
-## Protocol documentation
-
-The [protocol index](docs/protocol.md) links model-specific references.
-[HWD120-B1558U](docs/protocol/hwd120-b1558u.md) describes this target's UDP discovery,
-TCP/UWT framing, EPP state words and commands with captured packet examples.
-It separates wire observations, source-defined fields and unresolved meanings;
-it is not a generic specification for every Haier appliance.
-
-The implementation is deliberately embedded under `custom_components/uplus_reborn/protocol`. It models one verified UWT appliance profile rather than claiming a generic Haier API.
-
-## Developer commands
-
-### Prerequisites and clean-checkout setup
-
-Run the commands below from the repository root. Use Python **3.13.2 or newer**
-within the CI-tested Python 3.13 line, [uv](https://docs.astral.sh/uv/) **0.13.4 or newer**, and
-Node.js **22** with npm, matching documentation CI.
-
-The public checkout contains the source, tests, dependency lockfiles, and
-tooling required for development. No maintainer workspace, agent instructions,
-private skills, credentials, APK, capture, or live appliance is required for
-the normal checks. Reusable development scripts belong in [`tools/`](tools/).
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the module map, change workflow,
-verification requirements, and release policy.
-
-### Python tests and lint
-
-For local Ruff feedback on Windows or Linux, use the native check:
-
-```sh
-python tools/delivery.py lint
+```yaml
+action: uplus_reborn.start_program
+data:
+  device_id: YOUR_HA_DEVICE_ID
+  drum: upper
+  fabric: F1
+  stains: [W1, W15]
 ```
 
-The command defaults to the current repository directory; use
-`python tools/delivery.py lint --repo PATH` to select another checkout. It reads
-the exact Ruff version from that working tree's `uv.lock` and runs it through
-uv's isolated tool cache, without Docker, a mutable project `.venv`, or a global
-Ruff installation. It checks the current files under `custom_components`,
-`tests` and `tools` using the repository configuration and normal Ruff discovery
-and exclusions, including unstaged edits and new non-ignored files.
+Restore a saved profile into the drum's draft (no Start) or start it immediately:
 
-This is check-only: source files and the Git index stay unchanged; ordinary uv
-and ignored Ruff caches are allowed. Arbitrary Ruff arguments, automatic fixes
-and formatting are not supported. A lockfile selection, acquisition or lint
-failure is reported rather than replaced with a global or latest Ruff.
-
-Native Windows success is platform-limited feedback: Ruff does not enforce
-EXE001/EXE002 there. **Canonical Linux CI/container lint is required before
-merge.** Windows Docker bind mounts can synthesize executable modes; ordinary
-local Ruff needs no source snapshot or permission rewriting. Keep the Linux
-container command for canonical lint:
-
-```sh
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- ruff check custom_components tests tools
+```yaml
+action: uplus_reborn.apply_profile
+data:
+  device_id: YOUR_HA_DEVICE_ID
+  drum: lower
+  profile_id: YOUR_SAVED_LOWER_PROFILE_ID
 ```
 
-Run the Home Assistant test suite in the reproducible Docker test container:
-
-```sh
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q
+```yaml
+action: uplus_reborn.start_profile
+data:
+  device_id: YOUR_HA_DEVICE_ID
+  drum: upper
+  profile_id: YOUR_SAVED_UPPER_PROFILE_ID
 ```
 
-Container commands use the exact locked `test` dependency group from
-`pyproject.toml` and `uv.lock` (`--no-group research`) inside an immutable
-`/opt/venv`, built once per lockfile/recipe fingerprint. If Docker is unavailable,
-`delivery.py docker` stops immediately with exit code 2; it does not block the
-native Ruff command. HA pytest, POSIX checks and real Core remain Docker-only;
-do not substitute native execution, mutable local `.venv` or WSL trees.
-Normal tests use isolated fixtures and must never contact live hardware.
+## Entities overview
 
-For a focused protocol change:
+U+ Reborn creates **48 read-only status entities** by default (35 primary + 13
+Diagnostic), expanding to **96 entities** when remote controls are enabled.
+Diagnostic entities stay enabled for history and troubleshooting while hidden
+from auto-generated dashboards.
 
-```sh
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q tests/test_protocol.py
-```
+### Status entities (read-only)
 
-### Documentation checks
+| Scope | Platform | Entities |
+| --- | --- | --- |
+| Live drum status (per drum) | Sensor | `Upper/Lower Programme now`, `Phase`, `State`, `Time left` |
+| Live drum lock (per drum) | Binary sensor | `Upper/Lower Door lock` |
+| Reported settings (per drum) | Sensor | `Upper/Lower Target temp.`, `Wash-stage time`, `Rinse count`, `Spin-stage time`, `Lower Drying mode` |
+| Reported option flags (per drum) | Binary sensor | `Upper/Lower Water Plus on`, `Easy Ironing on`, `Intensive on`, `Eco. wash on`, `Soak wash on`, `Night wash on`, `Smart wash on`, `End delay active` |
+| Machine & diagnostics | Binary sensor | `Power`, `Remote control`, `Local control lock`, `Upper/Lower fault` |
+| Counters, meters & faults | Sensor | `Upper/Lower Cycle count`, `Upper/Lower fault code`, `Power-on water`, `Power-on energy`, `Cumulative water`, `Cumulative electricity` |
 
-These commands work from PowerShell on Windows or a shell on Linux:
+### Opt-in control entities
 
-```sh
-npm ci --ignore-scripts
-npm run test:docs
-```
+| Platform | Scope | Entities |
+| --- | --- | --- |
+| Button | Per drum | `Upper/Lower Start`, `Pause`, `Resume`, `Cancel`, `Standby`, `Save profile` |
+| Text | Per drum | `Upper/Lower New profile` |
+| Select | Per drum (+ lower) | `Upper/Lower Saved profile`, `Programme`, `Smart washing`, `Wash (min)`, `Temp. (°C)`, `Rinses`, `Spin (RPM)`, `End delay (h)`, `Stains`, `Lower Drying` |
+| Switch | Per drum | `Upper/Lower Water Plus`, `Easy Ironing`, `Intensive`, `Eco. wash`, `Soak wash`, `Night wash` |
+| Switch | Shared configuration | `Sound`, `Child lock`, `Appliance power` *(disabled by default)* |
 
-The canonical command runs pinned `markdownlint-cli2` and strict Mermaid
-validation on the same sorted public file set: root Markdown (including
-`CHANGELOG.md`), Markdown recursively under `docs/`, and public PR/issue templates
-under `.github/`. It excludes agent instructions, other hidden/private
-directories, dependencies, environments and generated artifacts, and never
-follows file or directory symlinks.
+- **Water and Energy dashboards:** All four consumption sensors use literal
+  appliance-reported `L` and `kWh` units with `total_increasing` state classes.
+  If appliance-reported accounting caveats are acceptable for your setup, use
+  **Cumulative water** and **Cumulative electricity** in Home Assistant
+  dashboards — never sum or configure both the `Power-on` and `Cumulative` pairs
+  together. See [Consumption accounting](docs/reference.md#consumption-accounting).
+- **Full EN/RU entity directory:** See the
+  [entity-name register](docs/terminology/hwd120-b1558u-entity-naming.md) (which
+  documents exact U+200A card-sorting spaces),
+  [model terminology](docs/terminology/hwd120-b1558u.md#selected-base-terminology),
+  and [Entity categories and readback](docs/reference.md#entity-categories-and-readback).
+- **Summary template sensor (EN / RU):** Ready-to-copy YAML templates combining
+  both drums' status, phase, remaining time, active options, and faults into
+  one `sensor.hwd120_b1558u_summary` entity — see
+  [Summary template sensor](docs/summary-template-sensor.md).
 
-Both checks run even if one fails; either failure makes the command fail.
-An independent Markdown rule requires closing code fences, including in nested
-lists and blockquotes. Mermaid fences are extracted with a Markdown parser
-before strict validation, so nested diagrams are checked too. Diagnostics name
-the original source file and preserve source line numbers.
+## Troubleshooting and diagnostics
 
-Checks are read-only: there is no implicit fix or diagram rewrite. Syntax checks
-do not establish protocol correctness or visual diagram layout. Windows and
-Ubuntu CI use Node.js 22 and the same command, without private configuration or
-shell-specific wrappers.
+- **Washer shows `Unavailable`:** Normal when the appliance powers off or
+  disconnects from Wi-Fi. U+ Reborn keeps loaded entries alive and reconnects
+  automatically on the next poll once the washer is back online. Use
+  **Reconfigure** if its IP address changed.
+- **Buttons show `Unavailable` while online:** Check that physical **Remote
+  Control** is active, no drum **fault** is active, a valid draft is staged
+  (for **Start**), and the drum's **State** allows that command (for example,
+  **Pause** requires `Running` and **Resume** requires `Paused`).
+- **System Health:** Check **Settings → System → Repairs → ⋮ → System
+  information** (or **Visit** on the device card) for cached connection health,
+  last error stage, and active capture budgets without sending traffic.
+- **Reporting issues:** Download diagnostics from the integration entry and
+  include your Home Assistant version, integration version, physical panel
+  display state, and the attempted action.
 
-For changes to documentation tooling, also run its isolated behavioral fixtures:
+> [!WARNING]
+> Standard integration diagnostics redact your host and Device ID. If you
+> enable temporary DEBUG exchange tracing (via **Integration settings →
+> Diagnostics** or **Enable debug logging**), the separate **`exchange_trace`
+> section is NOT anonymized** and can include local IP addresses, MAC/device
+> identifiers, and raw UWT packets. Always review and redact diagnostics before
+> posting publicly. See
+> [Temporary exchange tracing](docs/reference.md#temporary-exchange-tracing) and
+> [SECURITY.md](SECURITY.md).
 
-```sh
-npm run test:docs:tooling
-```
+## Supported models and contributing
 
-### Reproducible artifacts and isolated Core
+The legacy Haier U+ APK lists two additional laundry models that are **not**
+tested or supported: `HW120_BD14889U1` and `HWD100-BD1499U1`. Owners of those
+models can help add support by opening a GitHub issue with the exact model,
+observed behavior, and redacted diagnostics.
 
-The standard-library artifact/evidence CLI works on Windows and Linux:
-
-```sh
-uv run --no-project --python 3.13 python tools/delivery.py build --commit HEAD --output build/delivery-candidate
-uv run --no-project --python 3.13 python -m unittest discover -s tools -p "test_*.py" -v
-```
-
-It packages committed LF bytes, validates complete member hashes and can reuse
-successful checks for explicitly unchanged inputs. The Docker real-Core
-fixture boots that artifact against a query-only loopback peer and records
-both-drum authoritative state and clean shutdown. It is not hardware or browser
-acceptance. See [scoped verification and fixture setup](docs/development-verification.md)
-for preparation, input-fingerprint limits and finite completion criteria.
-
-### Protocol CLI
-
-Use the configured Python test environment above. Help and decoding are
-offline; provide your own sanitized binary input for `decode`:
-
-```sh
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python -m custom_components.uplus_reborn.protocol --help
-uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python -m custom_components.uplus_reborn.protocol decode --file sanitized-packet.bin
-```
-
-`decode` supports `6d01` state frames as well as `0x04`/`0x74` alarm payloads.
-`status` contacts a real appliance (`4d01 -> 6d01` followed by read-only
-`0x73 -> 0x74`, reporting decoded `alarms`) and is not a development smoke test. Only
-after explicit authorization, replace the documentation-only address and
-private device-ID file in this read-only example:
-
-```sh
-uv run --frozen --group test --no-group research python -m custom_components.uplus_reborn.protocol status --allow-live --host 192.0.2.10 --device-id-file ./private-device-id.txt
-```
-
-Hardware-control commands require their additional physical checks and explicit
-gates. A successful read does not authorize Start, Cancel, or another write.
-
-HA atomic Start and CLI Start share pure complete-intent preparation, not input
-grammar or authorization. HA delay inputs use whole hours; CLI uses half-hour
-steps. CLI `--stain` accepts only Smart `W1`–`W30` identifiers with `--fabric`;
-ordinary stain names remain an HA action feature. Preparing an intent neither
-edits interactive drafts nor authorizes an appliance transaction.
+| Documentation | Purpose |
+| --- | --- |
+| [Operational & technical reference](docs/reference.md) | Deep discovery rules, safety interlocks, readback limits, accounting, capture budgets, System Health |
+| [Summary template sensor](docs/summary-template-sensor.md) | Ready-to-copy English and Russian YAML template sensor (`sensor.hwd120_b1558u_summary`) and dashboard card |
+| [HWD120-B1558U protocol specification](docs/protocol/hwd120-b1558u.md) | UDP/TCP UWT framing, EPP state/command layouts, wire captures ([protocol index](docs/protocol.md)) |
+| [Entity-name register](docs/terminology/hwd120-b1558u-entity-naming.md) | Bilingual EN/RU entity names & ordering ([machine terminology](docs/terminology/hwd120-b1558u.md)) |
+| [Contributing guide](CONTRIBUTING.md) | Repository map, conventions, translations, PR/issue rules |
+| [Development & verification](docs/development-verification.md) | Prerequisites, test/lint/docs commands, isolated Core Docker verification |
+| [Release workflow](docs/release-workflow.md) | Versioning, immutable release artifacts, HACS acceptance |
+| [Security policy](SECURITY.md) | Private vulnerability reporting and sensitive-data boundaries |
 
 ## License
 
@@ -1220,7 +316,7 @@ Source code, tests, tooling, and files outside `docs/` are licensed under the
 [MIT License](LICENSE), copyright 2026 U+ Reborn contributors.
 
 Material in [`docs/`](docs/) is licensed under the
-[Creative Commons Attribution 4.0 International License](docs/LICENSE).
-Required attribution: **U+ Reborn contributors**, a link to
+[Creative Commons Attribution 4.0 International License](docs/LICENSE). Required
+attribution: **U+ Reborn contributors**, a link to
 `https://github.com/Zuz666/uplus-reborn`, a link to CC BY 4.0, and an
 indication of changes when applicable.

@@ -3,7 +3,7 @@
 Use the smallest acceptance set that covers the changed behavior. Normal checks
 never contact an appliance; physical evidence and deployment permission are
 separate from software verification. Start with [CONTRIBUTING](../CONTRIBUTING.md)
-for the module map and the [README commands](../README.md#developer-commands).
+for the module map and the [prerequisites below](#prerequisites-and-clean-checkout-setup).
 
 ## Choose checks by impact
 
@@ -22,10 +22,65 @@ Recorder/statistics checks apply to identity/history, units or state-class chang
 Do not rerun them for unrelated prose or command-error wording. A new report or
 phase does not invalidate an unchanged successful result.
 
+## Prerequisites and clean-checkout setup
+
+Run all commands from the repository root using **Python 3.13.2+** (within the
+CI-tested 3.13 line), [uv](https://docs.astral.sh/uv/) **0.13.4 or newer**, and
+**Node.js 22** with npm. A clean public checkout contains all code, tests,
+lockfiles, and tools — no private workspace, credentials, APK, or live
+appliance is required.
+
+### Core verification commands
+
+```sh
+# Local Ruff check (Windows or Linux; check-only using exact uv.lock version)
+python tools/delivery.py lint
+
+# Canonical Linux Docker Ruff (required for EXE001/EXE002 before merge)
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- ruff check custom_components tests tools
+
+# Home Assistant pytest suite in reproducible Docker test container
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- pytest -q tests/test_protocol.py
+
+# Public documentation lint + strict Mermaid, tooling regressions, and PR label checks
+npm ci --ignore-scripts
+npm run test:docs
+npm run test:docs:tooling
+npm run test:labels
+
+# Commit-only artifact build and standalone tools unit tests (Windows and Linux)
+uv run --no-project --python 3.13 python tools/delivery.py build --commit HEAD --output build/delivery-candidate
+uv run --no-project --python 3.13 python -m unittest discover -s tools -p "test_*.py" -v
+```
+
+### Protocol CLI commands
+
+Offline `--help` and packet decoding (`6d01` state frames and `0x04`/`0x74`
+alarms) use sanitized files:
+
+```sh
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python -m custom_components.uplus_reborn.protocol --help
+uv run --no-project --python 3.13 python tools/delivery.py docker --target test -- python -m custom_components.uplus_reborn.protocol decode --file sanitized-packet.bin
+```
+
+`status` sends a read-only `4d01 -> 6d01` + `0x73 -> 0x74` exchange to an
+appliance and is **not** a development smoke test; replace the documentation-only
+host and private ID file only with explicit authorization:
+
+```sh
+uv run --frozen --group test --no-group research python -m custom_components.uplus_reborn.protocol status --allow-live --host 192.0.2.10 --device-id-file ./private-device-id.txt
+```
+
+CLI Start and HA `start_program` share pure `prepare_intent` preparation, while
+input grammar differs: HA delay uses whole hours and accepts ordinary stains,
+whereas CLI delay uses half-hour steps and `--stain` pairs only Smart `W1–W30`
+IDs with `--fabric`.
+
 ## Native local Ruff (Windows and Linux)
 
-From a clean public checkout, use the Python and uv prerequisites in
-[README](../README.md#prerequisites-and-clean-checkout-setup); uv **0.13.4 or newer**
+From a clean public checkout, use the
+[prerequisites above](#prerequisites-and-clean-checkout-setup); uv **0.13.4 or newer**
 is required. No private workspace, Docker, global Ruff or mutable project
 `.venv` is needed:
 
@@ -315,138 +370,43 @@ acceptance; only a successful recorded execution proves it.
 
 The versioned public Core contracts are the native logger commands
 ([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/logger/websocket_api.py),
-[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/logger/websocket_api.py))
+[2026.11.2](https://github.com/home-assistant/core/blob/2026.11.2/homeassistant/components/logger/websocket_api.py))
 and authenticated `/api/diagnostics/config_entry/{entry_id}` download
 ([2026.2.3](https://github.com/home-assistant/core/blob/2026.2.3/homeassistant/components/diagnostics/__init__.py),
-[2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/diagnostics/__init__.py)).
+[2026.11.2](https://github.com/home-assistant/core/blob/2026.11.2/homeassistant/components/diagnostics/__init__.py)).
 The fixture does not read private Core logger storage or invoke diagnostic
 callbacks in place of these native requests.
 
-**Revised retention sizing: measured exact-package #81 continuation.**
+### Diagnostic capture retention sizing
 
-The committed integration `275d515` was exercised in isolated Core 2026.2.3,
-CPython 3.13.15. Counts below include 25/38 additional-report polls in the
-four-/six-hour workloads. The original confirmed Start remains in the first two
-cases. Their durations are selected deadlines; execution is accelerated, not
-four/six elapsed hours.
+Current capture defaults are **1800** operations, **30600** events (expanded
+from historical 18000 after adding per-poll `0x73 -> 0x74` alarm queries), and
+**4 MiB** (4,194,304 raw bytes; maximum configurable raw limit **8 MiB** /
+8,388,608 bytes), with a separate 6-hour finite deadline. All three limits apply
+simultaneously per entry within the
+[documented bounds](reference.md#diagnostic-capture-preferences); a reference poll
+uses 17 events and 464 raw bytes.
 
-| Selected budgets and duration | Executed polls + Start | Retained operations | Retained events | Raw bytes | Omitted operations |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1200 / 12000 / 4 MiB, 4 hours | 960 + 1 | 961 | 9734 | 260703 | 0 |
-| 1800 / 18000 / 4 MiB, 6 hours | 1440 + 1 | 1441 | 14586 | 390632 | 0 |
-| 1800 / 18000 / 385000 bytes, 6 hours | 1440 + 1 | 1422 | 14372 | 384826 | 19 |
+Measured accelerated workloads (exercised under Core `2026.2.3` / `2026.10.4`
+committed fixtures; representative four-/six-hour runs included one Spin/400
+Start and occasional fragmented/unmatched reports):
 
-The last case's native enabled-poll review estimates 21705 seconds without a
-capacity warning. Actual additional reports nevertheless evict Start: all 19
-whole-operation evictions are raw-triggered, with 5806 omitted raw bytes and no
-retained partial operation. This demonstrates why no warning is not a completeness
-claim. Matching counts were observed under Core 2026.10.4 / CPython 3.14.9.
+| Workload | Retained ops / events | Raw payload | Total store graph (MiB) | Compact JSON (MiB) | Additional export/JSON peak (MiB) | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Four-hour representative (`1200 / 12000 / 4 MiB`) | 961 / 9734 | 260,703 B | 10.24 | 4.64 | 19.12 | Initial Start retained; accelerated polls |
+| Six-hour representative (`1800 / 18000 / 4 MiB`) | 1441 / 14586 | 390,632 B | 15.35 | 6.95 | 28.66 | Initial Start retained; accelerated polls |
+| Raw-pressure eviction (`1800 / 18000 / 385 KB`) | 1422 / 14372 | 384,826 B | — | — | — | Native estimate 21,705 s with no warning; actual extra reports evicted 19 oldest ops (5,806 B) including Start |
+| Direct synthetic maxima (`1800 / 18000 / 8 MiB`) | 1800 / 18000 | 8.00 MiB | 155.49 | 144.52 | 316.28 | Metadata-heavy stress records; demonstrates why **8 MiB raw != 8 MiB RAM** |
+| Direct 9 MiB single observation | 1 / 1 | 8.00 MiB | 8.00 | 16.00 | 52.01 | Truncates to 8 MiB max, omits 1 MiB, marks operation partial |
 
-Memory is a deduplicated reachable `sys.getsizeof` graph, not RSS or exclusive
-ownership. The additional `tracemalloc` peak starts after the retained store
-already exists and covers export plus compact UTF-8 JSON. Values below use MiB
-(1048576 bytes). Both maximum-pressure cases fill 8 MiB raw and all simultaneous
-operation/event slots with bounded metadata-heavy observations, not wire frames.
-
-| Workload | Python raw objects | Python metadata/containers | Total store graph | Compact JSON | Additional export/JSON peak |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Four-hour representative case | 0.31 | 9.93 | 10.24 | 4.64 | 19.12 |
-| Six-hour representative case | 0.46 | 14.88 | 15.35 | 6.95 | 28.66 |
-| Previous maxima: 600 / 12000 / 8 MiB | 8.02 | 102.79 | 110.81 | 106.12 | 235.18 |
-| New maxima: 1800 / 18000 / 8 MiB | 8.06 | 147.43 | 155.49 | 144.52 | 316.28 |
-
-An 8 MiB raw limit is therefore **not** an 8 MiB memory allowance; diagnostic
-export can allocate substantially more memory temporarily. These are measured
-fixtures, not a formal process-memory ceiling or a guarantee for arbitrary traffic.
-The separate oversized case retains 8 MiB of a 9 MiB observation, marks its
-operation partial and reports the omitted 1 MiB.
-
-**Default retention sizing: measured coordinator/TCP sample from #80.**
-
-Current default budgets are 1800 operations, 30600 events and 4,194,304 raw
-bytes (expanded from the historical #80 18000-event default after adding
-short-session alarm queries), with a separate six-hour finite deadline;
-explicitly saved values remain.
-They are configurable within the [documented bounds](../README.md#diagnostic-capture-preferences).
-The original 300/6000 sample below is historical reference, not current defaults
-or evidence of new maximum RAM costs. All three budgets apply together, including
-to one oversized operation. Raw-byte capacity alone never defines total memory.
-
-The following run used Linux Docker, CPython 3.13.15 and actual coordinator
-refresh/Start paths with the existing synthetic TCP fixtures. A normal poll
-received one correlated report; the fragmented case split an unmatched frame then
-coalesced its tail with a correlated report. Start used initialization, an accepted
-response and an independent active-state report. Refusal sent no bytes.
-Sizes include a fresh store/export envelope; timing/ID lengths can vary.
-
-| Single operation | Events | Raw bytes | JSON metadata/framing bytes | Full compact JSON bytes | Python metadata/container bytes | Python raw-object bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Ordinary poll | 10 | 266 | 4799 | 5331 | 18345 | 332 |
-| Fragmented/unmatched poll | 14 | 439 | 6907 | 7785 | 23171 | 538 |
-| Confirmed Spin/400 Start | 31 | 845 | 9905 | 11595 | 33654 | 1076 |
-| Local Start refusal | 0 | 0 | 2084 | 2084 | 9112 | 0 |
-
-| Executed workload | Retained polls / controls | Events | Raw KiB | Compact JSON MiB | Python store graph MiB | Additional export/JSON peak MiB |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 240 ordinary polls | 240 / 0 | 2400 | 62.34 | 1.14 | 2.52 | 4.71 |
-| 360 ordinary polls | 300 / 0 | 3000 | 77.93 | 1.43 | 3.16 | 5.89 |
-| 240 fragmented/unmatched polls | 240 / 0 | 3360 | 102.89 | 1.70 | 3.64 | 6.87 |
-| 240 ordinary polls + 16 Starts | 240 / 16 | 2896 | 75.55 | 1.31 | 2.91 | 5.42 |
-
-The 360-poll run retained operation IDs 61–360 without partial operations; the
-mixed run retained all 256 operations. With the old 20-operation budget, the same
-240-poll workload retained only IDs 221–240. These are accelerated capacity
-measurements: 240 ordinary 15-second poll slots correspond to about an hour;
-300 correspond to about 75 minutes. This does not establish wall-clock coverage
-under arbitrary command/report intensity, physical-cycle completeness or latency.
-
-Memory method: walk the captured store's reachable Python object graph using
-`sys.getsizeof`, deduplicating object identities, including dictionaries, slot
-records, containers and referenced strings once. Raw-object sizes include `bytes`
-overhead; remaining graph bytes are metadata/containers, not raw payload. This
-is not process RSS or exclusive ownership accounting. Compact UTF-8 JSON uses
-`separators=(",", ":")`; subtracting its ASCII hex content gives metadata/framing
-size. `tracemalloc` starts after the captured store exists and measures additional
-allocations through `export()` and JSON encoding, including transient serializer
-buffers. Its peak is additional to the existing store, not a 4 MiB total-memory
-promise, and varies with Python/platform and workload. No measurement machinery
-runs in the integration or changes production polling.
-
-**Previous-limit sizing: initial issue #81 acceptance.**
-
-The same public `exchange-trace` scenario was exercised from the committed package
-on minimum Core 2026.2.3 / Python 3.13.15 and current Core 2026.10.4 / Python 3.14.9.
-Both retained the same operation/event/raw counts below. Memory/export figures
-use the current-Core run and the method above; timestamps and Python versions
-can change serialized sizes and peak allocations slightly.
-
-| Workload | Retained operations / events | Original raw bytes | Missing or partial evidence |
-| --- | ---: | ---: | --- |
-| 240 ordinary TCP polls | 240 / 2400 | 63840 | None |
-| 720 ordinary TCP polls | 600 / 6000 | 159600 | 120 oldest operations evicted |
-| Direct synthetic previous combined maxima | 600 / 12000 | 8388608 | None |
-| One direct synthetic 9 MiB observation | 1 / 1 | 8388608 | 1048576 raw bytes omitted; operation partial |
-
-| Workload | Python raw objects MiB | Python metadata/container MiB | Python store graph MiB | Compact JSON MiB | Additional export/JSON peak MiB |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 240 ordinary TCP polls | 0.08 | 2.45 | 2.53 | 1.14 | 4.71 |
-| 720 ordinary TCP polls | 0.19 | 6.12 | 6.31 | 2.85 | 11.78 |
-| Direct synthetic previous combined maxima | 8.02 | 102.79 | 110.81 | 106.12 | 235.18 |
-| One direct synthetic 9 MiB observation | 8.00 | <0.01 | 8.00 | 16.00 | 52.01 |
-
-The direct store-policy pressure uses deliberately metadata-heavy observations,
-not ordinary appliance frames. It demonstrates why an **8 MiB raw budget is not
-an 8 MiB RAM budget**: metadata and transient export allocations are separate.
-The additional peak is not total process RSS or an exclusive-memory upper bound.
-The oversized case retains 4612 metadata/container bytes, not zero.
-
-The previous-limit ordinary run keeps the newest 600 complete polls after 720
-operations, with honest oldest-first omissions. At 15 seconds per poll that is
-9000 seconds of nominal capacity; current selectable timers reach 21600 seconds.
-Current maxima are 1800 / 30600 / 8 MiB (17 events and 464 raw bytes per reference poll); see the historical #81 sizing above.
-These accelerated tests establish capacity, not elapsed-hour observation or
-guaranteed history under arbitrary traffic. Explicit legacy 300/6000 acceptance
-separately keeps all 240 first polls, then the newest 300 of 360 polls.
+Memory measurements walk the store's deduplicated reachable Python object graph
+via `sys.getsizeof` (separating raw `bytes` objects from metadata/containers) and
+measure `tracemalloc` allocation peaks after store creation through `export()`
+and compact UTF-8 JSON encoding (`separators=(",", ":")`). Peaks are additive to
+the existing store, not process RSS ceilings or wall-clock completeness
+guarantees under arbitrary traffic. Explicit legacy `300 / 6000` fixtures also
+verify whole-operation oldest-first eviction (`240/240` retained, then newest
+`300/360`).
 
 The `offline` scenario refuses the first real TCP connection while loading a
 previously configured entry. It requires a loaded entry, absent authoritative
