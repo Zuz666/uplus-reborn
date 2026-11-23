@@ -47,37 +47,19 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: read
     env:
-      # Temporary official-source build; return to a compatible published image in #27.
-      HASSFEST_COMMIT: 853491cd0bdfbbf54b24eab9306ded23e3c43925
-      HASSFEST_SOURCE_SHA256: a4990d3bb05e28063d9fd5da6d37995e23894179de252384cf4dfeebb5250c2f
-      HASSFEST_BASE: python:3.14.8-alpine@sha256:7f2ec713f0436c59df2362d973b6a05af9e87ba78f0e94f5245c302984a7a1fd
+      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.11.3@sha256:d5269221a05a4b744f2bf88d22af9449f8c490bbc54c9097a9c53cd9cfc76bfe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Fetch verified official Hassfest source
-        run: |
-          curl --fail --silent --show-error --location --proto '=https' \
-            --output "$RUNNER_TEMP/hassfest-source.tar.gz" \
-            "https://codeload.github.com/home-assistant/core/tar.gz/$HASSFEST_COMMIT"
-          echo "$HASSFEST_SOURCE_SHA256  $RUNNER_TEMP/hassfest-source.tar.gz" | sha256sum -c -
-          mkdir "$RUNNER_TEMP/hassfest-source"
-          tar -xzf "$RUNNER_TEMP/hassfest-source.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/hassfest-source"
-      - name: Cache construction of the unchanged official Hassfest recipe
-        uses: ./.github/actions/build-image
-        with:
-          context: ${{ runner.temp }}/hassfest-source
-          file: ${{ runner.temp }}/hassfest-source/script/hassfest/docker/Dockerfile
-          tag: uplus-hassfest:${{ env.HASSFEST_COMMIT }}
-          scope: hassfest
-          build-contexts: python:3.14.8-alpine=docker-image://${{ env.HASSFEST_BASE }}
+      - name: Pull digest-pinned official Hassfest image
+        run: docker pull "$HASSFEST_IMAGE"
       - name: Validate without network or checkout writes
         run: |
           docker run --rm --network=none \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/github/workspace,readonly" \
-            "uplus-hassfest:$HASSFEST_COMMIT"
+            "$HASSFEST_IMAGE"
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
