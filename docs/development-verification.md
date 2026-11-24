@@ -126,26 +126,6 @@ The native-Ruff exception does not authorize native HA pytest, POSIX checks or
 real Core. Those checks remain Docker-based; missing required Docker stops
 them, while native Ruff remains available. WSL is not an alternative.
 
-## Temporary Hassfest source build
-
-The Hassfest job builds the official Home Assistant Dockerfile from a fixed
-upstream commit because the published validator predates manifest categories.
-The workflow pins the source archive by SHA-256 and overrides the recipe's Python
-base by immutable digest. The official recipe and validator are not patched;
-the selected source includes both categories support and uv 0.13.4.
-
-Build-time dependency downloads are separate from validation: the validator runs
-without network, with the candidate checkout mounted read-only and no credentials
-passed into the container. The required Hassfest check and aggregate CI gate
-remain enforced. This development-tool revision does not raise the integration's
-minimum supported Core version or replace its isolated runtime checks.
-
-The pins and commands live in [the validation workflow](../.github/workflows/validate.yml).
-[Issue #27](https://github.com/Zuz666/uplus-reborn/issues/27) tracks removal of this
-temporary build when a compatible official image is available. Verify that
-replacement accepts the valid manifest and still rejects invalid metadata before
-switching to its immutable digest; remove the obsolete build steps and guidance.
-
 ## Commit-only artifact tooling (Windows and Linux)
 
 The standard-library CLI requires Python 3.13 or newer and Git; no Home Assistant,
@@ -233,8 +213,8 @@ Current Core does not depend on the minimum dependency lock. Fingerprints identi
 construction inputs, not a promise of byte-identical independently rebuilt images.
 
 The [shared build action](../.github/actions/build-image/action.yml) pins Buildx
-and BuildKit and uses three bounded GitHub cache scopes: `test`, `core-current`
-and `hassfest`. Only a canonical **CI** push on `master` exports cache entries.
+and BuildKit and uses two bounded GitHub cache scopes: `test` and
+`core-current`. Only a canonical **CI** push on `master` exports cache entries.
 PRs, manual Release and HACS acceptance import caches but cannot promote their
 builds into the trusted master cache. No image is pushed and no successful test
 result is cached. Validation and isolated scenarios still execute.

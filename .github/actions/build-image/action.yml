@@ -11,16 +11,13 @@ inputs:
     description: Local image tag; images are never pushed
     required: true
   scope:
-    description: One of test, core-current or hassfest
+    description: One of test or core-current
     required: true
   target:
     description: Optional named Docker stage
     default: ""
   build-args:
     description: Explicit newline-separated build arguments
-    default: ""
-  build-contexts:
-    description: Explicit upstream base overrides, if required
     default: ""
 outputs:
   imageid:
@@ -35,7 +32,7 @@ runs:
         CACHE_SCOPE: ${{ inputs.scope }}
       run: |
         case "$CACHE_SCOPE" in
-          test|core-current|hassfest) ;;
+          test|core-current) ;;
           *) echo 'Unsupported environment cache scope.' >&2; exit 2 ;;
         esac
     - name: Set up the pinned isolated builder
@@ -60,7 +57,6 @@ runs:
         tags: ${{ inputs.tag }}
         platforms: linux/amd64
         build-args: ${{ inputs.build-args }}
-        build-contexts: ${{ inputs.build-contexts }}
         push: false
         load: true
         provenance: false
