@@ -13,7 +13,6 @@ import os
 import platform
 import re
 import sys
-import tomllib
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -185,13 +184,20 @@ def produce(repo: Path, candidate: Path, metadata: dict, context: dict) -> dict:
 
 
 def expected_core_versions(repo: Path, commit: str) -> dict[str, str]:
-    locked = tomllib.loads(git(repo, "show", f"{commit}:uv.lock").decode())
-    minimum = [p["version"] for p in locked["package"] if p["name"] == "homeassistant"]
     recipe = git(repo, "show", f"{commit}:tools/Dockerfile").decode()
-    current = re.search(r"(?m)^FROM ghcr\.io/home-assistant/home-assistant:([^@ ]+)@sha256:[0-9a-f]{64} AS core-current$", recipe)
-    if len(minimum) != 1 or current is None:
-        raise ValueError("Missing pinned minimum/current Core version")
-    return {"test": minimum[0], "core-current": current.group(1)}
+    versions: dict[str, str] = {}
+    for target in TARGETS:
+        match = re.search(
+            rf"(?m)^FROM ghcr\.io/home-assistant/home-assistant:([^@ ]+)@sha256:[0-9a-f]{{64}} AS {re.escape(target)}$",
+            recipe,
+        )
+        if match is None:
+            raise ValueError("Missing pinned minimum/current Core version")
+        versions[target] = match.group(1)
+    declared_min = json.loads(git(repo, "show", f"{commit}:hacs.json").decode()).get("homeassistant")
+    if not isinstance(declared_min, str) or versions["test"] != declared_min:
+        raise ValueError("Minimum Docker Core target differs from hacs.json")
+    return versions
 
 
 def validate_core_receipts(rows: dict[str, dict], artifact: dict, expected_version: str) -> None:

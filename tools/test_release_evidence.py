@@ -4,14 +4,19 @@ from __future__ import annotations
 import copy
 import hashlib
 import io
+import json
+import subprocess
+import tempfile
 import unittest
 import zipfile
+from pathlib import Path
 
 from release_evidence import (
     REQUIRED_JOBS,
     SCENARIOS,
     artifact_metadata,
     choose_source_run,
+    expected_core_versions,
     validate_core_receipts,
     validate_matrix_archive,
     validate_source_jobs,
@@ -154,6 +159,37 @@ class AuthenticatedMatrixBytesTests(unittest.TestCase):
             validate_matrix_archive(bytes(corrupted), backend, payload)
         with self.assertRaises(ValueError):
             validate_matrix_archive(raw, {**backend, "size_in_bytes": 0}, payload)
+
+
+class ExpectedCoreVersionsTests(unittest.TestCase):
+    def test_reads_both_pinned_targets_and_enforces_hacs_minimum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            for cmd in (
+                ["git", "-C", str(repo), "init", "-q"],
+                ["git", "-C", str(repo), "config", "user.name", "Evidence Test"],
+                ["git", "-C", str(repo), "config", "user.email", "evidence@example.invalid"],
+                ["git", "-C", str(repo), "config", "commit.gpgsign", "false"],
+            ):
+                subprocess.run(cmd, check=True)
+            (repo / "tools").mkdir()
+            dockerfile = (
+                f"FROM ghcr.io/home-assistant/home-assistant:2026.2.3@sha256:{'a' * 64} AS test\n"
+                f"FROM ghcr.io/home-assistant/home-assistant:2026.11.2@sha256:{'b' * 64} AS core-current\n"
+            )
+            (repo / "tools" / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+            (repo / "hacs.json").write_text(json.dumps({"homeassistant": "2026.2.3"}), encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "matching"], check=True)
+            sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(expected_core_versions(repo, sha), {"test": "2026.2.3", "core-current": "2026.11.2"})
+
+            (repo / "hacs.json").write_text(json.dumps({"homeassistant": "2026.5.0"}), encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "mismatch"], check=True)
+            mismatch_sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            with self.assertRaisesRegex(ValueError, "hacs.json"):
+                expected_core_versions(repo, mismatch_sha)
 
 
 if __name__ == "__main__":

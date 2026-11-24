@@ -6,7 +6,7 @@ Security fixes target the current minor release line. Install its latest patch.
 
 | Version | Security support |
 | --- | --- |
-| 1.0.x | Supported |
+| 1.1.x | Supported |
 | Unreleased development snapshots | Reports welcome; no separate support commitment |
 
 Older release lines receive no routine security backports. The table does not
@@ -69,19 +69,22 @@ configured checks, not merely this policy's wording.
 
 ## Development dependency alerts
 
-The root `uv.lock` describes verification and research environments, not the
-dependencies installed by HACS. The fixed minimum-Core compatibility environment
-includes Core-owned exact dependency pins. Keep it confined to the documented
-offline Docker checks and trusted synthetic inputs; never deploy that image or
-use it to process untrusted files. A minimum compatible Core version is not a
-recommendation to run an unpatched production Home Assistant.
+The root `uv.lock` covers only the integration's declared discovery dependency,
+test-harness plugins, Ruff, and local research tooling—not the Home Assistant
+Core packages installed by HACS. Both the minimum supported Core (`2026.2.3`) and
+current Core (`2026.11.2`) test environments come from digest-pinned official
+Home Assistant container images declared in `tools/Dockerfile`. Keep the
+minimum-Core compatibility image confined to offline Docker verification and
+trusted synthetic inputs; never deploy that image in production or use it to
+process untrusted files. A minimum compatible Core version is not a
+recommendation to run an unpatched Home Assistant release.
 
-Network-facing download/build tools are separate from that compatibility fixture
-and must use patched versions. In particular, uv 0.13.4 is the minimum accepted
-version for its compromised-CA-store fix. Documentation dependencies are tooling,
-not frontend libraries shipped with the integration.
+Network-facing download/build tools remain separate from that compatibility
+fixture and must use patched versions. In particular, uv 0.13.4 is the minimum
+accepted version for its compromised-CA-store fix. Documentation dependencies are
+tooling, not frontend libraries shipped with the integration.
 
 Triage each advisory by actual use, available compatible fixes and containment.
 A development label alone is not a reason to dismiss a finding. Retained
-Core-pinned or otherwise unpatched findings stay visible with their rationale
-in the dependency issue; they are not reported as fixed or vulnerability-free.
+dependency alerts stay visible with their rationale in the open tracking issue;
+they are not reported as fixed or vulnerability-free.

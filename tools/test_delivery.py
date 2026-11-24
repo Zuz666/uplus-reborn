@@ -568,11 +568,14 @@ class DockerWorkflowTests(Workspace):
         self.assertEqual(before["test"], delivery.docker_image_tag(self.repo, "test"))
 
     def test_shared_python_recipe_and_bootstrap_inputs_invalidate_both_targets(self):
-        for change in ("python", "bootstrap"):
+        for change in ("node", "bootstrap"):
             before = {target: delivery.docker_image_tag(self.repo, target) for target in delivery.DOCKER_TARGETS}
-            if change == "python":
+            if change == "node":
                 path = self.repo / "tools/Dockerfile"
-                path.write_text(path.read_text(encoding="utf-8").replace("python:3.13@", "python:3.14@", 1), encoding="utf-8")
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace("node:22.23.3-alpine3.24@", "node:22.24.0-alpine3.24@", 1),
+                    encoding="utf-8",
+                )
             else:
                 path = self.repo / "tools/ha_smoke.py"
                 path.write_text(path.read_text(encoding="utf-8").replace('"http"', '"http", "websocket_api"'), encoding="utf-8")

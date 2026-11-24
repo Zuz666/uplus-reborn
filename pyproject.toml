@@ -11,31 +11,55 @@ research = [
     "androguard>=4.1.4",
     "capstone>=5.0.9",
     "pyelftools>=0.33",
-    "zeroconf>=0.148.0,<0.149.0",
+    "zeroconf>=0.150.0",
 ]
 test = [
     "pytest-homeassistant-custom-component==0.13.316",
     "ruff==0.17.6",
-    "aiodhcpwatcher==1.2.1",
-    "aiodiscover==2.7.1",
-    "cached-ipaddress==1.0.1",
-    "home-assistant-frontend==20260128.6",
-    "ifaddr==0.2.0",
 ]
 
 [tool.uv]
 required-version = ">=0.13.4"
-conflicts = [
-    [
-        { group = "research" },
-        { group = "test" },
-    ],
-]
 default-groups = ["research"]
+# Minimum Home Assistant Core 2026.2.3 and Core-owned packages live in the
+# digest-pinned official base image (tools/Dockerfile), never duplicated in uv.lock.
+exclude-dependencies = [
+    "homeassistant",
+    "aiohttp",
+    "requests",
+    "pydantic",
+    "sqlalchemy",
+    "numpy",
+    "paho-mqtt",
+    "coverage",
+    "tqdm",
+    "httpx",
+    "packaging",
+    "pyyaml",
+    "typing-extensions",
+    "python-dateutil",
+    "tzdata",
+    "pip",
+    "urllib3",
+    "certifi",
+    "idna",
+    "charset-normalizer",
+    "yarl",
+    "multidict",
+    "propcache",
+    "attrs",
+]
+override-dependencies = [
+    "pytest>=9.0.3",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = [".", "tools"]
+
+[tool.ruff]
+src = [".", "tools"]
 
 [tool.ruff.lint]
 # Preserve the datetime checks removed from Ruff's defaults in 0.17.

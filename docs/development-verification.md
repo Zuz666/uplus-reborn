@@ -197,20 +197,23 @@ files remain identical; transfer checks still bind the exact archive SHA-256.
 
 `delivery.py docker-context --target test --output build/test-context` creates a
 new minimal build context; `--target core-current` selects the other environment.
-The `node` stage supplies checksum-pinned glibc Node.js for minimum `test`, which
-adds frozen uv dependencies. The musl-based `core-current` environment instead
-copies only Node and its license from a version/digest-pinned official Alpine
-Node image, never from minimum `test`. The current-Core build executes Node and
-checks its version, so an incompatible binary fails construction rather than
-remaining hidden until a later command. It adds no glibc compatibility layer,
-package-manager installation, npm or Yarn. Both environments retain Node 22.23.3.
+The shared `node` stage copies only the Node.js binary and its license from a
+version/digest-pinned official Alpine Node image into both Alpine-based official
+Home Assistant Core stages (`test` for minimum `2026.2.3`, and `core-current`
+for `2026.11.2`). Minimum `test` layers only the frozen hash-verified `test`
+harness plugins and Ruff from `uv.lock` (`exclude-dependencies` keeps Core-owned
+packages untouched from the official `2026.2.3` base image) and checks that
+Core's manifests still satisfy the smoke dependency closure. Both environments
+execute `node --version`, verify `v22.23.3`, and add no glibc compatibility layer,
+package-manager installation, npm or Yarn.
 
 Only the non-installed root project's version is normalized in temporary
 `pyproject.toml`/`uv.lock` copies. The real files remain unchanged. A release-only
-version change therefore does not rebuild dependencies; changed dependency pins,
+version change therefore does not rebuild dependencies; changed test-group pins,
 shared bootstrap inputs or the relevant recipe still change the environment key.
-Current Core does not depend on the minimum dependency lock. Fingerprints identify
-construction inputs, not a promise of byte-identical independently rebuilt images.
+Current Core does not depend on the test-harness dependency lock. Fingerprints
+identify construction inputs, not a promise of byte-identical independently
+rebuilt images.
 
 The [shared build action](../.github/actions/build-image/action.yml) pins Buildx
 and BuildKit and uses two bounded GitHub cache scopes: `test` and
@@ -595,9 +598,10 @@ production polling, not a forced refresh, observes the changed connectivity. Cle
 shutdown requires writing `stop\n` to `stdin` and waiting for completion (never
 terminate host processes on Windows, as child Docker containers become orphaned).
 Temporary tokens are never stored in `--output`.
-The reproducible minimum-Core image includes the selected Core's frontend/
-Lovelace requirement closure. A serving run refuses to claim UI readiness when
-the frontend is missing; a blank HTTP page is not native UI evidence.
+The reproducible minimum-Core image uses the digest-pinned official Home
+Assistant 2026.2.3 container image, including its bundled frontend/Lovelace
+requirements. A serving run refuses to claim UI readiness when the frontend is
+missing; a blank HTTP page is not native UI evidence.
 
 Python socket auditing blocks non-loopback connections, sends, binds and DNS,
 and blocks child processes/raw IP sockets. It is an accidental-network-use guard,
@@ -672,9 +676,10 @@ license and attribution remain separately defined by README and `docs/LICENSE`.
 | Public surface | Markdown/Mermaid, actual issue/PR/private-report routes, hosted CI and effective protection settings |
 | HACS | Separate actual source-tree bootstrap and published-ZIP installation/upgrade; exact installed-member comparison |
 
-Base images are digest-pinned. Minimum-Core frontend/DHCP requirements are
-resolved in the committed uv test group and checked against Core's manifests;
-the image build never installs an unlocked supplemental dependency set.
+Base images are digest-pinned. Minimum-Core testing runs on the pinned official
+2026.2.3 Home Assistant container image with hash-verified test harness packages
+and Ruff locked in `uv.lock`, verifying at build time that Core's manifests
+satisfy the smoke dependency closure without replacing Core-owned packages.
 Scheduled/manual stable, beta and dev Core canaries use deliberately moving
 images, verify both `ha_smoke.py --scenario profiles` and the offline
 `hacs_fixture.py self-check` installer API check, and preserve failures as visible
