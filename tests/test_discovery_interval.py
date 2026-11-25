@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.uplus_reborn.const import SUPPORTED_WIFI_TYPE
 from custom_components.uplus_reborn.discovery_interval import DiscoveryInterval
-from tools.discovery_fixture import _DiscoveryTiming
+from discovery_fixture import _DiscoveryTiming
 
 
 async def wait_for(predicate: Callable[[], bool]) -> None:

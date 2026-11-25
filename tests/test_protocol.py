@@ -428,7 +428,7 @@ async def _exercise_cli_start(
 class ProtocolTest(unittest.IsolatedAsyncioTestCase):
     async def test_core_action_peer_proves_one_bounded_transaction(self) -> None:
         """The Core fixture supplies both acceptance and independent state proof."""
-        from tools.ha_smoke import DEVICE_ID, ProgrammeIntentPeer
+        from ha_smoke import DEVICE_ID, ProgrammeIntentPeer
 
         peer = ProgrammeIntentPeer()
         await peer.start()

@@ -1,27 +1,22 @@
 # Reproducible Linux verification environments for U+ Reborn.
 # Built from explicit stage inputs by tools/delivery.py; never mutates at runtime.
 
-FROM python:3.13@sha256:9ffe84122ce74ebdffe2e0e6b946c9dd95d0bf3463f6eb1006b4dc6fefe36d01 AS node
+FROM node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 AS node
 
-ARG NODE_VERSION=22.23.3
-ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
-RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz \
-    && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - \
-    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
-    && rm /tmp/node.tar.xz
-
-FROM node AS test
+# Minimum supported Core matches hacs.json; only test harness + Ruff come from uv.lock.
+FROM ghcr.io/home-assistant/home-assistant:2026.2.3@sha256:96fa92d83fa8dae987fbbbcf58b1fea1140985ff6a8517b37f7b65c76ef20133 AS test
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
 COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /usr/local/bin/uv
 
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_LINK_MODE=copy \
-    PATH="/opt/venv/bin:/usr/local/bin:${PATH}"
+RUN test "$(node --version)" = "v22.23.3"
 
 ARG SMOKE_COMPONENTS="homeassistant persistent_notification http api websocket_api config logger diagnostics dhcp sensor binary_sensor"
 WORKDIR /tmp/build
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --group test --no-group research \
-    && SMOKE_COMPONENTS="${SMOKE_COMPONENTS}" /opt/venv/bin/python -c "\
+RUN UV_EXTRA_INDEX_URL="" uv export --frozen --only-group test --no-emit-project --output-file /tmp/build/test-requirements.txt \
+    && UV_EXTRA_INDEX_URL="" uv pip install --system --no-deps --require-hashes -r /tmp/build/test-requirements.txt \
+    && SMOKE_COMPONENTS="${SMOKE_COMPONENTS}" python3 -c "\
 import importlib.util, importlib.metadata, json, os; \
 from pathlib import Path; from packaging.requirements import Requirement; \
 comp = Path(next(iter(importlib.util.find_spec('homeassistant').submodule_search_locations))) / 'components'; \
@@ -30,11 +25,12 @@ pending, seen, reqs = os.environ['SMOKE_COMPONENTS'].split(), set(), set(); \
 missing = [r for r in sorted(reqs) if importlib.metadata.version(Requirement(r).name) not in Requirement(r).specifier]; \
 assert not missing, f'Locked smoke prerequisites do not match Core: {missing}'" \
     && rm -rf /tmp/build /root/.cache
+ENTRYPOINT []
 WORKDIR /workspace
 
 FROM ghcr.io/home-assistant/home-assistant:2026.11.2@sha256:493a07e8f6530fc640223f4a0a5248f20a61ca2f718bb1d31efbf08a2c5ea28f AS core-current
-COPY --from=node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
 RUN test "$(node --version)" = "v22.23.3"
 ENTRYPOINT []
 WORKDIR /workspace
