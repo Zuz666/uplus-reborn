@@ -1,7 +1,7 @@
 # Reproducible Linux verification environments for U+ Reborn.
 # Built from explicit stage inputs by tools/delivery.py; never mutates at runtime.
 
-FROM node:22.23.3-alpine3.24@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 AS node
+FROM node:26.13.1-alpine3.24@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS node
 
 # Minimum supported Core matches hacs.json; only test harness + Ruff come from uv.lock.
 FROM ghcr.io/home-assistant/home-assistant:2026.2.3@sha256:96fa92d83fa8dae987fbbbcf58b1fea1140985ff6a8517b37f7b65c76ef20133 AS test
