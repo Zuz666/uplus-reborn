@@ -37,7 +37,7 @@ excludes = [
 
 [[package]]
 name = "aiodiscover"
-version = "3.2.3"
+version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiodns" },
@@ -45,21 +45,21 @@ dependencies = [
     { name = "ifaddr" },
     { name = "pyroute2" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/f3/baffacdd16315fb2ebee3fcaf59e25d29702366142a850b9a6145a67f7d7/aiodiscover-3.2.3.tar.gz", hash = "sha256:52c13ab2b7b10afa21f55ea5751b9f281c422e3e35f9e473f7e00868d2cfe387", size = 28677, upload-time = "2026-05-22T02:03:06.249Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/2d/a4b0cf7878373b0d8a0d3882afd0c1ee7cd93db3378ca2c8ce5567eabb59/aiodiscover-3.3.2.tar.gz", hash = "sha256:0919faf317035670f1458b1ff02302b253aa6c7ba33bf6638e61c23f759ed8de", size = 33650, upload-time = "2026-06-13T21:23:41.014Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6b/43/96542725b4fc6b83c2915d0c394ed7d88b2abcef77e1e8cca7a2943dcdeb/aiodiscover-3.2.3-py3-none-any.whl", hash = "sha256:3cb2c80c7bfa2407792ae6c3ff9ad0289e6acfac91baec18e962dba8fb615dc6", size = 30593, upload-time = "2026-05-22T02:03:04.526Z" },
+    { url = "https://files.pythonhosted.org/packages/10/e1/a1a3cb42b9d996644e53c2e866cacff097c563075481e4f8bfedb3c15f95/aiodiscover-3.3.2-py3-none-any.whl", hash = "sha256:85ba630bd809b0b46caaade5de535eb600944e8b2ba8d2b2bd73b6bac0e34554", size = 34642, upload-time = "2026-06-13T21:23:39.765Z" },
 ]
 
 [[package]]
 name = "aiodns"
-version = "4.0.0"
+version = "4.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pycares" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/da/97235e953109936bfeda62c1f9f1a7c5652d4dc49f2b5911f9ae1043afa9/aiodns-4.0.0.tar.gz", hash = "sha256:17be26a936ba788c849ba5fd20e0ba69d8c46e6273e846eb5430eae2630ce5b1", size = 26204, upload-time = "2026-01-10T22:33:27.211Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/22/a2d928e0e42baad0471d12ec44c71152ac870486e8298dddb2893b888c29/aiodns-4.0.4.tar.gz", hash = "sha256:cb10e0c0d2591636716ad2fe402e977c16d71bdaf76bb8cb49e8a6633596f736", size = 29918, upload-time = "2026-05-20T01:54:15.557Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/60/14ac40c03e8a26216e4f2642497b776e52f9e3214e4fd537628829bbb082/aiodns-4.0.0-py3-none-any.whl", hash = "sha256:a188a75fb8b2b7862ac8f84811a231402fb74f5b4e6f10766dc8a4544b0cf989", size = 11334, upload-time = "2026-01-10T22:33:25.65Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/70/72e4ab117425ccdc4d10bd523a94c1baa051a15586057d64a4c6888f9e3f/aiodns-4.0.4-py3-none-any.whl", hash = "sha256:c24dd605bac70a1676ce503f967a98483ff163507198557d8e9db16267e6cfd2", size = 12696, upload-time = "2026-05-20T01:54:14.134Z" },
 ]
 
 [[package]]
@@ -1142,7 +1142,7 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "aiodiscover", specifier = ">=2.7.1,<4.0.0" }]
+requires-dist = [{ name = "aiodiscover", specifier = ">=3.3.2,<4.0.0" }]
 
 [package.metadata.requires-dev]
 research = [

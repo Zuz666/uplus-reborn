@@ -4,7 +4,7 @@ version = "1.1.0"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13.2"
-dependencies = ["aiodiscover>=2.7.1,<4.0.0"]
+dependencies = ["aiodiscover>=3.3.2,<4.0.0"]
 
 [dependency-groups]
 research = [
