@@ -325,13 +325,13 @@ store/protocol code solely because the settings presentation changed.
 
 The scenario retains the previous-limit 720-poll/600-operation measurement for
 comparison. It also executes representative long-session cases: 960 real ordinary
-polls with four-hour 1200/20400/4 MiB settings, and 1440 with six-hour
-1800/30600/4 MiB defaults. Each includes one explicitly armed exact synthetic
+polls with four-hour 1200/36000/4 MiB settings, and 1440 with six-hour
+1800/54000/4 MiB defaults. Each includes one explicitly armed exact synthetic
 Spin/400 Start through the registered native action and occasional fragmented,
 additional reports. Initial Start proof and every poll must remain complete.
 These are accelerated capacity observations, not elapsed hours or physical
 appliance actions; isolated peers reject unarmed or unsupported commands.
-A separate six-hour case keeps 1800/30600 but selects 672000 raw bytes: native
+A separate six-hour case keeps 1800/54000 but selects 1375600 raw bytes: native
 review with polling enabled estimates 21720 seconds without a capacity warning,
 yet actual traffic must evict the initial Start under raw pressure. It records loss and
 the retained observation range. Autonomous scheduling is suppressed for this
@@ -362,13 +362,14 @@ callbacks in place of these native requests.
 
 ### Diagnostic capture retention sizing
 
-Current capture defaults are **1800** operations, **30600** events (expanded
-from historical 18000 after adding per-poll `0x73 -> 0x74` alarm queries), and
+Current capture defaults are **1800** operations, **54000** events (expanded
+from historical 18000 and 30600 to match real per-poll connect-burst plus
+`4d01 -> 0x02` and `0x73 -> 0x74` traffic), and
 **4 MiB** (4,194,304 raw bytes; maximum configurable raw limit **8 MiB** /
 8,388,608 bytes), with a separate 6-hour finite deadline. All three limits apply
 simultaneously per entry within the
 [documented bounds](reference.md#diagnostic-capture-preferences); a reference poll
-uses 17 events and 464 raw bytes.
+uses 30 events and 950 raw bytes.
 
 Measured accelerated workloads (exercised under Core `2026.2.3` / `2026.10.4`
 committed fixtures; representative four-/six-hour runs included one Spin/400

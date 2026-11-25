@@ -12,11 +12,11 @@ CONF_DIAGNOSTIC_RAW_BYTES: Final = "diagnostic_raw_bytes"
 CONF_DIAGNOSTIC_DURATION: Final = "diagnostic_duration"
 
 MAX_OPERATIONS: Final = 1800
-MAX_EVENTS: Final = 30600
+MAX_EVENTS: Final = 54000
 MAX_RAW_BYTES: Final = 8388608
 CAPTURE_DURATIONS: Final = (1800, 3600, 7200, 14400, 21600)
-REFERENCE_POLL_EVENTS: Final = 17
-REFERENCE_POLL_RAW_BYTES: Final = 464
+REFERENCE_POLL_EVENTS: Final = 30
+REFERENCE_POLL_RAW_BYTES: Final = 950
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,7 @@ class CapturePreferences:
     """Budgets for one new capture, not mutable settings for a running trace."""
 
     operations: int = 1800
-    events: int = 30600
+    events: int = 54000
     raw_bytes: int = 4194304
     duration: int = 21600
 
@@ -74,7 +74,7 @@ def capture_preferences(options: Mapping[str, object]) -> CapturePreferences:
 def estimated_trace_depth(preferences: CapturePreferences, poll_interval: int) -> int:
     """Estimate complete ordinary polls, not the independent capture deadline.
 
-    The synthetic reference poll uses 17 events and 464 original raw bytes.
+    The synthetic reference poll uses 30 events and 950 original raw bytes.
     Commands, fragmented reads and unsolicited reports can shorten this history.
     """
     complete_polls = min(

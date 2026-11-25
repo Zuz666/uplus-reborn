@@ -995,6 +995,9 @@ class _LocalSession:
     decoder: _EnvelopeDecoder = field(default_factory=_EnvelopeDecoder)
     pending: deque[_Envelope] = field(default_factory=deque)
     observer: ExchangeObserver | None = field(default=None, kw_only=True, repr=False)
+    on_alarm_query_retry: Callable[[], None] | None = field(
+        default=None, kw_only=True, repr=False
+    )
     control_name: str | None = None
     next_sequence: int = 0
     heartbeat_due: float | None = None
@@ -1073,6 +1076,8 @@ class _LocalSession:
             reason="unsolicited_empty_seq0_collision",
             next_sequence=sequence,
         )
+        if self.on_alarm_query_retry is not None:
+            self.on_alarm_query_retry()
         if self.observer is not None and self.observer.active:
             self.observer.event(
                 "alarm_query_retry",
@@ -1184,7 +1189,7 @@ class _LocalSession:
                 self._decode_and_observe_alarm(envelope, frame, stage="query")
                 continue
             if result := _state_result(envelope, frame):
-                if envelope.sequence == sequence:
+                if frame.frame_type == _FRAME_STATUS and envelope.sequence == sequence:
                     self.observe_state(result, stage="query", decision="correlated")
                     self.log_event("correlated", response_kind=_response_kind(frame))
                     return result
@@ -1440,6 +1445,7 @@ class _LocalSession:
                     decision=(
                         "correlated_query"
                         if query_sequence is not None
+                        and frame.frame_type == _FRAME_STATUS
                         and envelope.sequence == query_sequence
                         else "correlated_control"
                         if envelope.sequence == sequence
@@ -1450,6 +1456,7 @@ class _LocalSession:
                 )
             if (
                 query_sequence is not None
+                and frame.frame_type == _FRAME_STATUS
                 and envelope.sequence == query_sequence
                 and result is not None
             ):
@@ -1593,6 +1600,9 @@ class UwtClient:
     observer: ExchangeObserver | None = field(
         default=None, kw_only=True, repr=False, compare=False
     )
+    on_alarm_query_retry: Callable[[], None] | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not self.host:
@@ -1612,13 +1622,15 @@ class UwtClient:
             raise ValueError("device_id must contain 1-16 non-NUL ASCII bytes")
 
     async def read_state(self) -> DeviceSnapshot:
-        """Open one session, query `4d01` then best-effort `0x73`, and return fresh state.
+        """Open one session, query `4d01` -> `0x02` then best-effort `0x73`, and return fresh state.
 
-        The `4d01` state query is never retried. The read-only `0x73` alarm query
-        retries at most once on a newly allocated sequence within the existing
-        deadline if an in-flight empty `0x72` (`sequence=0`) collides and yields
-        an unmatched `0x74` (`sequence=0`). The connection is closed immediately
-        after the correlated `0x74` response (or best-effort alarm degradation).
+        The `4d01` state query requires a sequence-matched type-`02` status
+        response (ignoring unsolicited `0x06` reports, including `sequence=0`)
+        and is never retried. The read-only `0x73` alarm query retries at most
+        once on a newly allocated sequence within the existing deadline if an
+        in-flight empty `0x72` (`sequence=0`) collides and yields an unmatched
+        `0x74` (`sequence=0`). The connection is closed immediately after the
+        correlated `0x74` response (or best-effort alarm degradation).
         """
 
         return (await self._read_state_result()).snapshot
@@ -1832,6 +1844,7 @@ class UwtClient:
                 started_at,
                 deadline=deadline,
                 observer=self.observer,
+                on_alarm_query_retry=self.on_alarm_query_retry,
             )
             if self.observer is not None and self.observer.active:
                 self.observer.event("session_connected", session=correlation)

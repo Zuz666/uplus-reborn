@@ -343,7 +343,7 @@ entry for capture-only edits.
 | Resource | Default | Editable range |
 | --- | ---: | ---: |
 | Operations, including the current one | 1800 | 1–1800 |
-| Event records across operations | 30600 | 1–30600 |
+| Event records across operations | 54000 | 1–54000 |
 | Original raw bytes | 4 MiB (4,194,304 bytes) | 1–8,388,608 bytes (8 MiB) |
 | Auto-stop duration | 6 hours | 30 minutes, 1 h, 2 h, 4 h, 6 h |
 
@@ -354,12 +354,13 @@ Notes on configuration and capacity estimates:
   diagnostic inputs (even invalid edits) on confirmation without changing
   polling intervals, control consent, or an active trace.
 - Clicking **Next** displays a review step showing `will change` / `unchanged`
-  values, an estimated ordinary-poll trace depth in seconds (assuming 17 events
-  and 464 raw bytes per `4d01 -> 6d01` + `0x73 -> 0x74` poll; 0 when Home
-  Assistant polling is disabled), and a non-blocking warning if reference
-  capacity is shorter than the selected deadline.
-- For reference: defaults (`1800 / 30600 / 4 MiB`) cover more than 1,440
-  reference polls (~6 h at 15 s intervals); `1200 / 20400 / 4 MiB` covers more
+  values, an estimated ordinary-poll trace depth in seconds (assuming 30 events
+  and 950 raw bytes per ordinary HWD120-B1558U poll including connect-burst
+  reports plus `4d01 -> 0x02` and `0x73 -> 0x74`; 0 when Home Assistant polling
+  is disabled), and a non-blocking warning if reference capacity is shorter than
+  the selected deadline.
+- For reference: defaults (`1800 / 54000 / 4 MiB`) cover more than 1,440
+  reference polls (~6 h at 15 s intervals); `1200 / 36000 / 4 MiB` covers more
   than 960 (~4 h). Commands, fragmented reads, or frequent unsolicited reports
   shorten capacity.
 - Checking **Start a new diagnostic capture and enable DEBUG** shows a

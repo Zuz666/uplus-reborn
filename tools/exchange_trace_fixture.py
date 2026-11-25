@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 DOMAIN = "uplus_reborn"
 SECOND_DEVICE_ID = "020000000002"
 HEADER = struct.Struct(">II32s32sII")
-LIMITS = {"operations": 1800, "events": 30600, "raw_bytes": 4194304}
+LIMITS = {"operations": 1800, "events": 54000, "raw_bytes": 4194304}
 SYNTHETIC_SECRET = "fixture-unrelated-cloud-secret-not-for-trace"
 
 
@@ -203,6 +203,21 @@ class ExchangeTraceFixture:
         writer.write(response)
         await writer.drain()
 
+    async def _extra_reports_reply(
+        self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
+    ) -> None:
+        """Prepend three unmatched envelopes so 6_low_raw exceeds raw_bytes before events."""
+        magic, status, source, device, sequence, size = HEADER.unpack(response[:HEADER.size])
+        if sequence == 0:
+            unmatched = HEADER.pack(
+                magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
+            ) + response[HEADER.size:]
+            writer.write(unmatched * 3 + response)
+            await writer.drain()
+            return
+        writer.write(response)
+        await writer.drain()
+
     async def _poll(self) -> dict[str, int]:
         before = self._traffic()[0]
         await self.entry.runtime_data.async_refresh()
@@ -366,9 +381,9 @@ class ExchangeTraceFixture:
         initial_words = self.peer.words
         cases = {}
         for name, hours, polls, operations, events, raw_bytes in (
-            ("4", 4, 960, 1200, 20400, 4194304),
-            ("6", 6, 1440, 1800, 30600, 4194304),
-            ("6_low_raw", 6, 1440, 1800, 30600, 672000),
+            ("4", 4, 960, 1200, 36000, 4194304),
+            ("6", 6, 1440, 1800, 54000, 4194304),
+            ("6_low_raw", 6, 1440, 1800, 54000, 1375600),
         ):
             self.peer.query_response_writer = None
             self.peer.words = initial_words
@@ -399,7 +414,10 @@ class ExchangeTraceFixture:
                      and self.entry.runtime_data.health.latest_command.outcome == "confirmed",
                      "Long capture Start was not independently sent once and confirmed")
             for ordinal in range(1, polls + 1):
-                self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
+                if name == "6_low_raw":
+                    self.peer.query_response_writer = self._extra_reports_reply
+                else:
+                    self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
                 await self._poll()
             await self._level("WARNING")
             data = await self._download(self.entry, f"long_history_{name}h")
@@ -462,7 +480,7 @@ class ExchangeTraceFixture:
         await self._level("WARNING")
         stress = ExchangeTrace()
         stress_results = {}
-        for operation_limit, event_limit in ((600, 12000), (1800, 30600)):
+        for operation_limit, event_limit in ((600, 12000), (1800, 54000)):
             maximum = CapturePreferences(operation_limit, event_limit, 8388608, 21600)
             stress.start(maximum)
             remaining = 8388608
@@ -631,12 +649,12 @@ class ExchangeTraceFixture:
                 "ordinary_unload_behavior_preserved": True, "fresh_capture": reloaded,
             }
             await self._options(self.entry, {
-                "diagnostic_operations": 2, "diagnostic_events": 34,
-                "diagnostic_raw_bytes": 928, "diagnostic_duration": "1800",
+                "diagnostic_operations": 2, "diagnostic_events": 60,
+                "diagnostic_raw_bytes": 1900, "diagnostic_duration": "1800",
             }, start=True)
             selected = await self._download(self.entry, "selected_limits_start")
             _require(selected["exchange_trace"]["limits"] == {
-                "operations": 2, "events": 34, "raw_bytes": 928,
+                "operations": 2, "events": 60, "raw_bytes": 1900,
             }, "Explicit limits were not applied")
             active = selected["diagnostic_capture"]
             _require(0 < active["remaining_seconds"] <= 1800

@@ -345,9 +345,9 @@
               "diagnostic_operations__saved": "Saved: {diagnostic_operations_saved} · Default: {diagnostic_operations_default}. 1–1800 polls or control attempts.",
               "diagnostic_operations__matching": "Saved: {diagnostic_operations_saved} — matches the default. 1–1800 polls or control attempts.",
               "diagnostic_operations__default": "Using default: {diagnostic_operations_default} (no valid saved value). 1–1800 polls or control attempts.",
-              "diagnostic_events__saved": "Saved: {diagnostic_events_saved} · Default: {diagnostic_events_default}. 1–30600 event records.",
-              "diagnostic_events__matching": "Saved: {diagnostic_events_saved} — matches the default. 1–30600 event records.",
-              "diagnostic_events__default": "Using default: {diagnostic_events_default} (no valid saved value). 1–30600 event records.",
+              "diagnostic_events__saved": "Saved: {diagnostic_events_saved} · Default: {diagnostic_events_default}. 1–54000 event records.",
+              "diagnostic_events__matching": "Saved: {diagnostic_events_saved} — matches the default. 1–54000 event records.",
+              "diagnostic_events__default": "Using default: {diagnostic_events_default} (no valid saved value). 1–54000 event records.",
               "diagnostic_raw_bytes__saved": "Saved: {diagnostic_raw_bytes_saved} · Default: {diagnostic_raw_bytes_default}. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
               "diagnostic_raw_bytes__matching": "Saved: {diagnostic_raw_bytes_saved} — matches the default. 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
               "diagnostic_raw_bytes__default": "Using default: {diagnostic_raw_bytes_default} (no valid saved value). 1–8388608 bytes (maximum 8 MiB); enter whole bytes.",
@@ -383,7 +383,7 @@
         },
         "data_description": {
           "controls_change": "Clears both unsent programme configurations and reloads a loaded integration entry.",
-          "estimated_seconds": "Uses 17 events and 464 raw bytes per reference poll at the selected interval. Disabled automatic polling gives 0: there is no active poll source, not a forecast for control-only traffic. Larger exchanges and commands shorten this estimate; capacity is not the auto-stop deadline or a guarantee.",
+          "estimated_seconds": "Uses 30 events and 950 raw bytes per reference poll at the selected interval. Disabled automatic polling gives 0: there is no active poll source, not a forecast for control-only traffic. Larger exchanges and commands shorten this estimate; capacity is not the auto-stop deadline or a guarantee.",
           "capture_preferences": "Any current capture keeps its recorded data, effective limits and deadline unchanged.",
           "capture_replacement": "Download useful evidence first. Trace may contain original addresses, identifiers and bytes: review before sharing. An external logging change can leave DEBUG enabled after capture stops; use native Disable debug logging to turn it off."
         }

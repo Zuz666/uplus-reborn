@@ -212,9 +212,10 @@ async def test_missing_runtime_is_not_a_success(
     assert info["entry_1_capture_remaining_seconds"] is None
     for field in (
         "stopped_at", "stop_reason", "debug_enabled", "first_retained_at",
-        "last_recorded_at", "partial_operations",
+        "last_recorded_at", "partial_operations", "alarm_query_retries",
     ):
         assert info[f"entry_1_capture_{field}"] is None
+    assert info["entry_1_alarm_query_retries"] is None
     for field in ("stage", "request_id", "session_id", "elapsed_ms"):
         assert info[f"entry_1_last_failure_{field}"] is None
     for resource in ("operations", "events", "raw_bytes"):
@@ -337,7 +338,7 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
         options={
             **entry.options,
             "diagnostic_operations": 1800,
-            "diagnostic_events": 30600,
+            "diagnostic_events": 54000,
             "diagnostic_raw_bytes": 8388608,
             "diagnostic_duration": 21600,
         },
@@ -362,6 +363,8 @@ async def test_capture_snapshot_uses_effective_store_limits_without_export(
     assert active["entry_1_capture_first_retained_at"] is not None
     assert active["entry_1_capture_last_recorded_at"] is not None
     assert active["entry_1_capture_partial_operations"] == 0
+    assert active["entry_1_alarm_query_retries"] == 0
+    assert active["entry_1_capture_alarm_query_retries"] == 0
     for resource in ("operations", "events", "raw_bytes"):
         assert active[f"entry_1_capture_evicted_operations_by_{resource}_limit"] == (
             int(resource == "operations")

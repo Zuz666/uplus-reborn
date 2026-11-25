@@ -85,6 +85,7 @@ class CoordinatorHealth:
     age_seconds: float | None
     last_error: ClassifiedError | None
     latest_command: CommandOutcome | None
+    alarm_query_retries: int = 0
 
 
 class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
@@ -110,7 +111,12 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
         )
         self.trace = ExchangeTrace()
         self.capture: DiagnosticCapture | None = None
-        self.client = replace(client, observer=self.trace)
+        self._alarm_query_retries = 0
+        self.client = replace(
+            client,
+            observer=self.trace,
+            on_alarm_query_retry=self._record_alarm_query_retry,
+        )
         self._connection_lock = asyncio.Lock()
         self._drafts: dict[Drum, ProgramIntent | None] = {"upper": None, "lower": None}
         self.profiles = ProfileStore(hass, config_entry.entry_id, self.device_id)
@@ -145,6 +151,11 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             "snapshot_at": datetime.now(UTC).isoformat(),
         }
 
+    def _record_alarm_query_retry(self) -> None:
+        self._alarm_query_retries = min(
+            (1 << 63) - 1, self._alarm_query_retries + 1
+        )
+
     @property
     def health(self) -> CoordinatorHealth:
         """Return immutable health without probing or exposing exception text."""
@@ -170,6 +181,7 @@ class UplusRebornCoordinator(DataUpdateCoordinator[DeviceSnapshot]):
             age_seconds=age,
             last_error=self._last_error,
             latest_command=self._latest_command,
+            alarm_query_retries=self._alarm_query_retries,
         )
 
     def _record_snapshot(self, snapshot: DeviceSnapshot, request: int) -> None:

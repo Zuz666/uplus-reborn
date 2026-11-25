@@ -570,7 +570,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decoder.buffered_bytes, 0)
 
     async def _read_snapshot(self, words: list[int]) -> DeviceSnapshot:
-        response = _state_response(words)
+        response = _state_response(words, frame_type=0x02)
 
         async def handle(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -921,7 +921,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         ) -> None:
             try:
                 requests.append(await _read_request(reader))
-                writer.write(_state_response(standby))
+                writer.write(_state_response(standby, frame_type=0x02))
                 await writer.drain()
                 requests.append(await _accept_control_initialization(reader, writer))
                 requests.append(await _read_request(reader))
@@ -974,7 +974,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         ) -> None:
             try:
                 requests.append(await _read_request(reader))
-                writer.write(_state_response(standby))
+                writer.write(_state_response(standby, frame_type=0x02))
                 await writer.drain()
                 requests.append(await _accept_control_initialization(reader, writer))
                 requests.append(await _read_request(reader))
@@ -1033,7 +1033,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         ) -> None:
             try:
                 requests.append(await _read_request(reader))
-                writer.write(_state_response(standby))
+                writer.write(_state_response(standby, frame_type=0x02))
                 await writer.drain()
                 requests.append(await _accept_control_initialization(reader, writer))
                 requests.append(await _read_request(reader))
@@ -1441,7 +1441,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                     after_acceptance: bool = after_acceptance,
                 ) -> None:
                     requests.append(await _read_request(reader))
-                    writer.write(_state_response(_standby_words()))
+                    writer.write(_state_response(_standby_words(), frame_type=0x02))
                     await writer.drain()
                     initialization = await _read_request(reader)
                     requests.append(initialization)
@@ -1874,7 +1874,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             requests.append(await _read_request(reader))
-            writer.write(_state_response(current))
+            writer.write(_state_response(current, frame_type=0x02))
             await writer.drain()
             requests.append(await _read_request(reader))
             current[28] = 0x0400
@@ -1910,7 +1910,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             await _read_request(reader)
-            writer.write(_state_response(before))
+            writer.write(_state_response(before, frame_type=0x02))
             await writer.drain()
             await _read_request(reader)
             writer.write(
@@ -2018,7 +2018,7 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                     finished: asyncio.Event = finished,
                 ) -> None:
                     await _read_request(reader)
-                    writer.write(_state_response(before))
+                    writer.write(_state_response(before, frame_type=0x02))
                     await writer.drain()
                     trailing.append(await reader.read())
                     writer.close()
@@ -2300,7 +2300,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
         ) -> None:
             seq0, inner0 = await _read_request(reader)
             requests.append((seq0, inner0))
-            writer.write(_state_response(_standby_words(), sequence=seq0))
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
             await writer.drain()
 
             seq1, inner1 = await _read_request(reader)
@@ -2335,7 +2335,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             seq0, _ = await _read_request(reader)
             writer.write(
                 _frame_response(0x04, ff_payload, sequence=0)
-                + _state_response(_standby_words(), sequence=seq0)
+                + _state_response(_standby_words(), sequence=seq0, frame_type=0x02)
             )
             await writer.drain()
             seq1, _ = await _read_request(reader)
@@ -2370,7 +2370,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             seq0, _ = await _read_request(reader)
             writer.write(
                 _frame_response(0x04, _alarm_payload(4), sequence=0)
-                + _state_response(_standby_words(), sequence=seq0)
+                + _state_response(_standby_words(), sequence=seq0, frame_type=0x02)
             )
             await writer.drain()
             await _read_request(reader)
@@ -2386,7 +2386,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(_standby_words(), sequence=seq0))
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
             await writer.drain()
             await _read_request(reader)
             await asyncio.sleep(0.3)
@@ -2397,7 +2397,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(_standby_words(), sequence=seq0))
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
             await writer.drain()
             writer.close()
             await writer.wait_closed()
@@ -2406,7 +2406,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(_standby_words(), sequence=seq0))
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
             await writer.drain()
             await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(4), sequence=0))
@@ -2420,7 +2420,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             seq0, _ = await _read_request(reader)
             writer.write(
                 _frame_response(0x04, _alarm_payload(4), sequence=0)
-                + _state_response(_standby_words(), sequence=seq0)
+                + _state_response(_standby_words(), sequence=seq0, frame_type=0x02)
             )
             await writer.drain()
             seq1, _ = await _read_request(reader)
@@ -2557,7 +2557,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 try:
                     seq0, _ = await _read_request(reader)
                     captured_requests.append((seq0, b"query"))
-                    writer.write(_state_response(reply_words, sequence=seq0))
+                    writer.write(_state_response(reply_words, sequence=seq0, frame_type=0x02))
                     await writer.drain()
                     seq1, _ = await _read_request(reader)
                     captured_requests.append((seq1, b"init"))
@@ -2606,7 +2606,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 done_words: list[int] = after_words,
             ) -> None:
                 seq0, _ = await _read_request(reader)
-                writer.write(_state_response(init_words, sequence=seq0))
+                writer.write(_state_response(init_words, sequence=seq0, frame_type=0x02))
                 await writer.drain()
                 seq1, _ = await _read_request(reader)
                 writer.write(_frame_response(0x74, b"", sequence=seq1))
@@ -2649,7 +2649,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(before, sequence=seq0))
+            writer.write(_state_response(before, sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
@@ -2684,7 +2684,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(power_on, sequence=seq0))
+            writer.write(_state_response(power_on, sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(4, 71), sequence=seq1))
@@ -2717,7 +2717,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(before, sequence=seq0))
+            writer.write(_state_response(before, sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
@@ -2736,7 +2736,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(before, sequence=seq0))
+            writer.write(_state_response(before, sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
@@ -2756,7 +2756,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(before, sequence=seq0))
+            writer.write(_state_response(before, sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
@@ -2814,7 +2814,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
             seq0, _ = await _read_request(reader)
-            writer.write(_state_response(_standby_words(), sequence=seq0))
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
             await writer.drain()
             seq1, _ = await _read_request(reader)
             writer.write(_frame_response(0x74, _alarm_payload(71), sequence=seq1))
@@ -2867,7 +2867,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 try:
                     seq0, inner0 = await _read_request(reader)
                     captured.append((seq0, inner0))
-                    writer.write(_state_response(_standby_words(), sequence=seq0))
+                    writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
                     await writer.drain()
 
                     seq1, inner1 = await _read_request(reader)
@@ -2972,7 +2972,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
             try:
                 seq0, inner0 = await _read_request(reader)
                 requests.append((seq0, inner0))
-                writer.write(_state_response(_standby_words(), sequence=seq0))
+                writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
                 await writer.drain()
 
                 seq1, inner1 = await _read_request(reader)
@@ -3062,7 +3062,7 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 try:
                     seq0, inner0 = await _read_request(reader)
                     captured.append((seq0, inner0))
-                    writer.write(_state_response(_standby_words(), sequence=seq0))
+                    writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
                     await writer.drain()
 
                     seq1, inner1 = await _read_request(reader)
@@ -3108,3 +3108,183 @@ class AlarmLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 )
                 if reason is not None:
                     self.assertEqual(ctx.exception.reason, reason)
+
+    async def test_query_state_ignores_unsolicited_0x06_seq0_and_waits_for_0x02(
+        self,
+    ) -> None:
+        stale_words = _standby_words()
+        stale_words[10] = 10
+        fresh_words = _standby_words()
+        fresh_words[10] = 74
+        events_order: list[str] = []
+        finished = asyncio.Event()
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                writer.write(_state_response(stale_words, sequence=0, frame_type=0x06))
+                await writer.drain()
+                seq0, inner0 = await _read_request(reader)
+                self.assertEqual(seq0, 0)
+                self.assertEqual(inner0[9], 0x01)
+                events_order.append("server_rx_4d01")
+                await asyncio.sleep(0.01)
+                events_order.append("server_tx_0x02")
+                writer.write(_state_response(fresh_words, sequence=seq0, frame_type=0x02))
+                await writer.drain()
+                seq1, inner1 = await _read_request(reader)
+                self.assertEqual(seq1, 1)
+                self.assertEqual(inner1[9], 0x73)
+                events_order.append("server_rx_0x73")
+                writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+            finally:
+                finished.set()
+
+        _, base_client = await self._run_client(handle, timeout=0.5)
+        observer = _RecordingObserver()
+        snap = await replace(base_client, observer=observer).read_state()
+        await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(snap.total_water_raw, 74)
+        self.assertEqual(
+            events_order, ["server_rx_4d01", "server_tx_0x02", "server_rx_0x73"]
+        )
+        observed_states = [
+            (ctx["decision"], ctx["response_kind"], ctx["decoded_snapshot"].total_water_raw)
+            for event, ctx in observer.events
+            if event == "state_observed"
+        ]
+        self.assertEqual(
+            observed_states,
+            [("uncorrelated", "report", 10), ("correlated", "status", 74)],
+        )
+
+    async def test_query_state_rejects_unsolicited_0x06_seq0_without_0x02(
+        self,
+    ) -> None:
+        finished = asyncio.Event()
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                seq0, _ = await _read_request(reader)
+                writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x06))
+                await writer.drain()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                finished.set()
+
+        _, client = await self._run_client(handle, timeout=0.05)
+        with self.assertRaises(CannotConnect):
+            await client.read_state()
+        await asyncio.wait_for(finished.wait(), 1)
+
+    async def test_confirm_control_query_ignores_0x06_matching_query_sequence(
+        self,
+    ) -> None:
+        standby = _standby_words()
+        active_06 = _active_spin_words()
+        active_06[10] = 10
+        active_02 = _active_spin_words()
+        active_02[10] = 74
+        finished = asyncio.Event()
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                await _read_request(reader)
+                writer.write(_state_response(standby, frame_type=0x02))
+                await writer.drain()
+                await _accept_control_initialization(reader, writer)
+                seq2, _ = await _read_request(reader)
+                writer.write(_frame_response(0x05, b"", sequence=seq2))
+                await writer.drain()
+                seq3, _ = await _read_request(reader)
+                writer.write(
+                    _state_response(active_06, sequence=seq3, frame_type=0x06)
+                    + _state_response(active_02, sequence=seq3, frame_type=0x02)
+                )
+                await writer.drain()
+                seq4, _ = await _read_request(reader)
+                writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq4))
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+            finally:
+                finished.set()
+
+        _, base_client = await self._run_client(handle, timeout=0.5, control_timeout=1.0)
+        observer = _RecordingObserver()
+        client = replace(base_client, observer=observer)
+        with patch(
+            "custom_components.uplus_reborn.protocol._protocol._CONFIRMATION_QUERY_DELAY",
+            0.01,
+        ):
+            result = await client.start_program(
+                default_intent("upper", "spin"), allow_live=True
+            )
+        await asyncio.wait_for(finished.wait(), 1)
+        self.assertEqual(result.after.total_water_raw, 74)
+        confirm_states = [
+            (ctx["decision"], ctx["response_kind"], ctx["decoded_snapshot"].total_water_raw)
+            for event, ctx in observer.events
+            if event == "state_observed" and ctx["stage"] == "confirmation"
+        ]
+        self.assertEqual(
+            confirm_states,
+            [
+                ("uncorrelated", "report", 10),
+                ("correlated_query", "status", 74),
+            ],
+        )
+
+    async def test_on_alarm_query_retry_callback_without_observer(self) -> None:
+        for collide, expected_calls in ((True, 1), (False, 0)):
+            finished = asyncio.Event()
+
+            async def handle(
+                reader: asyncio.StreamReader,
+                writer: asyncio.StreamWriter,
+                with_collision: bool = collide,
+                done: asyncio.Event = finished,
+            ) -> None:
+                try:
+                    seq0, _ = await _read_request(reader)
+                    writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
+                    await writer.drain()
+                    seq1, _ = await _read_request(reader)
+                    if with_collision:
+                        writer.write(
+                            _frame_response(0x72, b"", sequence=0)
+                            + _frame_response(0x74, _alarm_payload(), sequence=0)
+                        )
+                        await writer.drain()
+                        seq2, _ = await _read_request(reader)
+                        writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq2))
+                    else:
+                        writer.write(_frame_response(0x74, _alarm_payload(), sequence=seq1))
+                    await writer.drain()
+                    writer.close()
+                    await writer.wait_closed()
+                finally:
+                    done.set()
+
+            with self.subTest(collide=collide):
+                retries = 0
+
+                def bump() -> None:
+                    nonlocal retries
+                    retries += 1
+
+                _, base_client = await self._run_client(handle, timeout=0.5)
+                client = replace(base_client, observer=None, on_alarm_query_retry=bump)
+                await client.read_state()
+                await asyncio.wait_for(finished.wait(), 1)
+                self.assertEqual(retries, expected_calls)
