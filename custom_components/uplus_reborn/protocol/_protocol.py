@@ -1434,6 +1434,11 @@ class _LocalSession:
                 )
                 continue
             result = _state_result(envelope, frame)
+            correlated_query = (
+                query_sequence is not None
+                and frame.frame_type == _FRAME_STATUS
+                and envelope.sequence == query_sequence
+            )
             if (
                 result is not None
                 and self.observer is not None
@@ -1444,9 +1449,7 @@ class _LocalSession:
                     stage="confirmation",
                     decision=(
                         "correlated_query"
-                        if query_sequence is not None
-                        and frame.frame_type == _FRAME_STATUS
-                        and envelope.sequence == query_sequence
+                        if correlated_query
                         else "correlated_control"
                         if envelope.sequence == sequence
                         else "independent_report"
@@ -1454,12 +1457,7 @@ class _LocalSession:
                         else "uncorrelated"
                     ),
                 )
-            if (
-                query_sequence is not None
-                and frame.frame_type == _FRAME_STATUS
-                and envelope.sequence == query_sequence
-                and result is not None
-            ):
+            if correlated_query and result is not None:
                 self.log_event("correlated", response_kind=_response_kind(frame))
                 if predicate(result.snapshot):
                     self.log_event("postcondition_observed", proof="independent_query")

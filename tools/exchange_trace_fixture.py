@@ -178,11 +178,8 @@ class ExchangeTraceFixture:
         self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
     ) -> None:
         """Split an unmatched frame, then coalesce its tail and correlated reply."""
-        magic, status, source, device, sequence, size = HEADER.unpack(response[:HEADER.size])
-        if sequence == 0:
-            unmatched = HEADER.pack(
-                magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
-            ) + response[HEADER.size:]
+        unmatched = self._unmatched_envelope(response)
+        if unmatched is not None:
             incoming = unmatched + response
             self.wire.append(
                 {
@@ -203,15 +200,24 @@ class ExchangeTraceFixture:
         writer.write(response)
         await writer.drain()
 
+    @staticmethod
+    def _unmatched_envelope(response: bytes) -> bytes | None:
+        """Build a sequence-mismatched duplicate envelope for sequence-zero replies."""
+        magic, status, source, device, sequence, size = HEADER.unpack(
+            response[:HEADER.size]
+        )
+        if sequence != 0:
+            return None
+        return HEADER.pack(
+            magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
+        ) + response[HEADER.size:]
+
     async def _extra_reports_reply(
         self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
     ) -> None:
         """Prepend three unmatched envelopes so 6_low_raw exceeds raw_bytes before events."""
-        magic, status, source, device, sequence, size = HEADER.unpack(response[:HEADER.size])
-        if sequence == 0:
-            unmatched = HEADER.pack(
-                magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
-            ) + response[HEADER.size:]
+        unmatched = self._unmatched_envelope(response)
+        if unmatched is not None:
             writer.write(unmatched * 3 + response)
             await writer.drain()
             return
@@ -442,7 +448,8 @@ class ExchangeTraceFixture:
                          "Long-session history lost Start, ordinary polls or complete evidence")
             cases[name] = {
                 "status": "passed", "ordinary_polls": polls, "control_operations": 1,
-                "extra_report_polls": polls // 37, "retained": trace["retained"],
+                "extra_report_polls": polls if name == "6_low_raw" else polls // 37,
+                "retained": trace["retained"],
                 "omitted": trace["omitted"], "first_operation": retained[0]["kind"],
                 "reference_warning_absent": "capture_capacity_warning" not in {
                     field["name"] for field in review["data_schema"]
