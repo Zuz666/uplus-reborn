@@ -86,6 +86,9 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
             info[f"{prefix}_last_failure_{key}"] = (
                 getattr(failure, key, None) if failure is not None else None
             )
+        info[f"{prefix}_alarm_query_retries"] = (
+            health.alarm_query_retries if health is not None else None
+        )
         capture = (
             coordinator.capture_status
             if loaded and not disabled and coordinator is not None
@@ -117,7 +120,7 @@ async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
         for key in (
             "started_at", "end_at", "stopped_at", "stop_reason",
             "remaining_seconds", "debug_enabled", "first_retained_at",
-            "last_recorded_at", "partial_operations",
+            "last_recorded_at", "partial_operations", "alarm_query_retries",
         ):
             info[f"{prefix}_capture_{key}"] = (
                 capture.get(key) if capture is not None else None

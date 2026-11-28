@@ -17,6 +17,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from custom_components.uplus_reborn.capture_options import CapturePreferences
 from custom_components.uplus_reborn.coordinator import UplusRebornCoordinator
 from custom_components.uplus_reborn.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -30,6 +31,7 @@ from custom_components.uplus_reborn.protocol import (
     classify_error,
 )
 from custom_components.uplus_reborn.protocol._capabilities import Drum
+from custom_components.uplus_reborn.system_health import system_health_info
 
 from .conftest import DEVICE_ID, HOST
 from .test_integration import _entry
@@ -788,8 +790,10 @@ async def test_malformed_stream_logs_only_bounded_context(
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     async with server:
         entry, coordinator = _coordinator(hass)
-        coordinator.client = UwtClient(
-            "127.0.0.1", DEVICE_ID, port=server.sockets[0].getsockname()[1]
+        coordinator.client = replace(
+            coordinator.client,
+            host="127.0.0.1",
+            port=server.sockets[0].getsockname()[1],
         )
         await coordinator.async_refresh()
         await asyncio.wait_for(closed.wait(), 1)
@@ -950,3 +954,59 @@ async def test_loaded_draft_diagnostics_are_private_cached_and_clear_on_unload(
             assert not unloaded["health"]["available"]
             _assert_private(_ordinary_diagnostics_json(unloaded))
         read_state.assert_awaited_once_with()
+
+
+@pytest.mark.usefixtures("loopback_socket")
+async def test_alarm_query_retry_counters_update_with_debug_off_and_on(
+    hass: HomeAssistant,
+) -> None:
+    """Retry counters track H11 collisions in health always and per-capture in trace."""
+    alarm_clear = bytes.fromhex("0f5a0000000000000000000000000000")
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            seq0, _ = await _read_request(reader)
+            writer.write(_state_response(_standby_words(), sequence=seq0, frame_type=0x02))
+            await writer.drain()
+            await _read_request(reader)
+            writer.write(
+                _frame_response(0x72, b"", sequence=0)
+                + _frame_response(0x74, alarm_clear, sequence=0)
+            )
+            await writer.drain()
+            seq2, _ = await _read_request(reader)
+            writer.write(_frame_response(0x74, alarm_clear, sequence=seq2))
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    async with server:
+        entry, coordinator = _coordinator(hass)
+        entry.mock_state(hass, ConfigEntryState.LOADED)
+        coordinator.client = replace(
+            coordinator.client,
+            host="127.0.0.1",
+            port=server.sockets[0].getsockname()[1],
+        )
+        await coordinator.async_refresh()
+        assert coordinator.health.alarm_query_retries == 1
+        off_diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+        assert off_diagnostics["health"]["alarm_query_retries"] == 1
+        assert off_diagnostics["exchange_trace"]["alarm_query_retries"] == 0
+        assert off_diagnostics["diagnostic_capture"]["alarm_query_retries"] == 0
+        off_health = await system_health_info(hass)
+        assert off_health["entry_1_alarm_query_retries"] == 1
+        assert off_health["entry_1_capture_alarm_query_retries"] == 0
+
+        coordinator.trace.start(CapturePreferences())
+        await coordinator.async_refresh()
+        assert coordinator.health.alarm_query_retries == 2
+        on_diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+        assert on_diagnostics["health"]["alarm_query_retries"] == 2
+        assert on_diagnostics["exchange_trace"]["alarm_query_retries"] == 1
+        assert on_diagnostics["diagnostic_capture"]["alarm_query_retries"] == 1
+        on_health = await system_health_info(hass)
+        assert on_health["entry_1_alarm_query_retries"] == 2
+        assert on_health["entry_1_capture_alarm_query_retries"] == 1

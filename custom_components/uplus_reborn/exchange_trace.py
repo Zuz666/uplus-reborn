@@ -167,6 +167,7 @@ class ExchangeTrace:
         self._omitted = self._empty_omissions()
         self._evicted_by_limit = {"operations": 0, "events": 0, "raw_bytes": 0}
         self._partial_operations = 0
+        self._alarm_query_retries = 0
         self._last_recorded_at: str | None = None
 
     @staticmethod
@@ -255,6 +256,8 @@ class ExchangeTrace:
         """Retain a bounded processing observation only inside an active scope."""
         if not self.active or self._current is None:
             return
+        if event == "alarm_query_retry":
+            self._alarm_query_retries = _add(self._alarm_query_retries)
         operation = self._current
         if not self._event_slot(operation):
             return
@@ -366,6 +369,7 @@ class ExchangeTrace:
         self._omitted = self._empty_omissions()
         self._evicted_by_limit = {"operations": 0, "events": 0, "raw_bytes": 0}
         self._partial_operations = 0
+        self._alarm_query_retries = 0
         self._last_recorded_at = None
 
     def close(self) -> None:
@@ -400,6 +404,7 @@ class ExchangeTrace:
             ),
             "last_recorded_at": self._last_recorded_at,
             "partial_operations": self._partial_operations,
+            "alarm_query_retries": self._alarm_query_retries,
         }
 
     def export(self) -> dict[str, object]:

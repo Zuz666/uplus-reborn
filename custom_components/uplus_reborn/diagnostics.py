@@ -190,6 +190,7 @@ async def async_get_config_entry_diagnostics(
         "age_seconds": None,
         "last_error": None,
         "latest_command": None,
+        "alarm_query_retries": 0,
     }
     if coordinator is not None:
         cached = coordinator.health

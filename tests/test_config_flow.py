@@ -468,7 +468,7 @@ async def test_options_flow_requires_explicit_control_opt_in(
         CONF_ENABLE_VERIFIED_CONTROLS: True,
         CONF_POLL_INTERVAL: 15,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 30600,
+        "diagnostic_events": 54000,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -543,7 +543,7 @@ async def test_options_store_bounded_integer_seconds(
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: interval,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 30600,
+        "diagnostic_events": 54000,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -723,15 +723,15 @@ async def test_reconfigure_preserves_explicit_entry_disablement(
     [
         ({}, 15, False, 27000),
         ({"diagnostic_operations": 2}, 15, False, 30),
-        ({"diagnostic_events": 33}, 20, False, 20),
-        ({"diagnostic_raw_bytes": 927}, 30, False, 30),
+        ({"diagnostic_events": 59}, 20, False, 20),
+        ({"diagnostic_raw_bytes": 1899}, 30, False, 30),
         ({"diagnostic_raw_bytes": 1}, 15, False, 0),
         ({
             "diagnostic_operations": 600,
             "diagnostic_events": 12000,
             "diagnostic_raw_bytes": 8388608,
             "diagnostic_duration": "7200",
-        }, 30, False, 18000),
+        }, 30, False, 12000),
         ({}, 15, True, 0),
     ],
 )
@@ -758,7 +758,7 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
     assert result["step_id"] == "confirm"
     selected = {
         "diagnostic_operations": 1800,
-        "diagnostic_events": 30600,
+        "diagnostic_events": 54000,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": "21600",
         **budgets,
@@ -782,7 +782,7 @@ async def test_capture_confirmation_shows_exact_effective_budgets_and_depth(
     [
         ("diagnostic_operations", 0),
         ("diagnostic_operations", 1801),
-        ("diagnostic_events", 30601),
+        ("diagnostic_events", 54001),
         ("diagnostic_events", 1.5),
         ("diagnostic_raw_bytes", 8388609),
         ("diagnostic_raw_bytes", 15.0),
@@ -1181,7 +1181,7 @@ async def test_capture_start_and_preference_only_save_preserve_consent_boundary(
             {
                 "review_action": "start",
                 "diagnostic_operations": "1800",
-                "diagnostic_events": "30600",
+                "diagnostic_events": "54000",
                 "diagnostic_raw_bytes": "4194304",
                 "diagnostic_duration": "21600",
                 "estimated_seconds": "27000",
@@ -1236,7 +1236,7 @@ async def test_review_cannot_inject_start_consent(
     [
         ("diagnostic_operations", 0),
         ("diagnostic_operations", "not a number"),
-        ("diagnostic_events", 30601),
+        ("diagnostic_events", 54001),
         ("diagnostic_events", True),
         ("diagnostic_raw_bytes", 1.5),
         ("diagnostic_raw_bytes", None),
@@ -1284,7 +1284,7 @@ async def test_native_restore_recovers_invalid_diagnostic_input_only_on_confirma
         CONF_ENABLE_VERIFIED_CONTROLS: False,
         CONF_POLL_INTERVAL: 20,
         "diagnostic_operations": 1800,
-        "diagnostic_events": 30600,
+        "diagnostic_events": 54000,
         "diagnostic_raw_bytes": 4194304,
         "diagnostic_duration": 21600,
     }
@@ -1487,3 +1487,43 @@ async def test_native_cleared_budget_requires_restore(
     assert review["step_id"] == "confirm"
     assert not entry.options
     hass.config_entries.options.async_abort(review["flow_id"])
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_depth", "warns"),
+    [
+        (30600, "15300", True),
+        (54000, "27000", False),
+    ],
+)
+async def test_legacy_event_budget_warns_for_six_hour_capture(
+    hass: HomeAssistant,
+    events: int,
+    expected_depth: str,
+    warns: bool,
+) -> None:
+    """Persisted 30600 events triggers a capacity warning for 6h under 30-event estimates."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            "diagnostic_operations": 1800,
+            "diagnostic_events": events,
+            "diagnostic_raw_bytes": 4194304,
+            "diagnostic_duration": 21600,
+        },
+    )
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        capture_options_input(result, {"diagnostics": {"start_capture": True}}),
+    )
+    assert result["step_id"] == "confirm"
+    displayed = {
+        name.partition("__")[0]: value
+        for name, value in result["data_schema"]({}).items()
+    }
+    assert displayed["estimated_seconds"] == expected_depth
+    assert ("capture_capacity_warning" in displayed) is warns
+    hass.config_entries.options.async_abort(result["flow_id"])

@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 DOMAIN = "uplus_reborn"
 SECOND_DEVICE_ID = "020000000002"
 HEADER = struct.Struct(">II32s32sII")
-LIMITS = {"operations": 1800, "events": 30600, "raw_bytes": 4194304}
+LIMITS = {"operations": 1800, "events": 54000, "raw_bytes": 4194304}
 SYNTHETIC_SECRET = "fixture-unrelated-cloud-secret-not-for-trace"
 
 
@@ -178,11 +178,8 @@ class ExchangeTraceFixture:
         self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
     ) -> None:
         """Split an unmatched frame, then coalesce its tail and correlated reply."""
-        magic, status, source, device, sequence, size = HEADER.unpack(response[:HEADER.size])
-        if sequence == 0:
-            unmatched = HEADER.pack(
-                magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
-            ) + response[HEADER.size:]
+        unmatched = self._unmatched_envelope(response)
+        if unmatched is not None:
             incoming = unmatched + response
             self.wire.append(
                 {
@@ -200,6 +197,30 @@ class ExchangeTraceFixture:
             return
         self.wire[-1]["tx"] += request.hex()
         self.wire[-1]["rx"] += response.hex()
+        writer.write(response)
+        await writer.drain()
+
+    @staticmethod
+    def _unmatched_envelope(response: bytes) -> bytes | None:
+        """Build a sequence-mismatched duplicate envelope for sequence-zero replies."""
+        magic, status, source, device, sequence, size = HEADER.unpack(
+            response[:HEADER.size]
+        )
+        if sequence != 0:
+            return None
+        return HEADER.pack(
+            magic, status, source, device, (sequence - 1) & 0xFFFFFFFF, size,
+        ) + response[HEADER.size:]
+
+    async def _extra_reports_reply(
+        self, writer: asyncio.StreamWriter, request: bytes, response: bytes,
+    ) -> None:
+        """Prepend three unmatched envelopes so 6_low_raw exceeds raw_bytes before events."""
+        unmatched = self._unmatched_envelope(response)
+        if unmatched is not None:
+            writer.write(unmatched * 3 + response)
+            await writer.drain()
+            return
         writer.write(response)
         await writer.drain()
 
@@ -366,9 +387,9 @@ class ExchangeTraceFixture:
         initial_words = self.peer.words
         cases = {}
         for name, hours, polls, operations, events, raw_bytes in (
-            ("4", 4, 960, 1200, 20400, 4194304),
-            ("6", 6, 1440, 1800, 30600, 4194304),
-            ("6_low_raw", 6, 1440, 1800, 30600, 672000),
+            ("4", 4, 960, 1200, 36000, 4194304),
+            ("6", 6, 1440, 1800, 54000, 4194304),
+            ("6_low_raw", 6, 1440, 1800, 54000, 1375600),
         ):
             self.peer.query_response_writer = None
             self.peer.words = initial_words
@@ -399,7 +420,10 @@ class ExchangeTraceFixture:
                      and self.entry.runtime_data.health.latest_command.outcome == "confirmed",
                      "Long capture Start was not independently sent once and confirmed")
             for ordinal in range(1, polls + 1):
-                self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
+                if name == "6_low_raw":
+                    self.peer.query_response_writer = self._extra_reports_reply
+                else:
+                    self.peer.query_response_writer = self._reply if ordinal % 37 == 0 else None
                 await self._poll()
             await self._level("WARNING")
             data = await self._download(self.entry, f"long_history_{name}h")
@@ -424,7 +448,8 @@ class ExchangeTraceFixture:
                          "Long-session history lost Start, ordinary polls or complete evidence")
             cases[name] = {
                 "status": "passed", "ordinary_polls": polls, "control_operations": 1,
-                "extra_report_polls": polls // 37, "retained": trace["retained"],
+                "extra_report_polls": polls if name == "6_low_raw" else polls // 37,
+                "retained": trace["retained"],
                 "omitted": trace["omitted"], "first_operation": retained[0]["kind"],
                 "reference_warning_absent": "capture_capacity_warning" not in {
                     field["name"] for field in review["data_schema"]
@@ -462,7 +487,7 @@ class ExchangeTraceFixture:
         await self._level("WARNING")
         stress = ExchangeTrace()
         stress_results = {}
-        for operation_limit, event_limit in ((600, 12000), (1800, 30600)):
+        for operation_limit, event_limit in ((600, 12000), (1800, 54000)):
             maximum = CapturePreferences(operation_limit, event_limit, 8388608, 21600)
             stress.start(maximum)
             remaining = 8388608
@@ -631,12 +656,12 @@ class ExchangeTraceFixture:
                 "ordinary_unload_behavior_preserved": True, "fresh_capture": reloaded,
             }
             await self._options(self.entry, {
-                "diagnostic_operations": 2, "diagnostic_events": 34,
-                "diagnostic_raw_bytes": 928, "diagnostic_duration": "1800",
+                "diagnostic_operations": 2, "diagnostic_events": 60,
+                "diagnostic_raw_bytes": 1900, "diagnostic_duration": "1800",
             }, start=True)
             selected = await self._download(self.entry, "selected_limits_start")
             _require(selected["exchange_trace"]["limits"] == {
-                "operations": 2, "events": 34, "raw_bytes": 928,
+                "operations": 2, "events": 60, "raw_bytes": 1900,
             }, "Explicit limits were not applied")
             active = selected["diagnostic_capture"]
             _require(0 < active["remaining_seconds"] <= 1800
